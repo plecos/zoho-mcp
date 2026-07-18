@@ -1,0 +1,30 @@
+{
+  "status": {
+    "code": 200,
+    "description": "success"
+  },
+  "data": [
+    {
+      "summary": "Let's sync on the Q3 roadmap tomorrow morning.",
+      "sentDateInGMT": "1730217600000",
+      "calendarType": 0,
+      "subject": "Q3 Roadmap Sync",
+      "messageId": "1730217600123456789",
+      "threadCount": "1",
+      "flagid": "",
+      "status2": "0",
+      "priority": "2",
+      "hasInline": "false",
+      "toAddress": "user@example.com",
+      "folderId": "1122334455",
+      "ccAddress": "",
+      "threadId": "998877665544",
+      "hasAttachment": "false",
+      "size": "4096",
+      "sender": "Jamie Rivera",
+      "receivedTime": "1730217600000",
+      "fromAddress": "jamie.rivera@example.com",
+      "status": "1"
+    }
+  ]
+}

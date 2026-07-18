@@ -1,0 +1,28 @@
+{
+  "events": [
+    {
+      "isprivate": false,
+      "enable_eventmanagement": true,
+      "role": "owner",
+      "attendees": [
+        {"email": "jamie.rivera@example.com", "status": "accepted"},
+        {"email": "morgan.lee@example.com", "status": "needsaction"}
+      ],
+      "start": "20241029T160000Z",
+      "calid": "1122334455",
+      "title": "Q3 Roadmap Sync",
+      "createdtime": "20241020T120000Z",
+      "calendar_alarm": true,
+      "duration": "0100",
+      "uid": "evt-998877",
+      "createdby": "user@example.com",
+      "organizer": "user@example.com",
+      "isallday": false,
+      "end": "20241029T170000Z",
+      "modifiedby": "user@example.com",
+      "etag": 3,
+      "multiday": false,
+      "caluid": "cal-556677"
+    }
+  ]
+}

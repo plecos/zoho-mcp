@@ -47,7 +47,7 @@ def test_normalize_email_summary_raises_clear_error_on_missing_field():
 
 def test_normalize_email_summary_raises_clear_error_on_non_numeric_date():
     raw = load_fixture("mail_list_response.json")["data"][0]
-    raw["sentDateInGMT"] = "not-a-number"
+    raw["receivedTime"] = "not-a-number"
 
     with pytest.raises(ZohoAPIError, match="email summary"):
         normalize_email_summary(raw)

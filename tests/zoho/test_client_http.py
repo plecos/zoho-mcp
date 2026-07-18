@@ -63,7 +63,8 @@ async def test_search_emails_calls_search_endpoint_with_auth_header(
                 "data": [
                     {
                         "summary": "Let's sync on the Q3 roadmap tomorrow morning.",
-                        "sentDateInGMT": "1730217600000",
+                        "sentDateInGMT": "1730242800000",
+                        "receivedTime": "1730217600000",
                         "subject": "Q3 Roadmap Sync",
                         "messageId": "1730217600123456789",
                         "folderId": "1122334455",

@@ -87,7 +87,11 @@ def normalize_email_summary(raw: dict) -> dict:
             "id": raw["messageId"],
             "from": raw["fromAddress"],
             "subject": raw["subject"],
-            "date": _epoch_ms_to_iso8601(raw["sentDateInGMT"]),
+            # receivedTime, not sentDateInGMT: despite its name, sentDateInGMT
+            # is not reliably GMT -- observed consistently off by exactly the
+            # account's own UTC offset across unrelated senders. receivedTime
+            # is Zoho's own authoritative server-side receipt timestamp.
+            "date": _epoch_ms_to_iso8601(raw["receivedTime"]),
             "snippet": raw["summary"],
             "folder_id": raw["folderId"],
         }

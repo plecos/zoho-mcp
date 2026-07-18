@@ -14,7 +14,8 @@
       "accountId": "3870383000000008002",
       "isDefaultAccount": true,
       "mailboxAddress": "user@example.com",
-      "accountDisplayName": "user"
+      "accountDisplayName": "user",
+      "timeZone": "America/Los_Angeles"
     }
   ]
 }

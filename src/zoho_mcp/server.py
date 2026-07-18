@@ -26,15 +26,27 @@ def create_server(client: ZohoClient) -> FastMCP:
     mcp = FastMCP("zoho-mcp")
 
     @mcp.tool(annotations=_READ_ONLY)
-    async def search_emails(query: str, limit: int = 20) -> list[dict]:
-        """Search the user's Zoho Mail mailbox for emails matching a query.
+    async def search_emails(
+        query: str = "", limit: int = 20, days_back: int | None = None
+    ) -> list[dict]:
+        """Search the user's Zoho Mail mailbox for emails matching a query
+        and/or a recency window.
 
-        query must use Zoho Mail search syntax -- bare words are rejected.
-        Use qualifiers like subject:, sender:, entire: (anywhere in the
-        email), joined with :: for AND or :or: for OR, e.g.
-        "subject:roadmap::sender:jamie".
+        query (optional): must use Zoho Mail search syntax -- bare words
+        are rejected. Use qualifiers like subject:, sender:, entire:
+        (anywhere in the email), joined with :: for AND or :or: for OR,
+        e.g. "subject:roadmap::sender:jamie". May be left empty if
+        days_back is given.
+
+        days_back (optional): only return emails from the last N days --
+        0 for today only, 1 for today and yesterday, etc. This is resolved
+        using the mailbox's real timezone; do not try to compute or pass an
+        explicit date yourself, since you don't know the mailbox's
+        timezone and getting it wrong silently returns the wrong day.
         """
-        return await mail_tools.search_emails(client, query=query, limit=limit)
+        return await mail_tools.search_emails(
+            client, query=query, limit=limit, days_back=days_back
+        )
 
     @mcp.tool(annotations=_READ_ONLY)
     async def get_email(message_id: str, folder_id: str) -> dict:

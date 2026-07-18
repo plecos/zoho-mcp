@@ -7,24 +7,30 @@ Zoho client is injected by the caller (``server.py``), never constructed here.
 from zoho_mcp.zoho.client import ZohoClient
 
 
-async def search_emails(client: ZohoClient, query: str, limit: int = 20) -> list[dict]:
-    """Search the user's mailbox for emails matching a query.
+async def search_emails(
+    client: ZohoClient, query: str = "", limit: int = 20, days_back: int | None = None
+) -> list[dict]:
+    """Search the user's mailbox for emails matching a query and/or a recency window.
 
     Args:
         client: injected Zoho client.
         query: Zoho Mail search syntax -- bare words are invalid and Zoho
             will reject them. Use qualifiers like ``subject:``, ``sender:``,
             ``entire:`` (anywhere in the email), joined with ``::`` for AND
-            or ``:or:`` for OR (e.g. ``subject:roadmap::sender:jamie``).
+            or ``:or:`` for OR (e.g. ``subject:roadmap::sender:jamie``). May
+            be empty if ``days_back`` is given.
         limit: maximum number of results to return (1-200).
+        days_back: only return emails from the last N days (0 = today
+            only), resolved using the mailbox's own timezone.
 
     Returns:
         Compact email summaries: id, from, subject, date, snippet, folder_id.
 
     Raises:
-        ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        ZohoAPIError: if query and days_back are both empty, days_back is
+            negative, or the Zoho Mail API rejects or fails the request.
     """
-    return await client.search_emails(query=query, limit=limit)
+    return await client.search_emails(query=query, limit=limit, days_back=days_back)
 
 
 async def get_email(client: ZohoClient, message_id: str, folder_id: str) -> dict:

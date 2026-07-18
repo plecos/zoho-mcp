@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 import respx
+import time_machine
 
 from zoho_mcp.zoho.client import ZohoAPIError, ZohoClient
 
@@ -29,6 +30,23 @@ def zoho_client(http_client):
         http_client=http_client,
         account_id=ACCOUNT_ID,
         calendar_uid=CALENDAR_UID,
+    )
+
+
+def mock_pacific_accounts_endpoint(respx_mock):
+    return respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                    }
+                ]
+            },
+        )
     )
 
 
@@ -272,6 +290,100 @@ async def test_search_emails_returns_empty_list_when_data_key_absent(
     results = await zoho_client.search_emails(query="roadmap")
 
     assert results == []
+
+
+async def test_search_emails_appends_fromDate_filter_for_days_back(
+    respx_mock, zoho_client
+):
+    # 2026-07-18T02:00:00 UTC is still 2026-07-17 evening in Los Angeles --
+    # this is the exact boundary case that caused the original bug when
+    # "today" was computed from UTC instead of the mailbox's timezone.
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    ).mock(return_value=httpx.Response(200, json={"data": []}))
+
+    with time_machine.travel(
+        datetime(2026, 7, 18, 2, 0, 0, tzinfo=timezone.utc), tick=False
+    ):
+        await zoho_client.search_emails(query="", days_back=0)
+
+    assert route.calls.last.request.url.params["searchKey"] == "fromDate:17-Jul-2026"
+
+
+async def test_search_emails_combines_query_and_days_back_with_double_colon(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    ).mock(return_value=httpx.Response(200, json={"data": []}))
+
+    with time_machine.travel(
+        datetime(2026, 7, 18, 15, 0, 0, tzinfo=timezone.utc), tick=False
+    ):
+        await zoho_client.search_emails(query="subject:roadmap", days_back=1)
+
+    assert (
+        route.calls.last.request.url.params["searchKey"]
+        == "subject:roadmap::fromDate:17-Jul-2026"
+    )
+
+
+async def test_search_emails_caches_mailbox_timezone_across_calls(
+    respx_mock, zoho_client
+):
+    accounts_route = mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    ).mock(return_value=httpx.Response(200, json={"data": []}))
+
+    with time_machine.travel(
+        datetime(2026, 7, 18, 15, 0, 0, tzinfo=timezone.utc), tick=False
+    ):
+        await zoho_client.search_emails(query="", days_back=0)
+        await zoho_client.search_emails(query="", days_back=1)
+
+    assert accounts_route.call_count == 1
+
+
+async def test_search_emails_does_not_look_up_timezone_without_days_back(
+    respx_mock, zoho_client
+):
+    accounts_route = mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    ).mock(return_value=httpx.Response(200, json={"data": []}))
+
+    await zoho_client.search_emails(query="roadmap")
+
+    assert accounts_route.call_count == 0
+
+
+async def test_search_emails_rejects_negative_days_back_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    )
+
+    with pytest.raises(ZohoAPIError, match="days_back"):
+        await zoho_client.search_emails(query="roadmap", days_back=-1)
+
+    assert not route.called
+
+
+async def test_search_emails_rejects_empty_query_and_no_days_back_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.search_emails(query="")
+
+    assert not route.called
 
 
 async def test_list_events_returns_empty_list_when_events_key_absent(

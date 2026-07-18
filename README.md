@@ -6,11 +6,11 @@ A vendor-agnostic MCP (Model Context Protocol) server that exposes Zoho Mail and
 
 Phase 1: personal prototype (local stdio transport, single-user Zoho OAuth, read-only tools).
 
-Tools implemented: `search_emails`, `get_email`, `list_events`.
+Tools implemented: `search_emails` (optionally filtered by `days_back`, resolved via a live, per-process-cached lookup of the mailbox's own timezone -- never assumed or stored statically, since that setting can change), `get_email`, `list_events`.
 
 ## Setup
 
-1. Register a Server-based Application in the [Zoho API Console](https://accounts.zoho.com/developerconsole) with scopes `ZohoMail.messages.READ`, `ZohoMail.accounts.READ`, `ZohoCalendar.event.READ`, and `ZohoCalendar.calendar.READ` (the `.accounts.READ` and `.calendar.READ` scopes are only needed once, to look up the IDs in step 4), redirect URI `http://localhost:8765/callback` (change the port via `ZOHO_OAUTH_CALLBACK_PORT` if 8765 is taken).
+1. Register a Server-based Application in the [Zoho API Console](https://accounts.zoho.com/developerconsole) with scopes `ZohoMail.messages.READ`, `ZohoMail.accounts.READ`, `ZohoCalendar.event.READ`, and `ZohoCalendar.calendar.READ` (`.accounts.READ` is also used at runtime for `search_emails(days_back=...)`'s timezone lookup, not just at setup; `.calendar.READ` is only needed once, to look up the calendar UID in step 4), redirect URI `http://localhost:8765/callback` (change the port via `ZOHO_OAUTH_CALLBACK_PORT` if 8765 is taken).
 2. Copy `.env.example` to `.env` and fill in `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`.
 3. `uv run zoho-mcp-setup` -- opens your browser to approve access, stores a refresh token in the OS credential store (Windows Credential Manager via `keyring`), and prints your `ZOHO_ACCOUNT_ID`/`ZOHO_CALENDAR_UID` values (looked up automatically from your default mail account and calendar). Add both to `.env`.
 4. `uv run zoho-mcp` to start the server over stdio.

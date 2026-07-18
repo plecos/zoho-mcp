@@ -48,6 +48,12 @@ Root-cause note, because it wasn't purely "Zoho's docs are wrong": re-checking Z
 
 One thing this does *not* mean: don't duplicate primitive type-checking that FastMCP's JSON-schema validation already does at the tool-call boundary (e.g. rejecting a non-string `query`). Focus thoroughness on business-rule constraints (ranges, ordering, bounds) and defensive handling of data from systems outside our control (Zoho's API) — not on re-validating what the MCP protocol layer already guarantees.
 
+## Config vs. live state
+
+Before writing a looked-up value to `.env`/config, ask: is this a **stable identifier** (account ID, calendar UID -- essentially permanent) or a **mutable setting** (timezone, a preference, anything a person can change in their account)? Only the former belongs in static config.
+
+This was caught before shipping: the initial `days_back` implementation stored the mailbox's timezone in `ZOHO_MAILBOX_TIMEZONE`, looked up once during setup. That goes stale the moment the user changes their Zoho timezone (e.g. after moving), and nothing would signal the drift -- it would just silently misresolve "today" again, the exact bug this feature exists to fix. The fix: `ZohoClient` fetches the timezone live and caches it in memory for the life of the client instance, never persisting it to disk. Staleness is bounded to "since this process last started," not "since setup was last run," at the cost of one extra API call per client instance rather than per call.
+
 ## Git workflow
 
 Never commit directly to `main`. Always work on a feature branch and commit there, even for "just scaffolding" changes. `main` will eventually be a protected branch; working this way from the start means there's no habit to break later. Before any commit, scan the actual file list being staged (`git status`, `git add -A -n`) for anything that shouldn't ship: real credentials, personal/business email addresses or other identifying data in what's meant to be synthetic test fixture data, and `.gitignore` gaps (e.g. a broad pattern like `.env.*` accidentally catching `.env.example`, which should be tracked).

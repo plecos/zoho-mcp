@@ -7,6 +7,7 @@ import pytest
 from zoho_mcp.zoho.client import (
     ZohoAPIError,
     get_default_calendar_uid,
+    get_mailbox_timezone,
     get_primary_account_id,
 )
 
@@ -124,3 +125,31 @@ async def test_get_primary_account_id_wraps_http_errors(respx_mock, http_client)
 
     with pytest.raises(ZohoAPIError):
         await get_primary_account_id(FakeTokenManager(), http_client)
+
+
+async def test_get_mailbox_timezone_returns_the_default_accounts_timezone(
+    respx_mock, http_client
+):
+    respx_mock.get(MAIL_ACCOUNTS_URL).mock(
+        return_value=httpx.Response(
+            200, json=load_fixture("mail_accounts_response.json")
+        )
+    )
+
+    timezone = await get_mailbox_timezone(FakeTokenManager(), http_client)
+
+    assert timezone == "America/Los_Angeles"
+
+
+async def test_get_mailbox_timezone_raises_clearly_when_field_missing(
+    respx_mock, http_client
+):
+    respx_mock.get(MAIL_ACCOUNTS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"accountId": "1", "isDefaultAccount": True}]},
+        )
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await get_mailbox_timezone(FakeTokenManager(), http_client)

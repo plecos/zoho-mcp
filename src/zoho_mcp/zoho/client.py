@@ -6,7 +6,8 @@ MCP tools happens here and only here.
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 from bs4 import BeautifulSoup
@@ -57,6 +58,19 @@ def _zoho_event_time_to_iso8601(value: str) -> str:
         .astimezone(timezone.utc)
         .isoformat()
     )
+
+
+def _today_in_timezone(tz_name: str) -> date:
+    """Return the current calendar date in the given IANA timezone.
+
+    Never use ``datetime.now(timezone.utc).date()`` as a stand-in for "the
+    user's today" -- UTC's calendar day and the mailbox's calendar day
+    disagree for several hours every day (e.g. it can already be tomorrow in
+    UTC while it's still this evening in ``America/Los_Angeles``), which is
+    exactly what caused ``search_emails(days_back=0)`` to return the wrong
+    day when this was first computed naively.
+    """
+    return datetime.now(ZoneInfo(tz_name)).date()
 
 
 def normalize_email_summary(raw: dict) -> dict:
@@ -162,10 +176,13 @@ async def _zoho_authenticated_get(
     return response.json()
 
 
-async def get_primary_account_id(
+async def _get_default_mail_account(
     token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
-) -> str:
-    """Look up the user's default Zoho Mail account id (for the ``ZOHO_ACCOUNT_ID`` setting).
+) -> dict:
+    """Fetch the user's default Zoho Mail account object (raw, unnormalized).
+
+    Shared by ``get_primary_account_id`` and ``get_mailbox_timezone`` so the
+    fetch-and-find-default logic lives in exactly one place.
 
     Raises:
         ZohoAPIError: if the request fails, the response is malformed, or no
@@ -178,10 +195,47 @@ async def get_primary_account_id(
     try:
         for account in payload["data"]:
             if account.get("isDefaultAccount"):
-                return account["accountId"]
+                return account
     except (KeyError, TypeError) as e:
         raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
     raise ZohoAPIError("No default Zoho Mail account found in the accounts response")
+
+
+async def get_primary_account_id(
+    token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
+) -> str:
+    """Look up the user's default Zoho Mail account id (for the ``ZOHO_ACCOUNT_ID`` setting).
+
+    Raises:
+        ZohoAPIError: if the request fails, the response is malformed, or no
+            account is flagged as the default.
+    """
+    account = await _get_default_mail_account(token_manager, http_client)
+    try:
+        return account["accountId"]
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
+
+
+async def get_mailbox_timezone(
+    token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
+) -> str:
+    """Look up the user's mailbox timezone (for the ``ZOHO_MAILBOX_TIMEZONE`` setting).
+
+    Used to correctly resolve "today" for ``search_emails(days_back=...)`` --
+    Zoho returns email dates in UTC, but day boundaries (and Zoho's own
+    ``fromDate`` search qualifier) are meaningful in the mailbox's own
+    timezone, not UTC.
+
+    Raises:
+        ZohoAPIError: if the request fails, the response is malformed, or no
+            account is flagged as the default.
+    """
+    account = await _get_default_mail_account(token_manager, http_client)
+    try:
+        return account["timeZone"]
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
 
 
 async def get_default_calendar_uid(
@@ -226,26 +280,70 @@ class ZohoClient:
         self._account_id = account_id
         self._calendar_uid = calendar_uid
         self._strip_invisible_chars = strip_invisible_chars
+        self._mailbox_timezone_cache: str | None = None
 
     async def _get(self, url: str, params: dict | None = None) -> dict:
         token = await self._token_manager.get_access_token()
         return await _zoho_authenticated_get(self._http_client, url, token, params)
 
-    async def search_emails(self, query: str, limit: int = 20) -> list[dict]:
+    async def _get_mailbox_timezone(self) -> str:
+        """Return the mailbox's timezone, fetched once per client and cached.
+
+        Deliberately not a static config value: the timezone is a real
+        account setting a person can change (e.g. after moving), and a
+        stale cached value would silently misresolve "today" again. Caching
+        per-process (not persisted) bounds staleness to "since this server
+        last started" rather than "since setup was last run", without
+        paying a Zoho API call on every single search_emails call.
+        """
+        if self._mailbox_timezone_cache is None:
+            self._mailbox_timezone_cache = await get_mailbox_timezone(
+                self._token_manager, self._http_client
+            )
+        return self._mailbox_timezone_cache
+
+    async def search_emails(
+        self, query: str = "", limit: int = 20, days_back: int | None = None
+    ) -> list[dict]:
         """Search the user's mailbox and return compact, normalized results.
 
+        Args:
+            query: Zoho Mail search syntax. May be empty if ``days_back`` is
+                given (a bare ``fromDate`` filter is valid on its own).
+            limit: maximum number of results (1-200).
+            days_back: if given, only return emails from the last N days
+                (0 = today only), computed from the mailbox's own timezone
+                -- never from UTC, which disagrees with the mailbox's
+                calendar day for several hours every day.
+
         Raises:
-            ZohoAPIError: if ``limit`` is outside Zoho's documented 1-200
-                range, or the Zoho Mail API rejects or fails the request.
+            ZohoAPIError: if ``limit`` is out of range, ``days_back`` is
+                negative, both ``query`` and ``days_back`` are empty, or the
+                Zoho Mail API rejects or fails the request.
         """
         if not (MIN_SEARCH_LIMIT <= limit <= MAX_SEARCH_LIMIT):
             raise ZohoAPIError(
                 f"limit must be between {MIN_SEARCH_LIMIT} and "
                 f"{MAX_SEARCH_LIMIT} (got {limit})"
             )
+
+        search_key = query
+        if days_back is not None:
+            if days_back < 0:
+                raise ZohoAPIError(f"days_back must be >= 0 (got {days_back})")
+            mailbox_timezone = await self._get_mailbox_timezone()
+            cutoff = _today_in_timezone(mailbox_timezone) - timedelta(days=days_back)
+            date_filter = f"fromDate:{cutoff.strftime('%d-%b-%Y')}"
+            search_key = f"{search_key}::{date_filter}" if search_key else date_filter
+
+        if not search_key:
+            raise ZohoAPIError(
+                "search_emails requires a query, a days_back filter, or both"
+            )
+
         payload = await self._get(
             f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/search",
-            params={"searchKey": query, "limit": limit},
+            params={"searchKey": search_key, "limit": limit},
         )
         return [normalize_email_summary(item) for item in payload.get("data", [])]
 

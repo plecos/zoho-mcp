@@ -74,6 +74,37 @@ def test_normalize_email_content_raises_clear_error_on_missing_field():
         normalize_email_content(raw)
 
 
+def test_normalize_email_content_keeps_invisible_padding_by_default():
+    combining_grapheme_joiner = chr(0x034F)
+    raw = {"messageId": "1", "content": f"<p>Hi{combining_grapheme_joiner} Ken</p>"}
+
+    result = normalize_email_content(raw)
+
+    assert combining_grapheme_joiner in result["text"]
+
+
+def test_normalize_email_content_strips_invisible_padding_when_enabled():
+    combining_grapheme_joiner = chr(0x034F)
+    raw = {"messageId": "1", "content": f"<p>Hi{combining_grapheme_joiner} Ken</p>"}
+
+    result = normalize_email_content(raw, strip_invisible_chars=True)
+
+    assert combining_grapheme_joiner not in result["text"]
+    assert "Hi" in result["text"] and "Ken" in result["text"]
+
+
+def test_normalize_email_content_preserves_zwj_emoji_sequences_even_when_stripping():
+    # Family emoji is 3 codepoints joined by ZERO WIDTH JOINER (U+200D).
+    # Stripping ZWJ would silently break the emoji into separate glyphs.
+    zwj = chr(0x200D)
+    family_emoji = "\U0001f468" + zwj + "\U0001f469" + zwj + "\U0001f467"
+    raw = {"messageId": "1", "content": f"<p>{family_emoji}</p>"}
+
+    result = normalize_email_content(raw, strip_invisible_chars=True)
+
+    assert result["text"] == family_emoji
+
+
 def test_normalize_event_maps_core_fields_and_converts_times():
     raw = load_fixture("calendar_events_response.json")["events"][0]
 

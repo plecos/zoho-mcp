@@ -12,9 +12,10 @@ Tools implemented: `search_emails`, `get_email`, `list_events`.
 
 1. Register a Server-based Application in the [Zoho API Console](https://accounts.zoho.com/developerconsole) with scopes `ZohoMail.messages.READ`, `ZohoMail.accounts.READ`, `ZohoCalendar.event.READ`, and `ZohoCalendar.calendar.READ` (the `.accounts.READ` and `.calendar.READ` scopes are only needed once, to look up the IDs in step 4), redirect URI `http://localhost:8765/callback` (change the port via `ZOHO_OAUTH_CALLBACK_PORT` if 8765 is taken).
 2. Copy `.env.example` to `.env` and fill in `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`.
-3. `uv run zoho-mcp-setup` -- opens your browser to approve access, then stores a refresh token in the OS credential store (Windows Credential Manager via `keyring`).
-4. Look up `ZOHO_ACCOUNT_ID` (`GET https://mail.zoho.com/api/accounts`) and `ZOHO_CALENDAR_UID` (`GET https://calendar.zoho.com/api/v1/calendars`), using the access token from step 3, and add them to `.env`.
-5. `uv run zoho-mcp` to start the server over stdio.
+3. `uv run zoho-mcp-setup` -- opens your browser to approve access, stores a refresh token in the OS credential store (Windows Credential Manager via `keyring`), and prints your `ZOHO_ACCOUNT_ID`/`ZOHO_CALENDAR_UID` values (looked up automatically from your default mail account and calendar). Add both to `.env`.
+4. `uv run zoho-mcp` to start the server over stdio.
+
+Optional: set `ZOHO_STRIP_INVISIBLE_CHARS=true` in `.env` to have `get_email` strip invisible Unicode padding characters some marketing emails use to pad preview text. Off by default; never strips zero-width joiner/non-joiner, which carry real meaning in emoji sequences and some scripts.
 
 ## Development
 

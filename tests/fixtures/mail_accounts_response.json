@@ -1,0 +1,20 @@
+{
+  "status": {
+    "code": 200,
+    "description": "success"
+  },
+  "data": [
+    {
+      "accountId": "3870383000000001001",
+      "isDefaultAccount": false,
+      "mailboxAddress": "alias@example.com",
+      "accountDisplayName": "alias"
+    },
+    {
+      "accountId": "3870383000000008002",
+      "isDefaultAccount": true,
+      "mailboxAddress": "user@example.com",
+      "accountDisplayName": "user"
+    }
+  ]
+}

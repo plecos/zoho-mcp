@@ -107,6 +107,39 @@ async def test_get_email_calls_content_endpoint_with_folder_and_message_id(
     assert "Hi Ken" in result["text"]
 
 
+async def test_get_email_passes_strip_invisible_chars_flag_through(
+    respx_mock, http_client
+):
+    combining_grapheme_joiner = chr(0x034F)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}"
+        f"/folders/1122334455/messages/1730217600123456789/content"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "messageId": "1730217600123456789",
+                    "content": f"<p>Hi{combining_grapheme_joiner} Ken</p>",
+                },
+            },
+        )
+    )
+    stripping_client = ZohoClient(
+        token_manager=FakeTokenManager(),
+        http_client=http_client,
+        account_id=ACCOUNT_ID,
+        calendar_uid=CALENDAR_UID,
+        strip_invisible_chars=True,
+    )
+
+    result = await stripping_client.get_email(
+        message_id="1730217600123456789", folder_id="1122334455"
+    )
+
+    assert combining_grapheme_joiner not in result["text"]
+
+
 async def test_list_events_sends_json_encoded_range_param(respx_mock, zoho_client):
     route = respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"

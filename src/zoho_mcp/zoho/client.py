@@ -20,6 +20,19 @@ MAX_EVENT_RANGE_DAYS = 31
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
 
+# Characters with no legitimate visible meaning, used by some marketing
+# emails purely to pad preview text. Deliberately excludes ZWJ (U+200D) and
+# ZWNJ (U+200C), which are load-bearing for emoji sequences and some scripts.
+_INVISIBLE_PADDING_CHARS = frozenset(
+    chr(codepoint)
+    for codepoint in (
+        0x034F,  # COMBINING GRAPHEME JOINER
+        0x200B,  # ZERO WIDTH SPACE
+        0xFEFF,  # ZERO WIDTH NO-BREAK SPACE / BOM
+        0x2060,  # WORD JOINER
+    )
+)
+
 
 class ZohoAPIError(Exception):
     """Raised when a Zoho Mail/Calendar API call fails or is rejected."""
@@ -68,8 +81,17 @@ def normalize_email_summary(raw: dict) -> dict:
         raise ZohoAPIError(f"Malformed email summary from Zoho: {e}") from e
 
 
-def normalize_email_content(raw: dict) -> dict:
+def normalize_email_content(raw: dict, *, strip_invisible_chars: bool = False) -> dict:
     """Normalize Zoho Mail's Get Email Content response into plain text.
+
+    Args:
+        raw: the ``data`` object from Zoho's Get Email Content response.
+        strip_invisible_chars: if True, remove characters some marketing
+            emails use purely to pad preview text (combining grapheme
+            joiner, zero-width space, BOM, word joiner). Deliberately does
+            *not* touch zero-width joiner/non-joiner, since those carry real
+            meaning in emoji sequences and some scripts (Persian, Indic) --
+            stripping them would silently corrupt content, not just tidy it.
 
     Raises:
         ZohoAPIError: if ``raw`` is missing an expected field. Malformed HTML
@@ -79,6 +101,8 @@ def normalize_email_content(raw: dict) -> dict:
         text = BeautifulSoup(raw["content"], "html.parser").get_text(
             separator="\n", strip=True
         )
+        if strip_invisible_chars:
+            text = "".join(c for c in text if c not in _INVISIBLE_PADDING_CHARS)
         return {
             "id": str(raw["messageId"]),
             "text": text,
@@ -110,6 +134,78 @@ def normalize_event(raw: dict) -> dict:
         raise ZohoAPIError(f"Malformed event from Zoho: {e}") from e
 
 
+async def _zoho_authenticated_get(
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    params: dict | None = None,
+) -> dict:
+    """Shared GET-with-Zoho-auth-header-and-error-wrapping used by every Zoho call.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    headers = {
+        "Authorization": f"Zoho-oauthtoken {access_token}",
+        "Accept": "application/json",
+    }
+    try:
+        response = await http_client.get(url, params=params, headers=headers)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise ZohoAPIError(
+            f"Zoho API request to {url} failed with "
+            f"{e.response.status_code}: {e.response.text}"
+        ) from e
+    except httpx.HTTPError as e:
+        raise ZohoAPIError(f"Zoho API request to {url} failed: {e}") from e
+    return response.json()
+
+
+async def get_primary_account_id(
+    token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
+) -> str:
+    """Look up the user's default Zoho Mail account id (for the ``ZOHO_ACCOUNT_ID`` setting).
+
+    Raises:
+        ZohoAPIError: if the request fails, the response is malformed, or no
+            account is flagged as the default.
+    """
+    token = await token_manager.get_access_token()
+    payload = await _zoho_authenticated_get(
+        http_client, f"{ZOHO_MAIL_BASE_URL}/accounts", token
+    )
+    try:
+        for account in payload["data"]:
+            if account.get("isDefaultAccount"):
+                return account["accountId"]
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
+    raise ZohoAPIError("No default Zoho Mail account found in the accounts response")
+
+
+async def get_default_calendar_uid(
+    token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
+) -> str:
+    """Look up the user's default calendar uid (for the ``ZOHO_CALENDAR_UID`` setting).
+
+    Raises:
+        ZohoAPIError: if the request fails, the response is malformed, or no
+            calendar is flagged as the default.
+    """
+    token = await token_manager.get_access_token()
+    payload = await _zoho_authenticated_get(
+        http_client, f"{ZOHO_CALENDAR_BASE_URL}/calendars", token
+    )
+    try:
+        for calendar in payload["calendars"]:
+            if calendar.get("isdefault"):
+                return calendar["uid"]
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed calendars response from Zoho: {e}") from e
+    raise ZohoAPIError("No default Zoho Calendar found in the calendars response")
+
+
 class ZohoClient:
     """Thin async REST wrapper over the Zoho Mail and Calendar APIs.
 
@@ -123,32 +219,17 @@ class ZohoClient:
         http_client: httpx.AsyncClient,
         account_id: str,
         calendar_uid: str,
+        strip_invisible_chars: bool = False,
     ) -> None:
         self._token_manager = token_manager
         self._http_client = http_client
         self._account_id = account_id
         self._calendar_uid = calendar_uid
-
-    async def _auth_headers(self) -> dict:
-        token = await self._token_manager.get_access_token()
-        return {
-            "Authorization": f"Zoho-oauthtoken {token}",
-            "Accept": "application/json",
-        }
+        self._strip_invisible_chars = strip_invisible_chars
 
     async def _get(self, url: str, params: dict | None = None) -> dict:
-        headers = await self._auth_headers()
-        try:
-            response = await self._http_client.get(url, params=params, headers=headers)
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise ZohoAPIError(
-                f"Zoho API request to {url} failed with "
-                f"{e.response.status_code}: {e.response.text}"
-            ) from e
-        except httpx.HTTPError as e:
-            raise ZohoAPIError(f"Zoho API request to {url} failed: {e}") from e
-        return response.json()
+        token = await self._token_manager.get_access_token()
+        return await _zoho_authenticated_get(self._http_client, url, token, params)
 
     async def search_emails(self, query: str, limit: int = 20) -> list[dict]:
         """Search the user's mailbox and return compact, normalized results.
@@ -178,7 +259,9 @@ class ZohoClient:
             f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}"
             f"/folders/{folder_id}/messages/{message_id}/content"
         )
-        return normalize_email_content(payload["data"])
+        return normalize_email_content(
+            payload["data"], strip_invisible_chars=self._strip_invisible_chars
+        )
 
     async def list_events(self, start: datetime, end: datetime) -> list[dict]:
         """List calendar events in ``[start, end]``.

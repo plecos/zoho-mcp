@@ -12,7 +12,10 @@ async def search_emails(client: ZohoClient, query: str, limit: int = 20) -> list
 
     Args:
         client: injected Zoho client.
-        query: Zoho Mail search syntax (e.g. ``subject:roadmap from:jamie``).
+        query: Zoho Mail search syntax -- bare words are invalid and Zoho
+            will reject them. Use qualifiers like ``subject:``, ``sender:``,
+            ``entire:`` (anywhere in the email), joined with ``::`` for AND
+            or ``:or:`` for OR (e.g. ``subject:roadmap::sender:jamie``).
         limit: maximum number of results to return (1-200).
 
     Returns:

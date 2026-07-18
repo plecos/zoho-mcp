@@ -17,11 +17,13 @@ import httpx
 from dotenv import load_dotenv
 
 from zoho_mcp.zoho.auth import (
+    ZohoTokenManager,
     build_authorization_url,
     exchange_code_for_tokens,
     extract_authorization_code,
     store_refresh_token,
 )
+from zoho_mcp.zoho.client import get_default_calendar_uid, get_primary_account_id
 
 SCOPES = [
     "ZohoMail.messages.READ",
@@ -55,9 +57,14 @@ def _wait_for_callback(port: int) -> dict[str, list[str]]:
     return server.callback_query  # type: ignore[attr-defined]
 
 
-async def _exchange_and_store(
+async def _exchange_store_and_lookup(
     *, client_id: str, client_secret: str, code: str, redirect_uri: str
-) -> None:
+) -> tuple[str, str]:
+    """Exchange the code, store the refresh token, then look up account/calendar ids.
+
+    Returns:
+        ``(account_id, calendar_uid)`` for the user to add to ``.env``.
+    """
     async with httpx.AsyncClient() as http_client:
         tokens = await exchange_code_for_tokens(
             http_client,
@@ -66,7 +73,17 @@ async def _exchange_and_store(
             code=code,
             redirect_uri=redirect_uri,
         )
-    store_refresh_token(tokens["refresh_token"])
+        store_refresh_token(tokens["refresh_token"])
+
+        token_manager = ZohoTokenManager(
+            client_id=client_id,
+            client_secret=client_secret,
+            refresh_token=tokens["refresh_token"],
+            http_client=http_client,
+        )
+        account_id = await get_primary_account_id(token_manager, http_client)
+        calendar_uid = await get_default_calendar_uid(token_manager, http_client)
+    return account_id, calendar_uid
 
 
 def main() -> None:
@@ -86,15 +103,19 @@ def main() -> None:
     query = _wait_for_callback(port)
     code = extract_authorization_code(query)
 
-    asyncio.run(
-        _exchange_and_store(
+    account_id, calendar_uid = asyncio.run(
+        _exchange_store_and_lookup(
             client_id=client_id,
             client_secret=client_secret,
             code=code,
             redirect_uri=redirect_uri,
         )
     )
-    print("Zoho refresh token stored. You can now run `uv run zoho-mcp`.")
+    print("Zoho refresh token stored.\n")
+    print("Add these to your .env:")
+    print(f"ZOHO_ACCOUNT_ID={account_id}")
+    print(f"ZOHO_CALENDAR_UID={calendar_uid}\n")
+    print("Then run `uv run zoho-mcp`.")
 
 
 if __name__ == "__main__":

@@ -27,7 +27,13 @@ def create_server(client: ZohoClient) -> FastMCP:
 
     @mcp.tool(annotations=_READ_ONLY)
     async def search_emails(query: str, limit: int = 20) -> list[dict]:
-        """Search the user's Zoho Mail mailbox for emails matching a query."""
+        """Search the user's Zoho Mail mailbox for emails matching a query.
+
+        query must use Zoho Mail search syntax -- bare words are rejected.
+        Use qualifiers like subject:, sender:, entire: (anywhere in the
+        email), joined with :: for AND or :or: for OR, e.g.
+        "subject:roadmap::sender:jamie".
+        """
         return await mail_tools.search_emails(client, query=query, limit=limit)
 
     @mcp.tool(annotations=_READ_ONLY)
@@ -71,6 +77,10 @@ def _build_zoho_client_from_env() -> ZohoClient:
         http_client=http_client,
         account_id=os.environ["ZOHO_ACCOUNT_ID"],
         calendar_uid=os.environ["ZOHO_CALENDAR_UID"],
+        strip_invisible_chars=os.environ.get("ZOHO_STRIP_INVISIBLE_CHARS", "false")
+        .strip()
+        .lower()
+        == "true",
     )
 
 

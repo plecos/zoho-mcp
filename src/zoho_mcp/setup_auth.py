@@ -14,8 +14,8 @@ import urllib.parse
 import webbrowser
 
 import httpx
-from dotenv import load_dotenv
 
+from zoho_mcp.config import load_env
 from zoho_mcp.zoho.auth import (
     ZohoTokenManager,
     build_authorization_url,
@@ -87,7 +87,7 @@ async def _exchange_store_and_lookup(
 
 
 def main() -> None:
-    load_dotenv()
+    load_env()
     client_id = os.environ["ZOHO_CLIENT_ID"]
     client_secret = os.environ["ZOHO_CLIENT_SECRET"]
     port = int(os.environ.get("ZOHO_OAUTH_CALLBACK_PORT", DEFAULT_CALLBACK_PORT))

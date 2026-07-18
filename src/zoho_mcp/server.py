@@ -9,10 +9,10 @@ config and runs the server over stdio.
 import os
 
 import httpx
-from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from zoho_mcp.config import load_env
 from zoho_mcp.tools import calendar as calendar_tools
 from zoho_mcp.tools import mail as mail_tools
 from zoho_mcp.zoho.auth import ZohoTokenManager, load_refresh_token
@@ -58,7 +58,7 @@ def _build_zoho_client_from_env() -> ZohoClient:
         RuntimeError: if no refresh token has been stored yet.
         KeyError: if a required environment variable is missing.
     """
-    load_dotenv()
+    load_env()
     refresh_token = load_refresh_token()
     if refresh_token is None:
         raise RuntimeError(

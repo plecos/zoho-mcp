@@ -118,8 +118,10 @@ async def test_list_events_sends_json_encoded_range_param(respx_mock, zoho_clien
                     {
                         "uid": "evt-998877",
                         "title": "Q3 Roadmap Sync",
-                        "start": "20241029T160000Z",
-                        "end": "20241029T170000Z",
+                        "dateandtime": {
+                            "start": "20241029T160000Z",
+                            "end": "20241029T170000Z",
+                        },
                         "attendees": [],
                     }
                 ]

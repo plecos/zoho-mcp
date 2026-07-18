@@ -1,8 +1,8 @@
 """Zoho Mail and Calendar REST client, plus raw-response normalization.
 
 All conversion from Zoho's wire format (epoch-millisecond strings, HTML email
-bodies, ``yyyyMMdd'T'HHmmss'Z'`` timestamps) into the compact, LLM-facing
-shapes used by the MCP tools happens here and only here.
+bodies, event timestamps) into the compact, LLM-facing shapes used by the
+MCP tools happens here and only here.
 """
 
 import json
@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 
 from zoho_mcp.zoho.auth import ZohoTokenManager
 
-ZOHO_EVENT_TIME_FORMAT = "%Y%m%dT%H%M%SZ"
+ZOHO_EVENT_RANGE_REQUEST_FORMAT = "%Y%m%dT%H%M%SZ"
 ZOHO_MAIL_BASE_URL = "https://mail.zoho.com/api"
 ZOHO_CALENDAR_BASE_URL = "https://calendar.zoho.com/api/v1"
 MAX_EVENT_RANGE_DAYS = 31
@@ -31,10 +31,17 @@ def _epoch_ms_to_iso8601(epoch_ms: str) -> str:
 
 
 def _zoho_event_time_to_iso8601(value: str) -> str:
-    """Convert a Zoho Calendar ``yyyyMMdd'T'HHmmss'Z'`` timestamp to ISO 8601 UTC."""
+    """Convert a Zoho Calendar event timestamp to ISO 8601.
+
+    Zoho returns two real shapes here (not the single documented one):
+    a date-only ``yyyyMMdd`` for all-day events, or a full timestamp with
+    either a ``Z`` or a numeric UTC offset (``yyyyMMdd'T'HHmmss(Z|+/-HHMM)``).
+    """
+    if "T" not in value:
+        return datetime.strptime(value, "%Y%m%d").date().isoformat()
     return (
-        datetime.strptime(value, ZOHO_EVENT_TIME_FORMAT)
-        .replace(tzinfo=timezone.utc)
+        datetime.strptime(value, "%Y%m%dT%H%M%S%z")
+        .astimezone(timezone.utc)
         .isoformat()
     )
 
@@ -88,11 +95,12 @@ def normalize_event(raw: dict) -> dict:
             an unexpected type/value (e.g. an unparseable timestamp).
     """
     try:
+        dateandtime = raw["dateandtime"]
         return {
             "id": raw["uid"],
             "title": raw["title"],
-            "start": _zoho_event_time_to_iso8601(raw["start"]),
-            "end": _zoho_event_time_to_iso8601(raw["end"]),
+            "start": _zoho_event_time_to_iso8601(dateandtime["start"]),
+            "end": _zoho_event_time_to_iso8601(dateandtime["end"]),
             "attendees": [
                 {"email": a["email"], "status": a["status"]}
                 for a in raw.get("attendees", [])
@@ -191,8 +199,8 @@ class ZohoClient:
             )
         range_param = json.dumps(
             {
-                "start": start.strftime(ZOHO_EVENT_TIME_FORMAT),
-                "end": end.strftime(ZOHO_EVENT_TIME_FORMAT),
+                "start": start.strftime(ZOHO_EVENT_RANGE_REQUEST_FORMAT),
+                "end": end.strftime(ZOHO_EVENT_RANGE_REQUEST_FORMAT),
             }
         )
         payload = await self._get(

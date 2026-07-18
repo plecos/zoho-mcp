@@ -39,6 +39,13 @@ Happy-path tests alone are not done. For every unit of behavior, also test:
 
 This was found the hard way: the first pass of `list_events` validated the 31-day max but not `end <= start`, so an inverted range would have silently reached Zoho instead of failing fast — no test exercised it because every test used a valid `end > start`. Don't let that be the pattern: when writing a test for the happy path, immediately ask "what's the adjacent bad input?" and write that test too, in the same red-green cycle, not as a follow-up.
 
+An even sharper example: `normalize_event`'s original fixture assumed top-level `start`/`end` fields with a `Z` suffix. Every real event returned by the live API instead nests them under `dateandtime.start`/`dateandtime.end`, uses a numeric UTC offset (`-0700`) instead of `Z`, and all-day events use a bare `yyyyMMdd` date with no time component at all. Every real event failed to normalize until this was caught by actually running the code against a live account.
+
+Root-cause note, because it wasn't purely "Zoho's docs are wrong": re-checking Zoho's live docs page afterward showed it *does* document the nested `dateandtime` object (alongside an ambiguous, timezone-less top-level field) -- the first research pass missed it because it asked a fetch tool that summarizes pages through a smaller model for "the sample response" in a casual, paraphrase-inviting way, and the paraphrase dropped the nested object and fabricated a `Z` suffix that wasn't actually in the source. Two controllable takeaways, not just one:
+
+1. **When researching an exact wire format through any summarizing tool, demand a verbatim quote, not a paraphrase.** A casual prompt gets a casual (and sometimes wrong) answer.
+2. **Whether or not a vendor's docs are accurate or current is not something we control -- so don't depend on it.** Verify fixtures against at least one real response once live access exists, and lean on the error-handling/normalization layer to tolerate whatever variance shows up rather than assuming any single documented shape is the only real one. Controlling what we can control means: get the most accurate info we're able to get, and build the code to handle the weird stuff gracefully regardless.
+
 One thing this does *not* mean: don't duplicate primitive type-checking that FastMCP's JSON-schema validation already does at the tool-call boundary (e.g. rejecting a non-string `query`). Focus thoroughness on business-rule constraints (ranges, ordering, bounds) and defensive handling of data from systems outside our control (Zoho's API) — not on re-validating what the MCP protocol layer already guarantees.
 
 ## Git workflow

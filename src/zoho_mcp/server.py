@@ -9,6 +9,7 @@ config and runs the server over stdio.
 import os
 
 import httpx
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
@@ -51,6 +52,7 @@ def _build_zoho_client_from_env() -> ZohoClient:
         RuntimeError: if no refresh token has been stored yet.
         KeyError: if a required environment variable is missing.
     """
+    load_dotenv()
     refresh_token = load_refresh_token()
     if refresh_token is None:
         raise RuntimeError(

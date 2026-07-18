@@ -14,6 +14,7 @@ import urllib.parse
 import webbrowser
 
 import httpx
+from dotenv import load_dotenv
 
 from zoho_mcp.zoho.auth import (
     build_authorization_url,
@@ -22,7 +23,12 @@ from zoho_mcp.zoho.auth import (
     store_refresh_token,
 )
 
-SCOPES = ["ZohoMail.messages.READ", "ZohoCalendar.event.READ"]
+SCOPES = [
+    "ZohoMail.messages.READ",
+    "ZohoMail.accounts.READ",  # needed once, to look up the mail account id
+    "ZohoCalendar.event.READ",
+    "ZohoCalendar.calendar.READ",  # needed once, to look up the calendar's uid
+]
 DEFAULT_CALLBACK_PORT = 8765
 
 
@@ -64,6 +70,7 @@ async def _exchange_and_store(
 
 
 def main() -> None:
+    load_dotenv()
     client_id = os.environ["ZOHO_CLIENT_ID"]
     client_secret = os.environ["ZOHO_CLIENT_SECRET"]
     port = int(os.environ.get("ZOHO_OAUTH_CALLBACK_PORT", DEFAULT_CALLBACK_PORT))

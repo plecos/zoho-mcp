@@ -106,10 +106,21 @@ def test_normalize_event_raises_clear_error_on_missing_field():
 
 def test_normalize_event_raises_clear_error_on_malformed_time_string():
     raw = load_fixture("calendar_events_response.json")["events"][0]
-    raw["start"] = "not-a-timestamp"
+    raw["dateandtime"]["start"] = "not-a-timestamp"
 
     with pytest.raises(ZohoAPIError, match="event"):
         normalize_event(raw)
+
+
+def test_normalize_event_handles_all_day_date_only_format():
+    raw = load_fixture("calendar_events_response.json")["events"][1]
+
+    result = normalize_event(raw)
+
+    assert result["id"] == "evt-allday-1"
+    assert result["title"] == "Company Holiday"
+    assert result["start"] == "2024-11-02"
+    assert result["end"] == "2024-11-03"
 
 
 def test_normalize_event_raises_clear_error_on_malformed_attendee():

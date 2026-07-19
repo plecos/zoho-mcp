@@ -9,6 +9,7 @@ from zoho_mcp.zoho.client import (
     normalize_email_summary,
     normalize_event,
     normalize_event_detail,
+    normalize_task,
 )
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -262,3 +263,67 @@ def test_normalize_event_detail_raises_clear_error_on_malformed_attendee():
 
     with pytest.raises(ZohoAPIError, match="event"):
         normalize_event_detail(raw)
+
+
+def test_normalize_task_maps_core_fields():
+    raw = load_fixture("tasks_list_response.json")["data"]["tasks"][0]
+
+    result = normalize_task(raw)
+
+    assert result["id"] == "1001"
+    assert result["title"] == "Renew passport"
+    assert result["description"] == "Expires in 3 months, apply for renewal"
+    assert result["status"] == "In Progress"
+    assert result["priority"] == "High"
+    assert result["project"] == "General"
+    assert result["assignee"] == "Jamie Rivera"
+    assert result["tags"] == ["errands"]
+    assert result["subtask_count"] == 1
+    # Zoho's own timestamps are already ISO 8601 with a real UTC offset --
+    # unlike Mail's epoch-ms or Calendar's yyyyMMdd'T'HHmmssZ, no
+    # conversion is needed or performed here.
+    assert result["created_at"] == "2026-01-05T09:00:00-08:00"
+    assert result["modified_at"] == "2026-06-10T14:30:00-07:00"
+
+
+def test_normalize_task_defaults_missing_optional_fields():
+    raw = {"id": "1", "title": "Solo task", "status": "Open"}
+
+    result = normalize_task(raw)
+
+    assert result["description"] == ""
+    assert result["priority"] == ""
+    assert result["due_date"] == ""
+    assert result["project"] == ""
+    assert result["assignee"] == ""
+    assert result["tags"] == []
+    assert result["subtask_count"] == 0
+    assert result["recurring"] is None
+
+
+def test_normalize_task_extracts_recurring_when_present():
+    raw = load_fixture("tasks_list_response.json")["data"]["tasks"][1]
+
+    result = normalize_task(raw)
+
+    assert result["recurring"] == {"type": "Daily", "frequency": 1}
+
+
+def test_normalize_task_treats_null_description_and_tags_as_empty():
+    # Matches the Contacts/Calendar precedent -- Zoho can send an explicit
+    # null (not an absent key) for empty fields, which raw.get(key, "")
+    # would not catch.
+    raw = {"id": "1", "title": "Solo task", "status": "Open", "description": None, "tags": None}
+
+    result = normalize_task(raw)
+
+    assert result["description"] == ""
+    assert result["tags"] == []
+
+
+def test_normalize_task_raises_clear_error_on_missing_field():
+    raw = load_fixture("tasks_list_response.json")["data"]["tasks"][0]
+    del raw["title"]
+
+    with pytest.raises(ZohoAPIError, match="task"):
+        normalize_task(raw)

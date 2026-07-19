@@ -17,9 +17,12 @@ from zoho_mcp.zoho.auth import ZohoTokenManager
 ZOHO_EVENT_RANGE_REQUEST_FORMAT = "%Y%m%dT%H%M%SZ"
 ZOHO_MAIL_BASE_URL = "https://mail.zoho.com/api"
 ZOHO_CALENDAR_BASE_URL = "https://calendar.zoho.com/api/v1"
+ZOHO_TASKS_BASE_URL = "https://mail.zoho.com/api/tasks/me"
 MAX_EVENT_RANGE_DAYS = 31
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
+MIN_TASKS_LIMIT = 1
+MAX_TASKS_LIMIT = 499  # per Zoho's own documented range for this endpoint
 
 # search_emails excludes these by default -- not "received" mail by nature.
 # Every user-created/rule-filed folder reports folderType "Inbox" (confirmed
@@ -207,6 +210,49 @@ def normalize_event_detail(raw: dict) -> dict:
         }
     except (KeyError, TypeError) as e:
         raise ZohoAPIError(f"Malformed event detail from Zoho: {e}") from e
+
+
+def _format_recurring(raw: dict | None) -> dict | None:
+    if not raw:
+        return None
+    return {"type": raw.get("type", ""), "frequency": raw.get("frequency", 1)}
+
+
+def normalize_task(raw: dict) -> dict:
+    """Normalize one task from Zoho Mail's Tasks API ``data.tasks`` array.
+
+    ``created_at``/``modified_at`` are passed through unchanged -- unlike
+    Mail's epoch-millisecond strings or Calendar's custom
+    ``yyyyMMdd'T'HHmmss(Z|+/-HHMM)`` format, Zoho's Tasks API already
+    returns proper ISO 8601 timestamps with a real UTC offset, confirmed
+    live, so no conversion is needed here.
+
+    ``due_date``'s real format is unverified -- no task in the account
+    this was built against has ever had one set, so it's passed through
+    as an opaque string (defaulting to "") rather than parsed under an
+    unconfirmed format assumption.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``id``, ``title``, or ``status``.
+    """
+    try:
+        return {
+            "id": raw["id"],
+            "title": raw["title"],
+            "description": raw.get("description") or "",
+            "status": raw["status"],
+            "priority": raw.get("priority") or "",
+            "due_date": raw.get("dueDate") or "",
+            "project": (raw.get("project") or {}).get("name", ""),
+            "assignee": (raw.get("assignee") or {}).get("name", ""),
+            "tags": raw.get("tags") or [],
+            "subtask_count": len(raw.get("subtasks") or []),
+            "recurring": _format_recurring(raw.get("recurring")),
+            "created_at": raw.get("createdAt") or "",
+            "modified_at": raw.get("modifiedTime") or "",
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed task from Zoho: {e}") from e
 
 
 async def zoho_authenticated_get(
@@ -535,3 +581,51 @@ class ZohoClient:
         if not events:
             raise ZohoAPIError(f"No event found for uid={uid!r}")
         return normalize_event_detail(events[0])
+
+    async def list_tasks(
+        self, limit: int = 20, offset: int = 0
+    ) -> tuple[list[dict], bool]:
+        """List the user's personal Zoho Mail tasks.
+
+        Args:
+            limit: maximum number of tasks to return (1-499).
+            offset: how many tasks to skip before returning results (Zoho's
+                own ``from`` param -- renamed here since ``from`` is a
+                Python keyword).
+
+        Returns:
+            ``(tasks, has_more)`` -- ``has_more`` reflects whether Zoho's
+            response included a ``paging.nextPage``, not a guess from the
+            result count.
+
+        Raises:
+            ZohoAPIError: if ``limit``/``offset`` are out of range, or the
+                Tasks API rejects or fails the request.
+        """
+        if not (MIN_TASKS_LIMIT <= limit <= MAX_TASKS_LIMIT):
+            raise ZohoAPIError(
+                f"limit must be between {MIN_TASKS_LIMIT} and "
+                f"{MAX_TASKS_LIMIT} (got {limit})"
+            )
+        if offset < 0:
+            raise ZohoAPIError(f"offset must be >= 0 (got {offset})")
+        payload = await self._get(
+            ZOHO_TASKS_BASE_URL, params={"limit": limit, "from": offset}
+        )
+        data = payload.get("data", {})
+        tasks = [normalize_task(t) for t in data.get("tasks", [])]
+        has_more = bool(data.get("paging", {}).get("nextPage"))
+        return tasks, has_more
+
+    async def get_task(self, task_id: str) -> dict:
+        """Fetch one personal task by id.
+
+        Raises:
+            ZohoAPIError: if no task is found for ``task_id``, or the
+                Tasks API rejects or fails the request.
+        """
+        payload = await self._get(f"{ZOHO_TASKS_BASE_URL}/{task_id}")
+        tasks = payload.get("data", {}).get("tasks", [])
+        if not tasks:
+            raise ZohoAPIError(f"No task found for task_id={task_id!r}")
+        return normalize_task(tasks[0])

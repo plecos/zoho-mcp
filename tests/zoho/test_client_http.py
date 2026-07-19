@@ -589,6 +589,137 @@ async def test_get_event_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_cl
         await zoho_client.get_event("evt-1")
 
 
+async def test_list_tasks_sends_limit_and_from_params(respx_mock, zoho_client):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "paging": {},
+                    "tasks": [{"id": "1", "title": "Renew passport", "status": "In Progress"}],
+                }
+            },
+        )
+    )
+
+    results, has_more = await zoho_client.list_tasks(limit=10, offset=5)
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Zoho-oauthtoken fake-access-token"
+    assert request.url.params["limit"] == "10"
+    assert request.url.params["from"] == "5"
+    assert [t["id"] for t in results] == ["1"]
+    assert has_more is False
+
+
+async def test_list_tasks_reports_has_more_when_next_page_present(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "paging": {"nextPage": "tasks/me?from=1&limit=1"},
+                    "tasks": [{"id": "1", "title": "Task", "status": "Open"}],
+                }
+            },
+        )
+    )
+
+    _, has_more = await zoho_client.list_tasks(limit=1)
+
+    assert has_more is True
+
+
+async def test_list_tasks_returns_empty_list_when_tasks_key_absent(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(200, json={"data": {}})
+    )
+
+    results, has_more = await zoho_client.list_tasks()
+
+    assert results == []
+    assert has_more is False
+
+
+async def test_list_tasks_rejects_limit_below_one_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/me")
+
+    with pytest.raises(ZohoAPIError, match="limit"):
+        await zoho_client.list_tasks(limit=0)
+
+    assert not route.called
+
+
+async def test_list_tasks_rejects_negative_offset_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/me")
+
+    with pytest.raises(ZohoAPIError, match="offset"):
+        await zoho_client.list_tasks(offset=-1)
+
+    assert not route.called
+
+
+async def test_list_tasks_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.get("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_tasks()
+
+
+async def test_get_task_fetches_by_id_and_normalizes(respx_mock, zoho_client):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/me/1001").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tasks": [
+                        {"id": "1001", "title": "Renew passport", "status": "In Progress"}
+                    ]
+                }
+            },
+        )
+    )
+
+    result = await zoho_client.get_task("1001")
+
+    assert route.called
+    assert (
+        route.calls.last.request.headers["Authorization"]
+        == "Zoho-oauthtoken fake-access-token"
+    )
+    assert result["id"] == "1001"
+    assert result["title"] == "Renew passport"
+
+
+async def test_get_task_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.get("https://mail.zoho.com/api/tasks/me/does-not-exist").mock(
+        return_value=httpx.Response(404, json={"error": "not found"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.get_task("does-not-exist")
+
+
+async def test_get_task_raises_clear_error_when_tasks_key_absent(respx_mock, zoho_client):
+    respx_mock.get("https://mail.zoho.com/api/tasks/me/1001").mock(
+        return_value=httpx.Response(200, json={"data": {}})
+    )
+
+    with pytest.raises(ZohoAPIError, match="1001"):
+        await zoho_client.get_task("1001")
+
+
 async def test_list_events_returns_empty_list_when_events_key_absent(
     respx_mock, zoho_client
 ):

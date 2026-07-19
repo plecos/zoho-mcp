@@ -1,7 +1,8 @@
 """FastMCP app instantiation and tool registration.
 
 No business logic lives here -- ``create_server`` wires the already-tested
-tool wrappers (``tools/mail.py``, ``tools/calendar.py``, ``tools/contacts.py``)
+tool wrappers (``tools/mail.py``, ``tools/calendar.py``, ``tools/tasks.py``,
+``tools/contacts.py``)
 to a FastMCP instance, and ``main`` builds the real Zoho clients from
 environment/keyring config and runs the server over stdio.
 """
@@ -16,6 +17,7 @@ from zoho_mcp.config import load_env
 from zoho_mcp.tools import calendar as calendar_tools
 from zoho_mcp.tools import contacts as contacts_tools
 from zoho_mcp.tools import mail as mail_tools
+from zoho_mcp.tools import tasks as tasks_tools
 from zoho_mcp.zoho.auth import ZohoTokenManager, load_refresh_token
 from zoho_mcp.zoho.client import ZohoClient
 from zoho_mcp.zoho.contacts_client import ZohoContactsClient
@@ -95,6 +97,30 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         fields for a recurring event are not reliable.
         """
         return await calendar_tools.get_event(client, uid=uid)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_tasks(limit: int = 20, offset: int = 0) -> dict:
+        """List the user's personal Zoho Mail tasks (Zoho Mail's Tasks
+        feature, not a project-management tool).
+
+        limit (optional): maximum number of tasks to return (1-499).
+        offset (optional): how many tasks to skip -- use for pagination
+        together with has_more.
+
+        Returns {"tasks": [...], "has_more": bool}. Each task has id,
+        title, description, status, priority, due_date, project,
+        assignee, tags, subtask_count, recurring, created_at, modified_at.
+        due_date's format is unverified against this account (never seen
+        populated) -- treat it as an opaque string, don't assume a
+        format. If has_more is true, raise limit or increase offset,
+        don't assume the count you got back is the full total.
+        """
+        return await tasks_tools.list_tasks(client, limit=limit, offset=offset)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_task(task_id: str) -> dict:
+        """Fetch one task's full details, given an id from list_tasks."""
+        return await tasks_tools.get_task(client, task_id=task_id)
 
     @mcp.tool(annotations=_READ_ONLY)
     async def search_contacts(

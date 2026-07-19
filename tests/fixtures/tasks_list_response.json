@@ -1,0 +1,35 @@
+{
+  "status": {"code": 200, "description": "success"},
+  "data": {
+    "paging": {"nextPage": "tasks/me?from=2&limit=2"},
+    "tasks": [
+      {
+        "id": "1001",
+        "title": "Renew passport",
+        "description": "Expires in 3 months, apply for renewal",
+        "status": "In Progress",
+        "priority": "High",
+        "project": {"name": "General", "id": "555001"},
+        "assignee": {"name": "Jamie Rivera", "id": 709548548},
+        "tags": ["errands"],
+        "subtasks": [{"id": "1001-1"}],
+        "createdAt": "2026-01-05T09:00:00-08:00",
+        "modifiedTime": "2026-06-10T14:30:00-07:00"
+      },
+      {
+        "id": "1002",
+        "title": "Take vitamins",
+        "description": "",
+        "status": "In Progress",
+        "priority": "Medium",
+        "project": {"name": "General", "id": "555001"},
+        "assignee": {"name": "Jamie Rivera", "id": 709548548},
+        "tags": [],
+        "subtasks": [],
+        "recurring": {"type": "Daily", "frequency": 1, "recurDailyOnlyOnWeekdays": false},
+        "createdAt": "2023-03-14T17:01:47-07:00",
+        "modifiedTime": "2023-03-14T17:01:47-07:00"
+      }
+    ]
+  }
+}

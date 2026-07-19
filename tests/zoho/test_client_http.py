@@ -50,10 +50,46 @@ def mock_pacific_accounts_endpoint(respx_mock):
     )
 
 
+def mock_folder_types_endpoint(respx_mock, folder_types=None):
+    folder_types = folder_types or {
+        "1122334455": "Inbox",
+        "sent-folder-id": "Sent",
+        "drafts-folder-id": "Drafts",
+        "templates-folder-id": "Templates",
+        "newsletter-folder-id": "Inbox",
+    }
+    return respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/folders"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"folderId": fid, "folderName": fid, "folderType": ftype}
+                    for fid, ftype in folder_types.items()
+                ]
+            },
+        )
+    )
+
+
+def _raw_email(message_id: str, folder_id: str) -> dict:
+    return {
+        "messageId": message_id,
+        "fromAddress": "someone@example.com",
+        "subject": "Subject",
+        "receivedTime": "1730217600000",
+        "summary": "Snippet",
+        "status": "1",
+        "folderId": folder_id,
+    }
+
+
 async def test_search_emails_calls_search_endpoint_with_auth_header(
     respx_mock, zoho_client
 ):
     mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
     route = respx_mock.get(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
     ).mock(
@@ -373,6 +409,93 @@ async def test_search_emails_looks_up_timezone_even_without_days_back(
     await zoho_client.search_emails(query="roadmap")
 
     assert accounts_route.call_count == 1
+
+
+async def test_search_emails_filters_out_sent_drafts_and_templates(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    _raw_email(message_id="1", folder_id="1122334455"),  # Inbox
+                    _raw_email(message_id="2", folder_id="sent-folder-id"),
+                    _raw_email(message_id="3", folder_id="drafts-folder-id"),
+                    _raw_email(message_id="4", folder_id="templates-folder-id"),
+                    # User-created/rule-filed folder, reports as folderType
+                    # "Inbox" -- confirmed against the real API -- so it
+                    # must survive the filter, not just Sent/Drafts/Templates.
+                    _raw_email(message_id="5", folder_id="newsletter-folder-id"),
+                ]
+            },
+        )
+    )
+
+    results = await zoho_client.search_emails(query="roadmap")
+
+    assert {r["id"] for r in results} == {"1", "5"}
+
+
+async def test_search_emails_skips_folder_filter_when_query_scopes_a_folder(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    folders_route = mock_folder_types_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [_raw_email(message_id="2", folder_id="sent-folder-id")]},
+        )
+    )
+
+    # Caller explicitly asked for Sent -- the exclusion filter must not
+    # silently strip out the very folder they asked for.
+    results = await zoho_client.search_emails(query="in:Sent")
+
+    assert {r["id"] for r in results} == {"2"}
+    assert folders_route.call_count == 0
+
+
+async def test_search_emails_caches_folder_types_across_calls(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    folders_route = mock_folder_types_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [_raw_email(message_id="1", folder_id="1122334455")]},
+        )
+    )
+
+    await zoho_client.search_emails(query="roadmap")
+    await zoho_client.search_emails(query="another")
+
+    assert folders_route.call_count == 1
+
+
+async def test_search_emails_does_not_fetch_folder_types_for_empty_results(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    ).mock(return_value=httpx.Response(200, json={"data": []}))
+
+    # No mock_folder_types_endpoint at all -- if search_emails tried to
+    # fetch it, respx would raise for the unmocked route.
+    results = await zoho_client.search_emails(query="roadmap")
+
+    assert results == []
 
 
 async def test_search_emails_rejects_negative_days_back_without_a_request(

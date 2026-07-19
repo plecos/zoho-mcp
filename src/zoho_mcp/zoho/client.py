@@ -21,6 +21,12 @@ MAX_EVENT_RANGE_DAYS = 31
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
 
+# search_emails excludes these by default -- not "received" mail by nature.
+# Every user-created/rule-filed folder reports folderType "Inbox" (confirmed
+# against the real API), so this can never accidentally catch a user's own
+# folder, only Zoho's built-in non-received ones.
+EXCLUDED_FOLDER_TYPES = frozenset({"Sent", "Drafts", "Templates"})
+
 # Characters with no legitimate visible meaning, used by some marketing
 # emails purely to pad preview text. Deliberately excludes ZWJ (U+200D) and
 # ZWNJ (U+200C), which are load-bearing for emoji sequences and some scripts.
@@ -259,6 +265,30 @@ async def get_mailbox_timezone(
         raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
 
 
+async def get_folder_types(
+    token_manager: ZohoTokenManager, http_client: httpx.AsyncClient, account_id: str
+) -> dict[str, str]:
+    """Map every one of the account's folder ids to its ``folderType``.
+
+    Used to filter Sent/Drafts/Templates out of ``search_emails`` results.
+    Confirmed against the real API: every user-created folder (including
+    subfolders and mail-rule destinations) reports ``folderType: "Inbox"``,
+    not a distinct "custom" type -- so excluding by type never catches a
+    user's own folders, only Zoho's built-in non-received ones.
+
+    Raises:
+        ZohoAPIError: if the request fails or the response is malformed.
+    """
+    token = await token_manager.get_access_token()
+    payload = await _zoho_authenticated_get(
+        http_client, f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/folders", token
+    )
+    try:
+        return {folder["folderId"]: folder["folderType"] for folder in payload["data"]}
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed folders response from Zoho: {e}") from e
+
+
 async def get_default_calendar_uid(
     token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
 ) -> str:
@@ -302,6 +332,7 @@ class ZohoClient:
         self._calendar_uid = calendar_uid
         self._strip_invisible_chars = strip_invisible_chars
         self._mailbox_timezone_cache: str | None = None
+        self._excluded_folder_ids_cache: frozenset[str] | None = None
 
     async def _get(self, url: str, params: dict | None = None) -> dict:
         token = await self._token_manager.get_access_token()
@@ -322,6 +353,25 @@ class ZohoClient:
                 self._token_manager, self._http_client
             )
         return self._mailbox_timezone_cache
+
+    async def _get_excluded_folder_ids(self) -> frozenset[str]:
+        """Folder ids to drop from search_emails results (Sent/Drafts/Templates).
+
+        Fetched once per client and cached, same rationale as
+        ``_get_mailbox_timezone``: bounded staleness (since this process
+        started) rather than a static value that could drift if folders
+        are added or restructured.
+        """
+        if self._excluded_folder_ids_cache is None:
+            folder_types = await get_folder_types(
+                self._token_manager, self._http_client, self._account_id
+            )
+            self._excluded_folder_ids_cache = frozenset(
+                folder_id
+                for folder_id, folder_type in folder_types.items()
+                if folder_type in EXCLUDED_FOLDER_TYPES
+            )
+        return self._excluded_folder_ids_cache
 
     async def search_emails(
         self, query: str = "", limit: int = 20, days_back: int | None = None
@@ -370,10 +420,18 @@ class ZohoClient:
             f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/search",
             params={"searchKey": search_key, "limit": limit},
         )
-        return [
-            normalize_email_summary(item, mailbox_timezone)
-            for item in payload.get("data", [])
-        ]
+        raw_items = payload.get("data", [])
+        results = [normalize_email_summary(item, mailbox_timezone) for item in raw_items]
+
+        # Skip the folder-type fetch entirely when there's nothing to
+        # filter, or when the caller explicitly scoped the search to a
+        # folder themselves (e.g. "in:Sent") -- excluding by type would
+        # otherwise silently strip out the exact folder they asked for.
+        if raw_items and "in:" not in query.lower():
+            excluded_folder_ids = await self._get_excluded_folder_ids()
+            results = [r for r in results if r["folder_id"] not in excluded_folder_ids]
+
+        return results
 
     async def get_email(self, message_id: str, folder_id: str) -> dict:
         """Fetch the full plain-text content of one email.

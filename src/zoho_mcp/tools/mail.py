@@ -16,9 +16,11 @@ async def search_emails(
         client: injected Zoho client.
         query: Zoho Mail search syntax -- bare words are invalid and Zoho
             will reject them. Use qualifiers like ``subject:``, ``sender:``,
-            ``entire:`` (anywhere in the email), joined with ``::`` for AND
-            or ``:or:`` for OR (e.g. ``subject:roadmap::sender:jamie``). May
-            be empty if ``days_back`` is given.
+            ``entire:`` (anywhere in the email), ``in:<folder name>``
+            (search a specific folder), ``label:<label name>`` (search by
+            tag/label), joined with ``::`` for AND or ``:or:`` for OR (e.g.
+            ``subject:roadmap::sender:jamie``). May be empty if
+            ``days_back`` is given.
         limit: maximum number of results to return (1-200).
         days_back: only return emails from the last N days (0 = today
             only), resolved using the mailbox's own timezone.
@@ -27,6 +29,9 @@ async def search_emails(
         Compact email summaries: id, from, subject, date, snippet,
         folder_id, read (bool). ``date`` is in the mailbox's own local
         timezone, not UTC -- see ``ZohoClient._get_mailbox_timezone``.
+        Excludes Sent/Drafts/Templates by default (see
+        ``ZohoClient._get_excluded_folder_ids``); use an explicit ``in:``
+        qualifier in ``query`` to search one of those folders instead.
 
     Raises:
         ZohoAPIError: if query and days_back are both empty, days_back is

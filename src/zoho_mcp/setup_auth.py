@@ -28,6 +28,7 @@ from zoho_mcp.zoho.client import get_default_calendar_uid, get_primary_account_i
 SCOPES = [
     "ZohoMail.messages.READ",
     "ZohoMail.accounts.READ",  # needed once, to look up the mail account id
+    "ZohoMail.folders.READ",  # used at runtime to filter out Sent/Drafts by folder type
     "ZohoCalendar.event.READ",
     "ZohoCalendar.calendar.READ",  # needed once, to look up the calendar's uid
 ]

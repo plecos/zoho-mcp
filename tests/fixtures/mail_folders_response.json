@@ -1,0 +1,17 @@
+{
+  "status": {
+    "code": 200,
+    "description": "success"
+  },
+  "data": [
+    {"folderId": "1000000000001", "folderName": "Inbox", "folderType": "Inbox"},
+    {"folderId": "1000000000002", "folderName": "Drafts", "folderType": "Drafts"},
+    {"folderId": "1000000000003", "folderName": "Templates", "folderType": "Templates"},
+    {"folderId": "1000000000004", "folderName": "Sent", "folderType": "Sent"},
+    {"folderId": "1000000000005", "folderName": "Spam", "folderType": "Spam"},
+    {"folderId": "1000000000006", "folderName": "Trash", "folderType": "Trash"},
+    {"folderId": "1000000000007", "folderName": "Outbox", "folderType": "Outbox"},
+    {"folderId": "1000000000008", "folderName": "Newsletter", "folderType": "Inbox"},
+    {"folderId": "1000000000009", "folderName": "Notification", "folderType": "Inbox"}
+  ]
+}

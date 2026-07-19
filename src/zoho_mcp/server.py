@@ -34,9 +34,10 @@ def create_server(client: ZohoClient) -> FastMCP:
 
         query (optional): must use Zoho Mail search syntax -- bare words
         are rejected. Use qualifiers like subject:, sender:, entire:
-        (anywhere in the email), joined with :: for AND or :or: for OR,
-        e.g. "subject:roadmap::sender:jamie". May be left empty if
-        days_back is given.
+        (anywhere in the email), in:<folder name> (search a specific
+        folder), label:<label name> (search by tag/label), joined with ::
+        for AND or :or: for OR, e.g. "subject:roadmap::sender:jamie". May
+        be left empty if days_back is given.
 
         days_back (optional): only return emails from the last N days --
         0 for today only, 1 for today and yesterday, etc. This is resolved
@@ -47,6 +48,12 @@ def create_server(client: ZohoClient) -> FastMCP:
         Each result includes a read (bool) field. There is no separate
         "unread" query filter -- fetch results and filter on read=false
         yourself if asked for unread emails.
+
+        Results exclude Sent, Drafts, and Templates by default (mail
+        moved into other folders by your own rules is still included --
+        only those three are dropped). Use an explicit in:Sent (or
+        in:Drafts / in:Templates) qualifier in query to search one of
+        those specifically.
         """
         return await mail_tools.search_emails(
             client, query=query, limit=limit, days_back=days_back

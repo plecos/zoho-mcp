@@ -1,0 +1,24 @@
+{
+  "status_code": 200,
+  "resource_name": "contacts",
+  "contacts": {
+    "created_time": 1657411072313,
+    "updated_time": -1,
+    "is_active": true,
+    "gender": "M",
+    "last_name": "Rivera",
+    "is_writable": true,
+    "contact_id": "44205000000003001",
+    "emails": [
+      {"email_id": "jamie.rivera@example.com", "is_primary": true},
+      {"email_id": "jamie.r.alt@example.com"}
+    ],
+    "contact_type": "1",
+    "primary_email_id": "jamie.rivera@example.com",
+    "own_org": true,
+    "nick_name": "Jamie",
+    "contact_zuid": "709548548",
+    "first_name": "Jamie",
+    "status": -10
+  }
+}

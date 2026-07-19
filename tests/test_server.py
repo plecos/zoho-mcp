@@ -12,17 +12,35 @@ class FakeZohoClient:
         return []
 
 
-async def test_create_server_registers_all_three_tools():
-    server = create_server(FakeZohoClient())
+class FakeContactsClient:
+    async def search_contacts(self, query="", limit=20, status="active"):
+        return [], False
+
+    async def get_contact(self, contact_id, scope):
+        return {}
+
+    async def count_contacts(self):
+        return {"personal": 0, "organization": 0, "total": 0}
+
+
+async def test_create_server_registers_all_six_tools():
+    server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
     tool_names = {tool.name for tool in tools}
 
-    assert tool_names == {"search_emails", "get_email", "list_events"}
+    assert tool_names == {
+        "search_emails",
+        "get_email",
+        "list_events",
+        "search_contacts",
+        "get_contact",
+        "count_contacts",
+    }
 
 
 async def test_registered_tools_are_annotated_read_only():
-    server = create_server(FakeZohoClient())
+    server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
 

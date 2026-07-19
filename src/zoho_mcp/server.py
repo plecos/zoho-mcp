@@ -1,9 +1,9 @@
 """FastMCP app instantiation and tool registration.
 
 No business logic lives here -- ``create_server`` wires the already-tested
-tool wrappers (``tools/mail.py``, ``tools/calendar.py``) to a FastMCP
-instance, and ``main`` builds the real Zoho client from environment/keyring
-config and runs the server over stdio.
+tool wrappers (``tools/mail.py``, ``tools/calendar.py``, ``tools/contacts.py``)
+to a FastMCP instance, and ``main`` builds the real Zoho clients from
+environment/keyring config and runs the server over stdio.
 """
 
 import os
@@ -14,15 +14,17 @@ from mcp.types import ToolAnnotations
 
 from zoho_mcp.config import load_env
 from zoho_mcp.tools import calendar as calendar_tools
+from zoho_mcp.tools import contacts as contacts_tools
 from zoho_mcp.tools import mail as mail_tools
 from zoho_mcp.zoho.auth import ZohoTokenManager, load_refresh_token
 from zoho_mcp.zoho.client import ZohoClient
+from zoho_mcp.zoho.contacts_client import ZohoContactsClient
 
 _READ_ONLY = ToolAnnotations(readOnlyHint=True)
 
 
-def create_server(client: ZohoClient) -> FastMCP:
-    """Build the FastMCP app and register all tools against the given client."""
+def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> FastMCP:
+    """Build the FastMCP app and register all tools against the given clients."""
     mcp = FastMCP("zoho-mcp")
 
     @mcp.tool(annotations=_READ_ONLY)
@@ -78,11 +80,75 @@ def create_server(client: ZohoClient) -> FastMCP:
         """
         return await calendar_tools.list_events(client, start=start, end=end)
 
+    @mcp.tool(annotations=_READ_ONLY)
+    async def search_contacts(
+        query: str = "", limit: int = 20, status: str = "active"
+    ) -> dict:
+        """Search the user's Zoho Contacts.
+
+        query (optional): free-text search -- matches name, email, AND
+        phone number (Zoho's backend searches across all of these, even
+        though only some are shown by default). Leave empty to list
+        contacts without filtering.
+
+        status (optional): "active" (default), "archived", or "inactive"
+        -- which folder to search. Archived and inactive contacts are
+        excluded by default; pass status explicitly only when asked to
+        find an archived or inactive contact specifically.
+
+        Searches both the user's Personal and Organization contacts and
+        merges the results -- these are two separate pools in Zoho, each
+        with their own Archived/Inactive folders.
+
+        Returns {"contacts": [...], "has_more": bool}. Each contact
+        includes a scope field ("personal" or "organization") along with
+        phones, notes, nickname, and birthday when set. Pass scope back
+        into get_contact -- the same id can mean a different, unrelated
+        record depending on scope. If has_more is true, there are more
+        results than limit returned -- raise limit or narrow query, don't
+        assume the count you got back is the full total. For "how many
+        contacts do I have" style questions, use count_contacts instead of
+        paginating and summing.
+        """
+        return await contacts_tools.search_contacts(
+            contacts_client, query=query, limit=limit, status=status
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_contact(contact_id: str, scope: str) -> dict:
+        """Fetch one contact's full details, given an id and scope from
+        search_contacts.
+
+        scope must be "personal" or "organization", taken from that same
+        contact's search_contacts result -- the same contact_id can refer
+        to a different record depending on scope, so it can't be guessed.
+        """
+        return await contacts_tools.get_contact(
+            contacts_client, contact_id=contact_id, scope=scope
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def count_contacts() -> dict:
+        """Return the user's Zoho Contacts counts directly and reliably.
+
+        Returns {"personal": {"contacts": int, "archived": int,
+        "inactive": int}, "organization": {...same shape...}, "total":
+        int}. archived/inactive are broken out per scope rather than
+        hidden -- total only sums the active "contacts" count from each
+        scope. Prefer this over calling search_contacts repeatedly and
+        summing/deduplicating results yourself.
+        """
+        return await contacts_tools.count_contacts(contacts_client)
+
     return mcp
 
 
-def _build_zoho_client_from_env() -> ZohoClient:
-    """Construct a ZohoClient from environment variables and the stored refresh token.
+def _build_zoho_clients_from_env() -> tuple[ZohoClient, ZohoContactsClient]:
+    """Construct the Zoho Mail/Calendar and Contacts clients from env + keyring.
+
+    Both share one token manager and http client -- Zoho's OAuth tokens
+    carry scopes for every product at once, so there's only ever one
+    access/refresh token pair regardless of how many Zoho services we call.
 
     Raises:
         RuntimeError: if no refresh token has been stored yet.
@@ -102,7 +168,7 @@ def _build_zoho_client_from_env() -> ZohoClient:
         refresh_token=refresh_token,
         http_client=http_client,
     )
-    return ZohoClient(
+    client = ZohoClient(
         token_manager=token_manager,
         http_client=http_client,
         account_id=os.environ["ZOHO_ACCOUNT_ID"],
@@ -112,11 +178,15 @@ def _build_zoho_client_from_env() -> ZohoClient:
         .lower()
         == "true",
     )
+    contacts_client = ZohoContactsClient(
+        token_manager=token_manager, http_client=http_client
+    )
+    return client, contacts_client
 
 
 def main() -> None:
-    client = _build_zoho_client_from_env()
-    server = create_server(client)
+    client, contacts_client = _build_zoho_clients_from_env()
+    server = create_server(client, contacts_client)
     server.run(transport="stdio")
 
 

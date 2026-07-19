@@ -1,0 +1,47 @@
+{
+  "status_code": 200,
+  "has_more": false,
+  "resource_name": "contacts",
+  "contacts": [
+    {
+      "created_time": 1657411072313,
+      "updated_time": -1,
+      "is_active": true,
+      "notes": "Met at the Q3 offsite",
+      "birth_month": "10",
+      "last_name": "Rivera",
+      "phones": [
+        {"number": "5551234567", "type": "mobile"}
+      ],
+      "is_writable": true,
+      "contact_id": "44205000000003001",
+      "birth_year": "1975",
+      "emails": [
+        {"email_id": "jamie.rivera@example.com", "is_primary": true},
+        {"email_id": "jamie.r.alt@example.com"}
+      ],
+      "birth_day": "16",
+      "contact_type": "1",
+      "primary_email_id": "jamie.rivera@example.com",
+      "own_org": true,
+      "nick_name": "Jam",
+      "first_name": "Jamie",
+      "status": -10
+    },
+    {
+      "created_time": 1587661497254,
+      "updated_time": -1,
+      "is_active": true,
+      "is_writable": true,
+      "contact_id": "44205000000003121",
+      "emails": [
+        {"email_id": "morgan.lee@example.com", "is_primary": true}
+      ],
+      "contact_type": "1",
+      "primary_email_id": "morgan.lee@example.com",
+      "own_org": false,
+      "first_name": "Morgan Lee",
+      "status": -10
+    }
+  ]
+}

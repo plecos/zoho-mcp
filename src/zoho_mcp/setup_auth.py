@@ -31,6 +31,7 @@ SCOPES = [
     "ZohoMail.folders.READ",  # used at runtime to filter out Sent/Drafts by folder type
     "ZohoCalendar.event.READ",
     "ZohoCalendar.calendar.READ",  # needed once, to look up the calendar's uid
+    "zohocontacts.contactapi.READ",
 ]
 DEFAULT_CALLBACK_PORT = 8765
 

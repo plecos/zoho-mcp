@@ -174,7 +174,7 @@ def normalize_event(raw: dict, mailbox_timezone: str) -> dict:
         raise ZohoAPIError(f"Malformed event from Zoho: {e}") from e
 
 
-async def _zoho_authenticated_get(
+async def zoho_authenticated_get(
     http_client: httpx.AsyncClient,
     url: str,
     access_token: str,
@@ -215,7 +215,7 @@ async def _get_default_mail_account(
             account is flagged as the default.
     """
     token = await token_manager.get_access_token()
-    payload = await _zoho_authenticated_get(
+    payload = await zoho_authenticated_get(
         http_client, f"{ZOHO_MAIL_BASE_URL}/accounts", token
     )
     try:
@@ -280,7 +280,7 @@ async def get_folder_types(
         ZohoAPIError: if the request fails or the response is malformed.
     """
     token = await token_manager.get_access_token()
-    payload = await _zoho_authenticated_get(
+    payload = await zoho_authenticated_get(
         http_client, f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/folders", token
     )
     try:
@@ -299,7 +299,7 @@ async def get_default_calendar_uid(
             calendar is flagged as the default.
     """
     token = await token_manager.get_access_token()
-    payload = await _zoho_authenticated_get(
+    payload = await zoho_authenticated_get(
         http_client, f"{ZOHO_CALENDAR_BASE_URL}/calendars", token
     )
     try:
@@ -336,7 +336,7 @@ class ZohoClient:
 
     async def _get(self, url: str, params: dict | None = None) -> dict:
         token = await self._token_manager.get_access_token()
-        return await _zoho_authenticated_get(self._http_client, url, token, params)
+        return await zoho_authenticated_get(self._http_client, url, token, params)
 
     async def _get_mailbox_timezone(self) -> str:
         """Return the mailbox's timezone, fetched once per client and cached.

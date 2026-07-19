@@ -51,3 +51,26 @@ async def list_events(client: ZohoClient, start: str, end: str) -> list[dict]:
         start=_parse_iso8601_utc(start, field_name="start"),
         end=_parse_iso8601_utc(end, field_name="end"),
     )
+
+
+async def get_event(client: ZohoClient, uid: str) -> dict:
+    """Fetch full details for one event found via list_events.
+
+    Args:
+        client: injected Zoho client.
+        uid: an event's ``id`` from a prior ``list_events`` result.
+
+    Returns:
+        id, title, organizer, full attendee list (list_events can report
+        only the caller's own attendee entry for an occurrence, not every
+        invitee), location, description, and recurrence (an iCal RRULE
+        string, or "" if the event doesn't recur). Deliberately excludes
+        start/end -- use the occurrence's own start/end from list_events,
+        not this call: Zoho's single-event endpoint can return the wrong
+        occurrence's dates for a recurring event.
+
+    Raises:
+        ZohoAPIError: if no event is found for uid, or the Calendar API
+            rejects or fails the request.
+    """
+    return await client.get_event(uid)

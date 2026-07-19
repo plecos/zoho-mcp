@@ -524,6 +524,71 @@ async def test_search_emails_rejects_empty_query_and_no_days_back_without_a_requ
     assert not route.called
 
 
+async def test_get_event_fetches_by_uid_and_normalizes(respx_mock, zoho_client):
+    route = respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-recurring-1"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [
+                    {
+                        "uid": "evt-recurring-1",
+                        "title": "Team Sync",
+                        "organizer": "user@example.com",
+                        "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO",
+                        "location": "https://meet.example.com/abc",
+                        "attendees": [
+                            {"email": "jamie.rivera@example.com", "status": "accepted"},
+                            {"email": "morgan.lee@example.com", "status": "needsaction"},
+                        ],
+                    }
+                ]
+            },
+        )
+    )
+
+    result = await zoho_client.get_event("evt-recurring-1")
+
+    assert route.called
+    assert (
+        route.calls.last.request.headers["Authorization"]
+        == "Zoho-oauthtoken fake-access-token"
+    )
+    assert result["id"] == "evt-recurring-1"
+    assert result["organizer"] == "user@example.com"
+    assert len(result["attendees"]) == 2
+
+
+async def test_get_event_raises_clear_error_when_not_found(respx_mock, zoho_client):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/does-not-exist"
+    ).mock(return_value=httpx.Response(200, json={"events": []}))
+
+    with pytest.raises(ZohoAPIError, match="does-not-exist"):
+        await zoho_client.get_event("does-not-exist")
+
+
+async def test_get_event_raises_clear_error_when_events_key_absent(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={}))
+
+    with pytest.raises(ZohoAPIError, match="evt-1"):
+        await zoho_client.get_event("evt-1")
+
+
+async def test_get_event_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.get_event("evt-1")
+
+
 async def test_list_events_returns_empty_list_when_events_key_absent(
     respx_mock, zoho_client
 ):

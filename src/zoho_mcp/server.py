@@ -81,6 +81,22 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         return await calendar_tools.list_events(client, start=start, end=end)
 
     @mcp.tool(annotations=_READ_ONLY)
+    async def get_event(uid: str) -> dict:
+        """Fetch full details for one event, given an id from list_events.
+
+        Use this when you need an event's organizer, full attendee list
+        (list_events can show only your own attendee entry, not every
+        invitee), location, description, or recurrence rule (an iCal
+        RRULE string, e.g. "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO", or "" if the
+        event doesn't recur).
+
+        Does NOT return start/end -- keep using the occurrence's own
+        start/end from list_events for timing; this call's own date
+        fields for a recurring event are not reliable.
+        """
+        return await calendar_tools.get_event(client, uid=uid)
+
+    @mcp.tool(annotations=_READ_ONLY)
     async def search_contacts(
         query: str = "", limit: int = 20, status: str = "active"
     ) -> dict:

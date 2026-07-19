@@ -8,6 +8,7 @@ from zoho_mcp.zoho.client import (
     normalize_email_content,
     normalize_email_summary,
     normalize_event,
+    normalize_event_detail,
 )
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -197,3 +198,67 @@ def test_normalize_event_raises_clear_error_on_malformed_attendee():
 
     with pytest.raises(ZohoAPIError, match="event"):
         normalize_event(raw, MAILBOX_TZ)
+
+
+def test_normalize_event_detail_maps_core_fields():
+    raw = load_fixture("calendar_event_detail_response.json")["events"][0]
+
+    result = normalize_event_detail(raw)
+
+    assert result["id"] == "evt-recurring-1"
+    assert result["title"] == "Team Sync"
+    assert result["organizer"] == "user@example.com"
+    assert result["location"] == "https://meet.example.com/abc"
+    assert result["recurrence"] == "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO"
+
+
+def test_normalize_event_detail_extracts_full_attendee_list():
+    # Confirmed live: list_events' per-occurrence attendees can show only
+    # the caller's own entry, while the single-event endpoint returns
+    # every invitee -- this is the whole reason get_event exists.
+    raw = load_fixture("calendar_event_detail_response.json")["events"][0]
+
+    result = normalize_event_detail(raw)
+
+    assert result["attendees"] == [
+        {"email": "jamie.rivera@example.com", "status": "accepted"},
+        {"email": "morgan.lee@example.com", "status": "needsaction"},
+    ]
+
+
+def test_normalize_event_detail_treats_null_description_as_empty():
+    # Zoho sends an explicit null (not an absent key) for an unset
+    # description -- confirmed against the live API. raw.get(key, "")
+    # would not catch this since the key is present.
+    raw = load_fixture("calendar_event_detail_response.json")["events"][0]
+
+    result = normalize_event_detail(raw)
+
+    assert result["description"] == ""
+
+
+def test_normalize_event_detail_defaults_missing_optional_fields():
+    raw = {"uid": "evt-1", "title": "Solo block", "organizer": "user@example.com"}
+
+    result = normalize_event_detail(raw)
+
+    assert result["location"] == ""
+    assert result["description"] == ""
+    assert result["recurrence"] == ""
+    assert result["attendees"] == []
+
+
+def test_normalize_event_detail_raises_clear_error_on_missing_field():
+    raw = load_fixture("calendar_event_detail_response.json")["events"][0]
+    del raw["organizer"]
+
+    with pytest.raises(ZohoAPIError, match="event"):
+        normalize_event_detail(raw)
+
+
+def test_normalize_event_detail_raises_clear_error_on_malformed_attendee():
+    raw = load_fixture("calendar_event_detail_response.json")["events"][0]
+    raw["attendees"] = [{"email": "jamie.rivera@example.com"}]  # missing "status"
+
+    with pytest.raises(ZohoAPIError, match="event"):
+        normalize_event_detail(raw)

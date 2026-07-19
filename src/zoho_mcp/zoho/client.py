@@ -174,6 +174,41 @@ def normalize_event(raw: dict, mailbox_timezone: str) -> dict:
         raise ZohoAPIError(f"Malformed event from Zoho: {e}") from e
 
 
+def normalize_event_detail(raw: dict) -> dict:
+    """Normalize one event from Zoho Calendar's single-event ``events[0]``.
+
+    Deliberately excludes ``start``/``end`` -- confirmed live that Zoho's
+    single-event endpoint can return the wrong occurrence's dates for a
+    recurring event (for one all-day yearly event, requesting a specific
+    ``recurrenceid`` returned a start date one day later, and end date
+    padded to an extra day of duration versus that same occurrence in
+    Events List). Get the correct start/end for a specific occurrence from
+    ``list_events`` instead; use this only for detail it doesn't include
+    -- full attendee list (Events List can report only the caller's own
+    attendee entry for an occurrence, not every invitee), organizer,
+    location, description, and recurrence rule.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``uid``/``title``/``organizer``,
+            or an entry in ``attendees`` is missing ``email``/``status``.
+    """
+    try:
+        return {
+            "id": raw["uid"],
+            "title": raw["title"],
+            "organizer": raw["organizer"],
+            "location": raw.get("location") or "",
+            "description": raw.get("description") or "",
+            "recurrence": raw.get("rrule") or "",
+            "attendees": [
+                {"email": a["email"], "status": a["status"]}
+                for a in raw.get("attendees") or []
+            ],
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed event detail from Zoho: {e}") from e
+
+
 async def zoho_authenticated_get(
     http_client: httpx.AsyncClient,
     url: str,
@@ -481,3 +516,22 @@ class ZohoClient:
             normalize_event(item, mailbox_timezone)
             for item in payload.get("events", [])
         ]
+
+    async def get_event(self, uid: str) -> dict:
+        """Fetch full details for one event by uid.
+
+        See ``normalize_event_detail`` for why this deliberately omits
+        start/end -- get the occurrence's actual date/time from
+        ``list_events`` instead.
+
+        Raises:
+            ZohoAPIError: if no event is found for ``uid``, or the
+                Calendar API rejects or fails the request.
+        """
+        payload = await self._get(
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{self._calendar_uid}/events/{uid}"
+        )
+        events = payload.get("events", [])
+        if not events:
+            raise ZohoAPIError(f"No event found for uid={uid!r}")
+        return normalize_event_detail(events[0])

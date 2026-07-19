@@ -2,17 +2,23 @@ from datetime import datetime, timezone
 
 import pytest
 
-from zoho_mcp.tools.calendar import list_events
+from zoho_mcp.tools.calendar import get_event, list_events
 
 
 class FakeZohoClient:
     def __init__(self):
         self.list_events_calls = []
         self.list_events_result = [{"id": "evt-1", "title": "Sync"}]
+        self.get_event_calls = []
+        self.get_event_result = {"id": "evt-1", "title": "Sync", "attendees": []}
 
     async def list_events(self, start, end):
         self.list_events_calls.append({"start": start, "end": end})
         return self.list_events_result
+
+    async def get_event(self, uid):
+        self.get_event_calls.append(uid)
+        return self.get_event_result
 
 
 async def test_list_events_parses_iso8601_utc_strings_and_delegates():
@@ -64,3 +70,12 @@ async def test_list_events_rejects_naive_datetime_without_utc_offset():
         )
 
     assert client.list_events_calls == []
+
+
+async def test_get_event_delegates_to_client_with_uid():
+    client = FakeZohoClient()
+
+    result = await get_event(client, uid="evt-1")
+
+    assert client.get_event_calls == ["evt-1"]
+    assert result == client.get_event_result

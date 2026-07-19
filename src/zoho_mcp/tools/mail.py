@@ -24,7 +24,9 @@ async def search_emails(
             only), resolved using the mailbox's own timezone.
 
     Returns:
-        Compact email summaries: id, from, subject, date, snippet, folder_id.
+        Compact email summaries: id, from, subject, date, snippet,
+        folder_id, read (bool). ``date`` is in the mailbox's own local
+        timezone, not UTC -- see ``ZohoClient._get_mailbox_timezone``.
 
     Raises:
         ZohoAPIError: if query and days_back are both empty, days_back is

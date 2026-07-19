@@ -43,6 +43,10 @@ def create_server(client: ZohoClient) -> FastMCP:
         using the mailbox's real timezone; do not try to compute or pass an
         explicit date yourself, since you don't know the mailbox's
         timezone and getting it wrong silently returns the wrong day.
+
+        Each result includes a read (bool) field. There is no separate
+        "unread" query filter -- fetch results and filter on read=false
+        yourself if asked for unread emails.
         """
         return await mail_tools.search_emails(
             client, query=query, limit=limit, days_back=days_back
@@ -57,7 +61,14 @@ def create_server(client: ZohoClient) -> FastMCP:
 
     @mcp.tool(annotations=_READ_ONLY)
     async def list_events(start: str, end: str) -> list[dict]:
-        """List Zoho Calendar events between two ISO 8601 UTC timestamps (max 31 days)."""
+        """List Zoho Calendar events in a time range (max 31 days).
+
+        start/end: ISO 8601 datetime strings with an explicit UTC offset
+        (any offset works, e.g. "+00:00" or "-07:00").
+
+        Returned event times are already in the mailbox's own local
+        timezone, not UTC -- do not convert them yourself.
+        """
         return await calendar_tools.list_events(client, start=start, end=end)
 
     return mcp

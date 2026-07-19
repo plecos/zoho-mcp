@@ -56,6 +56,12 @@ Before writing a looked-up value to `.env`/config, ask: is this a **stable ident
 
 This was caught before shipping: the initial `days_back` implementation stored the mailbox's timezone in `ZOHO_MAILBOX_TIMEZONE`, looked up once during setup. That goes stale the moment the user changes their Zoho timezone (e.g. after moving), and nothing would signal the drift -- it would just silently misresolve "today" again, the exact bug this feature exists to fix. The fix: `ZohoClient` fetches the timezone live and caches it in memory for the life of the client instance, never persisting it to disk. Staleness is bounded to "since this process last started," not "since setup was last run," at the cost of one extra API call per client instance rather than per call.
 
+## Don't delegate correctness to the caller
+
+`search_emails`/`list_events` originally returned all dates/times in UTC, on the reasoning that UTC is unambiguous and the calling LLM could convert for display. In practice this was unreliable: one chat session correctly converted a UTC timestamp to Pacific time for display; a later session, with the same server and the same data, displayed the raw UTC digits mislabeled as local time with no conversion at all. Same tool, same correct data, inconsistent client behavior -- because the conversion was never actually verified by anyone, including the assistant reporting the result, until the user checked it against the real clock.
+
+If a piece of math (timezone conversion, date-boundary resolution, unit conversion) can be done once, correctly, in tested server code, do it there -- don't return an ambiguous-to-convert value and hope every calling LLM converts it the same correct way every time. `ZohoClient` now returns every date/time already expressed in the mailbox's own local offset (fetched live, per the section above), so there is no conversion left for any caller to get right or wrong.
+
 ## Git workflow
 
 Never commit directly to `main`. Always work on a feature branch and commit there, even for "just scaffolding" changes. `main` will eventually be a protected branch; working this way from the start means there's no habit to break later. Before any commit, scan the actual file list being staged (`git status`, `git add -A -n`) for anything that shouldn't ship: real credentials, personal/business email addresses or other identifying data in what's meant to be synthetic test fixture data, and `.gitignore` gaps (e.g. a broad pattern like `.env.*` accidentally catching `.env.example`, which should be tracked).

@@ -39,7 +39,9 @@ async def list_events(client: ZohoClient, start: str, end: str) -> list[dict]:
         end: ISO 8601 datetime string with UTC offset, range end.
 
     Returns:
-        Normalized events: id, title, start, end, attendees.
+        Normalized events: id, title, start, end, attendees. ``start``/
+        ``end`` are in the mailbox's own local timezone, not UTC -- see
+        ``ZohoClient._get_mailbox_timezone``.
 
     Raises:
         ValueError: if start/end aren't valid ISO 8601 strings with a UTC offset.

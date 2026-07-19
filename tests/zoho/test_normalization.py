@@ -11,6 +11,7 @@ from zoho_mcp.zoho.client import (
 )
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
+MAILBOX_TZ = "America/Los_Angeles"
 
 
 def load_fixture(name: str) -> dict:
@@ -20,7 +21,7 @@ def load_fixture(name: str) -> dict:
 def test_normalize_email_summary_maps_core_fields():
     raw = load_fixture("mail_list_response.json")["data"][0]
 
-    result = normalize_email_summary(raw)
+    result = normalize_email_summary(raw, MAILBOX_TZ)
 
     assert result["id"] == "1730217600123456789"
     assert result["from"] == "jamie.rivera@example.com"
@@ -29,12 +30,46 @@ def test_normalize_email_summary_maps_core_fields():
     assert result["folder_id"] == "1122334455"
 
 
-def test_normalize_email_summary_converts_epoch_date_to_iso8601():
+def test_normalize_email_summary_marks_read_when_status_is_1():
+    raw = load_fixture("mail_list_response.json")["data"][0]
+    raw["status"] = "1"
+
+    result = normalize_email_summary(raw, MAILBOX_TZ)
+
+    assert result["read"] is True
+
+
+def test_normalize_email_summary_marks_unread_when_status_is_0():
+    raw = load_fixture("mail_list_response.json")["data"][0]
+    raw["status"] = "0"
+
+    result = normalize_email_summary(raw, MAILBOX_TZ)
+
+    assert result["read"] is False
+
+
+def test_normalize_email_summary_treats_unrecognized_status_as_unread():
+    # Only "0" (confirmed on a freshly-sent, unopened test email) and "1"
+    # (confirmed on already-read mail) are verified. Default unknown
+    # values to unread -- the safer failure mode is "flagged as unread
+    # when it's actually read" over silently hiding a real unread email.
+    raw = load_fixture("mail_list_response.json")["data"][0]
+    raw["status"] = "3"
+
+    result = normalize_email_summary(raw, MAILBOX_TZ)
+
+    assert result["read"] is False
+
+
+def test_normalize_email_summary_converts_epoch_date_to_mailbox_timezone():
     raw = load_fixture("mail_list_response.json")["data"][0]
 
-    result = normalize_email_summary(raw)
+    result = normalize_email_summary(raw, MAILBOX_TZ)
 
-    assert result["date"] == "2024-10-29T16:00:00+00:00"
+    # Returned in the mailbox's own offset, not UTC -- so an LLM client
+    # never has to convert (or forget to convert) a timezone it doesn't
+    # actually know.
+    assert result["date"] == "2024-10-29T09:00:00-07:00"
 
 
 def test_normalize_email_summary_raises_clear_error_on_missing_field():
@@ -42,7 +77,7 @@ def test_normalize_email_summary_raises_clear_error_on_missing_field():
     del raw["subject"]
 
     with pytest.raises(ZohoAPIError, match="email summary"):
-        normalize_email_summary(raw)
+        normalize_email_summary(raw, MAILBOX_TZ)
 
 
 def test_normalize_email_summary_raises_clear_error_on_non_numeric_date():
@@ -50,7 +85,7 @@ def test_normalize_email_summary_raises_clear_error_on_non_numeric_date():
     raw["receivedTime"] = "not-a-number"
 
     with pytest.raises(ZohoAPIError, match="email summary"):
-        normalize_email_summary(raw)
+        normalize_email_summary(raw, MAILBOX_TZ)
 
 
 def test_normalize_email_content_strips_html_to_plain_text():
@@ -108,18 +143,20 @@ def test_normalize_email_content_preserves_zwj_emoji_sequences_even_when_strippi
 def test_normalize_event_maps_core_fields_and_converts_times():
     raw = load_fixture("calendar_events_response.json")["events"][0]
 
-    result = normalize_event(raw)
+    result = normalize_event(raw, MAILBOX_TZ)
 
     assert result["id"] == "evt-998877"
     assert result["title"] == "Q3 Roadmap Sync"
-    assert result["start"] == "2024-10-29T16:00:00+00:00"
-    assert result["end"] == "2024-10-29T17:00:00+00:00"
+    # Source is already -0700 (Pacific Daylight Time on this date), so
+    # converting to America/Los_Angeles round-trips to the same wall time.
+    assert result["start"] == "2024-10-29T09:00:00-07:00"
+    assert result["end"] == "2024-10-29T10:00:00-07:00"
 
 
 def test_normalize_event_extracts_attendees_with_status():
     raw = load_fixture("calendar_events_response.json")["events"][0]
 
-    result = normalize_event(raw)
+    result = normalize_event(raw, MAILBOX_TZ)
 
     assert result["attendees"] == [
         {"email": "jamie.rivera@example.com", "status": "accepted"},
@@ -132,7 +169,7 @@ def test_normalize_event_raises_clear_error_on_missing_field():
     del raw["title"]
 
     with pytest.raises(ZohoAPIError, match="event"):
-        normalize_event(raw)
+        normalize_event(raw, MAILBOX_TZ)
 
 
 def test_normalize_event_raises_clear_error_on_malformed_time_string():
@@ -140,13 +177,13 @@ def test_normalize_event_raises_clear_error_on_malformed_time_string():
     raw["dateandtime"]["start"] = "not-a-timestamp"
 
     with pytest.raises(ZohoAPIError, match="event"):
-        normalize_event(raw)
+        normalize_event(raw, MAILBOX_TZ)
 
 
 def test_normalize_event_handles_all_day_date_only_format():
     raw = load_fixture("calendar_events_response.json")["events"][1]
 
-    result = normalize_event(raw)
+    result = normalize_event(raw, MAILBOX_TZ)
 
     assert result["id"] == "evt-allday-1"
     assert result["title"] == "Company Holiday"
@@ -159,4 +196,4 @@ def test_normalize_event_raises_clear_error_on_malformed_attendee():
     raw["attendees"] = [{"email": "jamie.rivera@example.com"}]  # missing "status"
 
     with pytest.raises(ZohoAPIError, match="event"):
-        normalize_event(raw)
+        normalize_event(raw, MAILBOX_TZ)

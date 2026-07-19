@@ -6,7 +6,7 @@ MCP tools happens here and only here.
 """
 
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -39,23 +39,31 @@ class ZohoAPIError(Exception):
     """Raised when a Zoho Mail/Calendar API call fails or is rejected."""
 
 
-def _epoch_ms_to_iso8601(epoch_ms: str) -> str:
-    """Convert a Zoho epoch-millisecond timestamp string to ISO 8601 UTC."""
-    return datetime.fromtimestamp(int(epoch_ms) / 1000, tz=timezone.utc).isoformat()
+def _epoch_ms_to_iso8601(epoch_ms: str, tz_name: str) -> str:
+    """Convert a Zoho epoch-millisecond timestamp string to ISO 8601 in ``tz_name``.
+
+    Returned in the mailbox's own local offset, not UTC -- deliberately, so
+    an LLM client never has to convert (or forget to convert) a timezone it
+    doesn't know, which is exactly what produced a wrong displayed time
+    despite the underlying UTC value always having been correct.
+    """
+    return datetime.fromtimestamp(int(epoch_ms) / 1000, tz=ZoneInfo(tz_name)).isoformat()
 
 
-def _zoho_event_time_to_iso8601(value: str) -> str:
-    """Convert a Zoho Calendar event timestamp to ISO 8601.
+def _zoho_event_time_to_iso8601(value: str, tz_name: str) -> str:
+    """Convert a Zoho Calendar event timestamp to ISO 8601 in ``tz_name``.
 
     Zoho returns two real shapes here (not the single documented one):
-    a date-only ``yyyyMMdd`` for all-day events, or a full timestamp with
-    either a ``Z`` or a numeric UTC offset (``yyyyMMdd'T'HHmmss(Z|+/-HHMM)``).
+    a date-only ``yyyyMMdd`` for all-day events (no time/timezone to
+    convert), or a full timestamp with either a ``Z`` or a numeric UTC
+    offset (``yyyyMMdd'T'HHmmss(Z|+/-HHMM)``), converted to the mailbox's
+    local offset for the same reason as ``_epoch_ms_to_iso8601``.
     """
     if "T" not in value:
         return datetime.strptime(value, "%Y%m%d").date().isoformat()
     return (
         datetime.strptime(value, "%Y%m%dT%H%M%S%z")
-        .astimezone(timezone.utc)
+        .astimezone(ZoneInfo(tz_name))
         .isoformat()
     )
 
@@ -73,10 +81,11 @@ def _today_in_timezone(tz_name: str) -> date:
     return datetime.now(ZoneInfo(tz_name)).date()
 
 
-def normalize_email_summary(raw: dict) -> dict:
+def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
     """Normalize one entry from Zoho Mail's List Emails ``data`` array.
 
     Returns the compact shape the LLM sees: id, from, subject, date, snippet.
+    ``date`` is in ``mailbox_timezone``, not UTC -- see ``_epoch_ms_to_iso8601``.
 
     Raises:
         ZohoAPIError: if ``raw`` is missing an expected field or a field has
@@ -91,9 +100,13 @@ def normalize_email_summary(raw: dict) -> dict:
             # is not reliably GMT -- observed consistently off by exactly the
             # account's own UTC offset across unrelated senders. receivedTime
             # is Zoho's own authoritative server-side receipt timestamp.
-            "date": _epoch_ms_to_iso8601(raw["receivedTime"]),
+            "date": _epoch_ms_to_iso8601(raw["receivedTime"], mailbox_timezone),
             "snippet": raw["summary"],
             "folder_id": raw["folderId"],
+            # Confirmed empirically (a freshly-sent, unopened email showed
+            # status="0"; already-read mail showed "1"); any other/unknown
+            # value defaults to unread, the safer failure mode.
+            "read": raw["status"] == "1",
         }
     except (KeyError, TypeError, ValueError) as e:
         raise ZohoAPIError(f"Malformed email summary from Zoho: {e}") from e
@@ -129,8 +142,11 @@ def normalize_email_content(raw: dict, *, strip_invisible_chars: bool = False) -
         raise ZohoAPIError(f"Malformed email content from Zoho: {e}") from e
 
 
-def normalize_event(raw: dict) -> dict:
+def normalize_event(raw: dict, mailbox_timezone: str) -> dict:
     """Normalize one entry from Zoho Calendar's Events List ``events`` array.
+
+    ``start``/``end`` are in ``mailbox_timezone``, not UTC -- see
+    ``_zoho_event_time_to_iso8601``.
 
     Raises:
         ZohoAPIError: if ``raw`` is missing an expected field or a field has
@@ -141,8 +157,8 @@ def normalize_event(raw: dict) -> dict:
         return {
             "id": raw["uid"],
             "title": raw["title"],
-            "start": _zoho_event_time_to_iso8601(dateandtime["start"]),
-            "end": _zoho_event_time_to_iso8601(dateandtime["end"]),
+            "start": _zoho_event_time_to_iso8601(dateandtime["start"], mailbox_timezone),
+            "end": _zoho_event_time_to_iso8601(dateandtime["end"], mailbox_timezone),
             "attendees": [
                 {"email": a["email"], "status": a["status"]}
                 for a in raw.get("attendees", [])
@@ -224,12 +240,13 @@ async def get_primary_account_id(
 async def get_mailbox_timezone(
     token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
 ) -> str:
-    """Look up the user's mailbox timezone (for the ``ZOHO_MAILBOX_TIMEZONE`` setting).
+    """Look up the user's mailbox timezone.
 
-    Used to correctly resolve "today" for ``search_emails(days_back=...)`` --
-    Zoho returns email dates in UTC, but day boundaries (and Zoho's own
-    ``fromDate`` search qualifier) are meaningful in the mailbox's own
-    timezone, not UTC.
+    Used by ``ZohoClient`` for two things: resolving "today" for
+    ``search_emails(days_back=...)``, and returning every normalized
+    date/time already converted to this timezone instead of UTC, so an LLM
+    client is never responsible for timezone conversion it might skip or
+    get wrong.
 
     Raises:
         ZohoAPIError: if the request fails, the response is malformed, or no
@@ -330,26 +347,33 @@ class ZohoClient:
                 f"limit must be between {MIN_SEARCH_LIMIT} and "
                 f"{MAX_SEARCH_LIMIT} (got {limit})"
             )
-
-        search_key = query
-        if days_back is not None:
-            if days_back < 0:
-                raise ZohoAPIError(f"days_back must be >= 0 (got {days_back})")
-            mailbox_timezone = await self._get_mailbox_timezone()
-            cutoff = _today_in_timezone(mailbox_timezone) - timedelta(days=days_back)
-            date_filter = f"fromDate:{cutoff.strftime('%d-%b-%Y')}"
-            search_key = f"{search_key}::{date_filter}" if search_key else date_filter
-
-        if not search_key:
+        if days_back is not None and days_back < 0:
+            raise ZohoAPIError(f"days_back must be >= 0 (got {days_back})")
+        if not query and days_back is None:
             raise ZohoAPIError(
                 "search_emails requires a query, a days_back filter, or both"
             )
+
+        # Always needed now, not just for days_back: normalized dates are
+        # returned in the mailbox's own local offset, not UTC (see
+        # _epoch_ms_to_iso8601), so the LLM never has to convert (or forget
+        # to convert) a timezone it doesn't actually know.
+        mailbox_timezone = await self._get_mailbox_timezone()
+
+        search_key = query
+        if days_back is not None:
+            cutoff = _today_in_timezone(mailbox_timezone) - timedelta(days=days_back)
+            date_filter = f"fromDate:{cutoff.strftime('%d-%b-%Y')}"
+            search_key = f"{search_key}::{date_filter}" if search_key else date_filter
 
         payload = await self._get(
             f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/search",
             params={"searchKey": search_key, "limit": limit},
         )
-        return [normalize_email_summary(item) for item in payload.get("data", [])]
+        return [
+            normalize_email_summary(item, mailbox_timezone)
+            for item in payload.get("data", [])
+        ]
 
     async def get_email(self, message_id: str, folder_id: str) -> dict:
         """Fetch the full plain-text content of one email.
@@ -388,8 +412,14 @@ class ZohoClient:
                 "end": end.strftime(ZOHO_EVENT_RANGE_REQUEST_FORMAT),
             }
         )
+        # See search_emails: returned in the mailbox's own local offset, not
+        # UTC, so the LLM never has to convert a timezone it doesn't know.
+        mailbox_timezone = await self._get_mailbox_timezone()
         payload = await self._get(
             f"{ZOHO_CALENDAR_BASE_URL}/calendars/{self._calendar_uid}/events",
             params={"range": range_param},
         )
-        return [normalize_event(item) for item in payload.get("events", [])]
+        return [
+            normalize_event(item, mailbox_timezone)
+            for item in payload.get("events", [])
+        ]

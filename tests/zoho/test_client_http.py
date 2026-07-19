@@ -53,6 +53,7 @@ def mock_pacific_accounts_endpoint(respx_mock):
 async def test_search_emails_calls_search_endpoint_with_auth_header(
     respx_mock, zoho_client
 ):
+    mock_pacific_accounts_endpoint(respx_mock)
     route = respx_mock.get(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
     ).mock(
@@ -69,6 +70,7 @@ async def test_search_emails_calls_search_endpoint_with_auth_header(
                         "messageId": "1730217600123456789",
                         "folderId": "1122334455",
                         "fromAddress": "jamie.rivera@example.com",
+                        "status": "0",
                     }
                 ],
             },
@@ -87,9 +89,11 @@ async def test_search_emails_calls_search_endpoint_with_auth_header(
             "id": "1730217600123456789",
             "from": "jamie.rivera@example.com",
             "subject": "Q3 Roadmap Sync",
-            "date": "2024-10-29T16:00:00+00:00",
+            # Mailbox's own offset, not UTC -- see _epoch_ms_to_iso8601.
+            "date": "2024-10-29T09:00:00-07:00",
             "snippet": "Let's sync on the Q3 roadmap tomorrow morning.",
             "folder_id": "1122334455",
+            "read": False,
         }
     ]
 
@@ -160,6 +164,7 @@ async def test_get_email_passes_strip_invisible_chars_flag_through(
 
 
 async def test_list_events_sends_json_encoded_range_param(respx_mock, zoho_client):
+    mock_pacific_accounts_endpoint(respx_mock)
     route = respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     ).mock(
@@ -187,13 +192,16 @@ async def test_list_events_sends_json_encoded_range_param(respx_mock, zoho_clien
 
     assert route.called
     sent_range = json.loads(route.calls.last.request.url.params["range"])
+    # The outgoing request range still uses UTC 'Z' -- that's the wire
+    # format Zoho's API expects, independent of how results are displayed.
     assert sent_range == {"start": "20241029T160000Z", "end": "20241029T170000Z"}
     assert results == [
         {
             "id": "evt-998877",
             "title": "Q3 Roadmap Sync",
-            "start": "2024-10-29T16:00:00+00:00",
-            "end": "2024-10-29T17:00:00+00:00",
+            # Mailbox's own offset, not UTC -- see _zoho_event_time_to_iso8601.
+            "start": "2024-10-29T09:00:00-07:00",
+            "end": "2024-10-29T10:00:00-07:00",
             "attendees": [],
         }
     ]
@@ -246,6 +254,7 @@ async def test_list_events_rejects_end_equal_to_start_without_a_request(
 async def test_search_emails_wraps_http_errors_as_zoho_api_error(
     respx_mock, zoho_client
 ):
+    mock_pacific_accounts_endpoint(respx_mock)
     respx_mock.get(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
     ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
@@ -272,6 +281,7 @@ async def test_search_emails_rejects_out_of_range_limit_without_a_request(
 async def test_search_emails_accepts_boundary_limit_values(
     respx_mock, zoho_client, edge_limit
 ):
+    mock_pacific_accounts_endpoint(respx_mock)
     route = respx_mock.get(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
     ).mock(return_value=httpx.Response(200, json={"data": []}))
@@ -284,6 +294,7 @@ async def test_search_emails_accepts_boundary_limit_values(
 async def test_search_emails_returns_empty_list_when_data_key_absent(
     respx_mock, zoho_client
 ):
+    mock_pacific_accounts_endpoint(respx_mock)
     respx_mock.get(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
     ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
@@ -348,9 +359,12 @@ async def test_search_emails_caches_mailbox_timezone_across_calls(
     assert accounts_route.call_count == 1
 
 
-async def test_search_emails_does_not_look_up_timezone_without_days_back(
+async def test_search_emails_looks_up_timezone_even_without_days_back(
     respx_mock, zoho_client
 ):
+    # Results are normalized to the mailbox's local offset unconditionally
+    # now (not just for days_back), since that's what fixed the LLM
+    # displaying a raw UTC hour mislabeled as local time.
     accounts_route = mock_pacific_accounts_endpoint(respx_mock)
     respx_mock.get(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
@@ -358,7 +372,7 @@ async def test_search_emails_does_not_look_up_timezone_without_days_back(
 
     await zoho_client.search_emails(query="roadmap")
 
-    assert accounts_route.call_count == 0
+    assert accounts_route.call_count == 1
 
 
 async def test_search_emails_rejects_negative_days_back_without_a_request(
@@ -390,6 +404,7 @@ async def test_search_emails_rejects_empty_query_and_no_days_back_without_a_requ
 async def test_list_events_returns_empty_list_when_events_key_absent(
     respx_mock, zoho_client
 ):
+    mock_pacific_accounts_endpoint(respx_mock)
     respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     ).mock(return_value=httpx.Response(200, json={}))

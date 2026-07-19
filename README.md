@@ -6,7 +6,7 @@ A vendor-agnostic MCP (Model Context Protocol) server that exposes Zoho Mail and
 
 Phase 1: personal prototype (local stdio transport, single-user Zoho OAuth, read-only tools).
 
-Tools implemented: `search_emails` (optionally filtered by `days_back`, resolved via a live, per-process-cached lookup of the mailbox's own timezone -- never assumed or stored statically, since that setting can change), `get_email`, `list_events`.
+Tools implemented: `search_emails` (optionally filtered by `days_back`, resolved via a live, per-process-cached lookup of the mailbox's own timezone -- never assumed or stored statically, since that setting can change; each result includes a `read` bool, confirmed against Zoho's `status` field empirically rather than from docs), `get_email`, `list_events`.
 
 ## Setup
 

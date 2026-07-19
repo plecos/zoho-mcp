@@ -33,6 +33,7 @@ SCOPES = [
     "ZohoCalendar.calendar.READ",  # needed once, to look up the calendar's uid
     "zohocontacts.contactapi.READ",
     "ZohoMail.tasks.READ",
+    "ZohoMail.notes.READ",
 ]
 DEFAULT_CALLBACK_PORT = 8765
 

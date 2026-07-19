@@ -2,7 +2,7 @@
 
 No business logic lives here -- ``create_server`` wires the already-tested
 tool wrappers (``tools/mail.py``, ``tools/calendar.py``, ``tools/tasks.py``,
-``tools/contacts.py``)
+``tools/notes.py``, ``tools/contacts.py``)
 to a FastMCP instance, and ``main`` builds the real Zoho clients from
 environment/keyring config and runs the server over stdio.
 """
@@ -17,6 +17,7 @@ from zoho_mcp.config import load_env
 from zoho_mcp.tools import calendar as calendar_tools
 from zoho_mcp.tools import contacts as contacts_tools
 from zoho_mcp.tools import mail as mail_tools
+from zoho_mcp.tools import notes as notes_tools
 from zoho_mcp.tools import tasks as tasks_tools
 from zoho_mcp.zoho.auth import ZohoTokenManager, load_refresh_token
 from zoho_mcp.zoho.client import ZohoClient
@@ -121,6 +122,25 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
     async def get_task(task_id: str) -> dict:
         """Fetch one task's full details, given an id from list_tasks."""
         return await tasks_tools.get_task(client, task_id=task_id)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_notes(limit: int = 20, after: int = 0) -> list[dict]:
+        """List the user's personal Zoho Mail notes.
+
+        limit (optional): maximum number of notes to return.
+        after (optional): how many notes to skip -- use for pagination.
+
+        Each note has id, title, content, book, owner, is_favorite,
+        color, created_at, modified_at. There is no has_more signal for
+        this endpoint -- getting back fewer than limit results is the
+        only reliable sign you've reached the end.
+        """
+        return await notes_tools.list_notes(client, limit=limit, after=after)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_note(note_id: str) -> dict:
+        """Fetch one note's full details, given an id from list_notes."""
+        return await notes_tools.get_note(client, note_id=note_id)
 
     @mcp.tool(annotations=_READ_ONLY)
     async def search_contacts(

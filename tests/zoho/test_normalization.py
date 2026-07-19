@@ -9,6 +9,7 @@ from zoho_mcp.zoho.client import (
     normalize_email_summary,
     normalize_event,
     normalize_event_detail,
+    normalize_note,
     normalize_task,
 )
 
@@ -327,3 +328,59 @@ def test_normalize_task_raises_clear_error_on_missing_field():
 
     with pytest.raises(ZohoAPIError, match="task"):
         normalize_task(raw)
+
+
+def test_normalize_note_maps_core_fields():
+    raw = load_fixture("notes_list_response.json")["data"]["list"][0]
+
+    result = normalize_note(raw, MAILBOX_TZ)
+
+    assert result["id"] == "1730217600000154800"
+    assert result["title"] == "Dinner party ideas"
+    assert result["content"] == "Bring wine and cheese board"
+    assert result["book"] == "General"
+    assert result["owner"] == "Jamie Rivera"
+    assert result["is_favorite"] is True
+    assert result["color"] == "#B3D9E6"
+
+
+def test_normalize_note_converts_epoch_times_to_mailbox_timezone():
+    raw = load_fixture("notes_list_response.json")["data"]["list"][0]
+
+    result = normalize_note(raw, MAILBOX_TZ)
+
+    assert result["created_at"] == "2024-10-29T09:00:00-07:00"
+    assert result["modified_at"] == "2024-10-29T09:00:00-07:00"
+
+
+def test_normalize_note_defaults_missing_optional_fields():
+    raw = {
+        "entityId": "1",
+        "title": "Untitled",
+        "createdTime": "1730217600000",
+        "modifiedTime": "1730217600000",
+    }
+
+    result = normalize_note(raw, MAILBOX_TZ)
+
+    assert result["content"] == ""
+    assert result["book"] == ""
+    assert result["owner"] == ""
+    assert result["is_favorite"] is False
+    assert result["color"] == ""
+
+
+def test_normalize_note_raises_clear_error_on_missing_field():
+    raw = load_fixture("notes_list_response.json")["data"]["list"][0]
+    del raw["entityId"]
+
+    with pytest.raises(ZohoAPIError, match="note"):
+        normalize_note(raw, MAILBOX_TZ)
+
+
+def test_normalize_note_raises_clear_error_on_non_numeric_time():
+    raw = load_fixture("notes_list_response.json")["data"]["list"][0]
+    raw["createdTime"] = "not-a-number"
+
+    with pytest.raises(ZohoAPIError, match="note"):
+        normalize_note(raw, MAILBOX_TZ)

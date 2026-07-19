@@ -18,11 +18,13 @@ ZOHO_EVENT_RANGE_REQUEST_FORMAT = "%Y%m%dT%H%M%SZ"
 ZOHO_MAIL_BASE_URL = "https://mail.zoho.com/api"
 ZOHO_CALENDAR_BASE_URL = "https://calendar.zoho.com/api/v1"
 ZOHO_TASKS_BASE_URL = "https://mail.zoho.com/api/tasks/me"
+ZOHO_NOTES_BASE_URL = "https://mail.zoho.com/api/notes/me"
 MAX_EVENT_RANGE_DAYS = 31
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
 MIN_TASKS_LIMIT = 1
 MAX_TASKS_LIMIT = 499  # per Zoho's own documented range for this endpoint
+MIN_NOTES_LIMIT = 1
 
 # search_emails excludes these by default -- not "received" mail by nature.
 # Every user-created/rule-filed folder reports folderType "Inbox" (confirmed
@@ -253,6 +255,40 @@ def normalize_task(raw: dict) -> dict:
         }
     except (KeyError, TypeError) as e:
         raise ZohoAPIError(f"Malformed task from Zoho: {e}") from e
+
+
+def normalize_note(raw: dict, mailbox_timezone: str) -> dict:
+    """Normalize one note from Zoho Mail's Notes API.
+
+    ``created_at``/``modified_at`` are converted from Zoho's epoch-
+    millisecond strings to ISO 8601 in ``mailbox_timezone`` -- see
+    ``_epoch_ms_to_iso8601``. Unlike Tasks' timestamps, Notes' are epoch
+    strings like Mail's, not already-formatted ISO 8601 -- confirmed live,
+    not assumed from Tasks' behavior.
+
+    Excludes ``summary`` (redundant with ``content``, just a preview of
+    it), the numeric ``color`` index (``colorHex`` is the actual usable
+    value), and ``namespaceId``/``ownerZuid`` (Zoho-internal, redundant
+    with ``ownerDisplayName``).
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``entityId``/``title``, or
+            ``createdTime``/``modifiedTime`` aren't parseable.
+    """
+    try:
+        return {
+            "id": raw["entityId"],
+            "title": raw["title"],
+            "content": raw.get("content") or "",
+            "book": raw.get("bookName") or "",
+            "owner": raw.get("ownerDisplayName") or "",
+            "is_favorite": raw.get("isFavorite", False),
+            "color": raw.get("colorHex") or "",
+            "created_at": _epoch_ms_to_iso8601(raw["createdTime"], mailbox_timezone),
+            "modified_at": _epoch_ms_to_iso8601(raw["modifiedTime"], mailbox_timezone),
+        }
+    except (KeyError, TypeError, ValueError) as e:
+        raise ZohoAPIError(f"Malformed note from Zoho: {e}") from e
 
 
 async def zoho_authenticated_get(
@@ -629,3 +665,52 @@ class ZohoClient:
         if not tasks:
             raise ZohoAPIError(f"No task found for task_id={task_id!r}")
         return normalize_task(tasks[0])
+
+    async def list_notes(self, limit: int = 20, after: int = 0) -> list[dict]:
+        """List the user's personal Zoho Mail notes.
+
+        Args:
+            limit: maximum number of notes to return.
+            after: how many notes to skip before returning results. Zoho's
+                own docs describe this vaguely as "specifies from which
+                retrieval has to be done" -- confirmed live it behaves as
+                a plain integer offset (0 works; passing a note's own id
+                or timestamp as a cursor causes a 500), not the opaque
+                cursor the name suggests.
+
+        Returns:
+            Normalized notes. Unlike ``search_contacts``/``list_tasks``,
+            there is no ``has_more`` -- confirmed live, Zoho's response
+            includes no paging/total signal at all for this endpoint.
+            Getting back fewer than ``limit`` results is the only
+            reliable sign you've reached the end.
+
+        Raises:
+            ZohoAPIError: if ``limit``/``after`` are out of range, or the
+                Notes API rejects or fails the request.
+        """
+        if limit < MIN_NOTES_LIMIT:
+            raise ZohoAPIError(f"limit must be >= {MIN_NOTES_LIMIT} (got {limit})")
+        if after < 0:
+            raise ZohoAPIError(f"after must be >= 0 (got {after})")
+        mailbox_timezone = await self._get_mailbox_timezone()
+        payload = await self._get(
+            ZOHO_NOTES_BASE_URL, params={"limit": limit, "after": after}
+        )
+        notes = payload.get("data", {}).get("list", [])
+        return [normalize_note(n, mailbox_timezone) for n in notes]
+
+    async def get_note(self, note_id: str) -> dict:
+        """Fetch one personal note by id.
+
+        Raises:
+            ZohoAPIError: if the Notes API rejects or fails the request,
+                or its response is missing the note data.
+        """
+        mailbox_timezone = await self._get_mailbox_timezone()
+        payload = await self._get(f"{ZOHO_NOTES_BASE_URL}/{note_id}")
+        try:
+            note = payload["data"]
+        except (KeyError, TypeError) as e:
+            raise ZohoAPIError(f"Malformed note response from Zoho: {e}") from e
+        return normalize_note(note, mailbox_timezone)

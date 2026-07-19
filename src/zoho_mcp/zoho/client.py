@@ -19,12 +19,14 @@ ZOHO_MAIL_BASE_URL = "https://mail.zoho.com/api"
 ZOHO_CALENDAR_BASE_URL = "https://calendar.zoho.com/api/v1"
 ZOHO_TASKS_BASE_URL = "https://mail.zoho.com/api/tasks/me"
 ZOHO_NOTES_BASE_URL = "https://mail.zoho.com/api/notes/me"
+ZOHO_BOOKMARKS_BASE_URL = "https://mail.zoho.com/api/links/me"
 MAX_EVENT_RANGE_DAYS = 31
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
 MIN_TASKS_LIMIT = 1
 MAX_TASKS_LIMIT = 499  # per Zoho's own documented range for this endpoint
 MIN_NOTES_LIMIT = 1
+MIN_BOOKMARKS_LIMIT = 1
 
 # search_emails excludes these by default -- not "received" mail by nature.
 # Every user-created/rule-filed folder reports folderType "Inbox" (confirmed
@@ -289,6 +291,42 @@ def normalize_note(raw: dict, mailbox_timezone: str) -> dict:
         }
     except (KeyError, TypeError, ValueError) as e:
         raise ZohoAPIError(f"Malformed note from Zoho: {e}") from e
+
+
+def normalize_bookmark(raw: dict) -> dict:
+    """Normalize one bookmark from Zoho Mail's Bookmarks API.
+
+    Excludes ``linkMetaInfo`` (its ``linkTitle``/``linkDescription`` are
+    redundant with the top-level ``title``/``summary``, confirmed
+    identical live) and ``namespaceId``/``ownerZuid`` (Zoho-internal,
+    redundant with ``ownerDisplayName``). No timestamps -- confirmed live
+    that bookmarks, unlike notes, don't have created/modified fields at
+    all.
+
+    ``is_favorite`` is compared as a string: confirmed live that
+    Bookmarks' ``isFavorite`` is the string ``"true"``/``"false"``, not
+    the real boolean the same-named field is on Notes -- a sibling Zoho
+    Mail feature with the same field name but a different type. Don't
+    assume type consistency across endpoints just because a field name
+    matches.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``entityId``, ``title``, or
+            ``link``.
+    """
+    try:
+        return {
+            "id": raw["entityId"],
+            "title": raw["title"],
+            "url": raw["link"],
+            "summary": raw.get("summary") or "",
+            "collection": raw.get("collectionName") or "",
+            "owner": raw.get("ownerDisplayName") or "",
+            "is_favorite": str(raw.get("isFavorite", False)).lower() == "true",
+            "tags": raw.get("tags") or [],
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed bookmark from Zoho: {e}") from e
 
 
 async def zoho_authenticated_get(
@@ -714,3 +752,44 @@ class ZohoClient:
         except (KeyError, TypeError) as e:
             raise ZohoAPIError(f"Malformed note response from Zoho: {e}") from e
         return normalize_note(note, mailbox_timezone)
+
+    async def list_bookmarks(self, limit: int = 20, after: int = 0) -> list[dict]:
+        """List the user's personal Zoho Mail bookmarks.
+
+        Args:
+            limit: maximum number of bookmarks to return.
+            after: how many bookmarks to skip before returning results
+                (behaves as a plain integer offset -- see ``list_notes``).
+
+        Returns:
+            Normalized bookmarks. No ``has_more`` -- same as
+            ``list_notes``, Zoho's response includes no paging/total
+            signal for this endpoint either.
+
+        Raises:
+            ZohoAPIError: if ``limit``/``after`` are out of range, or the
+                Bookmarks API rejects or fails the request.
+        """
+        if limit < MIN_BOOKMARKS_LIMIT:
+            raise ZohoAPIError(f"limit must be >= {MIN_BOOKMARKS_LIMIT} (got {limit})")
+        if after < 0:
+            raise ZohoAPIError(f"after must be >= 0 (got {after})")
+        payload = await self._get(
+            ZOHO_BOOKMARKS_BASE_URL, params={"limit": limit, "after": after}
+        )
+        bookmarks = payload.get("data", {}).get("list", [])
+        return [normalize_bookmark(b) for b in bookmarks]
+
+    async def get_bookmark(self, bookmark_id: str) -> dict:
+        """Fetch one personal bookmark by id.
+
+        Raises:
+            ZohoAPIError: if the Bookmarks API rejects or fails the
+                request, or its response is missing the bookmark data.
+        """
+        payload = await self._get(f"{ZOHO_BOOKMARKS_BASE_URL}/{bookmark_id}")
+        try:
+            bookmark = payload["data"]
+        except (KeyError, TypeError) as e:
+            raise ZohoAPIError(f"Malformed bookmark response from Zoho: {e}") from e
+        return normalize_bookmark(bookmark)

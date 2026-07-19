@@ -5,6 +5,7 @@ import pytest
 
 from zoho_mcp.zoho.client import (
     ZohoAPIError,
+    normalize_bookmark,
     normalize_email_content,
     normalize_email_summary,
     normalize_event,
@@ -384,3 +385,57 @@ def test_normalize_note_raises_clear_error_on_non_numeric_time():
 
     with pytest.raises(ZohoAPIError, match="note"):
         normalize_note(raw, MAILBOX_TZ)
+
+
+def test_normalize_bookmark_maps_core_fields():
+    raw = load_fixture("bookmarks_list_response.json")["data"]["list"][0]
+
+    result = normalize_bookmark(raw)
+
+    assert result["id"] == "1784471992132154801"
+    assert result["title"] == "Roadmap Template - Example Docs"
+    assert result["url"] == "https://example.com/roadmap-template"
+    assert result["summary"] == "A roadmap planning template for quarterly sync docs."
+    assert result["collection"] == "General"
+    assert result["owner"] == "Jamie Rivera"
+    assert result["tags"] == ["work"]
+
+
+def test_normalize_bookmark_treats_string_true_as_favorite():
+    # Confirmed live: Bookmarks' isFavorite is the string "true"/"false",
+    # unlike Notes' real boolean for the same-named field on a sibling
+    # Zoho Mail feature -- don't assume type consistency across endpoints.
+    raw = load_fixture("bookmarks_list_response.json")["data"]["list"][0]
+
+    result = normalize_bookmark(raw)
+
+    assert result["is_favorite"] is True
+
+
+def test_normalize_bookmark_treats_string_false_as_not_favorite():
+    raw = load_fixture("bookmarks_list_response.json")["data"]["list"][0]
+    raw["isFavorite"] = "false"
+
+    result = normalize_bookmark(raw)
+
+    assert result["is_favorite"] is False
+
+
+def test_normalize_bookmark_defaults_missing_optional_fields():
+    raw = {"entityId": "1", "title": "Untitled", "link": "https://example.com"}
+
+    result = normalize_bookmark(raw)
+
+    assert result["summary"] == ""
+    assert result["collection"] == ""
+    assert result["owner"] == ""
+    assert result["is_favorite"] is False
+    assert result["tags"] == []
+
+
+def test_normalize_bookmark_raises_clear_error_on_missing_field():
+    raw = load_fixture("bookmarks_list_response.json")["data"]["list"][0]
+    del raw["link"]
+
+    with pytest.raises(ZohoAPIError, match="bookmark"):
+        normalize_bookmark(raw)

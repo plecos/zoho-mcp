@@ -2,7 +2,7 @@
 
 No business logic lives here -- ``create_server`` wires the already-tested
 tool wrappers (``tools/mail.py``, ``tools/calendar.py``, ``tools/tasks.py``,
-``tools/notes.py``, ``tools/contacts.py``)
+``tools/notes.py``, ``tools/bookmarks.py``, ``tools/contacts.py``)
 to a FastMCP instance, and ``main`` builds the real Zoho clients from
 environment/keyring config and runs the server over stdio.
 """
@@ -14,6 +14,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from zoho_mcp.config import load_env
+from zoho_mcp.tools import bookmarks as bookmarks_tools
 from zoho_mcp.tools import calendar as calendar_tools
 from zoho_mcp.tools import contacts as contacts_tools
 from zoho_mcp.tools import mail as mail_tools
@@ -141,6 +142,25 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
     async def get_note(note_id: str) -> dict:
         """Fetch one note's full details, given an id from list_notes."""
         return await notes_tools.get_note(client, note_id=note_id)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_bookmarks(limit: int = 20, after: int = 0) -> list[dict]:
+        """List the user's personal Zoho Mail bookmarks.
+
+        limit (optional): maximum number of bookmarks to return.
+        after (optional): how many bookmarks to skip -- use for pagination.
+
+        Each bookmark has id, title, url, summary, collection, owner,
+        is_favorite, tags. There is no has_more signal for this endpoint
+        -- getting back fewer than limit results is the only reliable
+        sign you've reached the end.
+        """
+        return await bookmarks_tools.list_bookmarks(client, limit=limit, after=after)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def get_bookmark(bookmark_id: str) -> dict:
+        """Fetch one bookmark's full details, given an id from list_bookmarks."""
+        return await bookmarks_tools.get_bookmark(client, bookmark_id=bookmark_id)
 
     @mcp.tool(annotations=_READ_ONLY)
     async def search_contacts(

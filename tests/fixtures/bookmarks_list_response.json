@@ -1,0 +1,24 @@
+{
+  "status": {"code": 200, "description": "success"},
+  "data": {
+    "list": [
+      {
+        "summary": "A roadmap planning template for quarterly sync docs.",
+        "namespaceId": "709548548",
+        "ownerDisplayName": "Jamie Rivera",
+        "link": "https://example.com/roadmap-template",
+        "ownerZuid": "709548548",
+        "entityId": "1784471992132154801",
+        "title": "Roadmap Template - Example Docs",
+        "collectionId": "coll-1",
+        "linkMetaInfo": {
+          "linkTitle": "Roadmap Template - Example Docs",
+          "linkDescription": "A roadmap planning template for quarterly sync docs."
+        },
+        "collectionName": "General",
+        "isFavorite": "true",
+        "tags": ["work"]
+      }
+    ]
+  }
+}

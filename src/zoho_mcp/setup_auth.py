@@ -34,6 +34,7 @@ SCOPES = [
     "zohocontacts.contactapi.READ",
     "ZohoMail.tasks.READ",
     "ZohoMail.notes.READ",
+    "ZohoMail.links.READ",
 ]
 DEFAULT_CALLBACK_PORT = 8765
 

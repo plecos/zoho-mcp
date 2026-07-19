@@ -842,6 +842,126 @@ async def test_get_note_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_cli
         await zoho_client.get_note("does-not-exist")
 
 
+async def test_list_bookmarks_sends_limit_and_after_params(respx_mock, zoho_client):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "list": [
+                        {
+                            "entityId": "1",
+                            "title": "Roadmap Template",
+                            "link": "https://example.com",
+                        }
+                    ]
+                }
+            },
+        )
+    )
+
+    results = await zoho_client.list_bookmarks(limit=10, after=5)
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Zoho-oauthtoken fake-access-token"
+    assert request.url.params["limit"] == "10"
+    assert request.url.params["after"] == "5"
+    assert [b["id"] for b in results] == ["1"]
+
+
+async def test_list_bookmarks_returns_empty_list_when_list_key_absent(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {}})
+    )
+
+    results = await zoho_client.list_bookmarks()
+
+    assert results == []
+
+
+async def test_list_bookmarks_rejects_limit_below_one_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me")
+
+    with pytest.raises(ZohoAPIError, match="limit"):
+        await zoho_client.list_bookmarks(limit=0)
+
+    assert not route.called
+
+
+async def test_list_bookmarks_rejects_negative_after_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me")
+
+    with pytest.raises(ZohoAPIError, match="after"):
+        await zoho_client.list_bookmarks(after=-1)
+
+    assert not route.called
+
+
+async def test_list_bookmarks_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_bookmarks()
+
+
+async def test_get_bookmark_fetches_by_id_and_normalizes(respx_mock, zoho_client):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me/1").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "entityId": "1",
+                    "title": "Roadmap Template",
+                    "link": "https://example.com",
+                }
+            },
+        )
+    )
+
+    result = await zoho_client.get_bookmark("1")
+
+    assert route.called
+    assert (
+        route.calls.last.request.headers["Authorization"]
+        == "Zoho-oauthtoken fake-access-token"
+    )
+    assert result["id"] == "1"
+    assert result["title"] == "Roadmap Template"
+
+
+async def test_get_bookmark_raises_clear_error_when_data_key_absent(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/links/me/1").mock(
+        return_value=httpx.Response(200, json={"status": {"code": 200}})
+    )
+
+    with pytest.raises(ZohoAPIError, match="bookmark"):
+        await zoho_client.get_bookmark("1")
+
+
+async def test_get_bookmark_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/links/me/does-not-exist").mock(
+        return_value=httpx.Response(404, json={"error": "not found"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.get_bookmark("does-not-exist")
+
+
 async def test_list_events_returns_empty_list_when_events_key_absent(
     respx_mock, zoho_client
 ):

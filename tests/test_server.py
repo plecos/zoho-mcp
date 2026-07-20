@@ -14,6 +14,12 @@ class FakeZohoClient:
     async def get_event(self, uid):
         return {}
 
+    async def list_branches(self):
+        return []
+
+    async def list_resources(self, branch_id, building_id, floor_id):
+        return []
+
     async def list_tasks(self, limit=20, offset=0):
         return [], False
 
@@ -44,7 +50,7 @@ class FakeContactsClient:
         return {"personal": 0, "organization": 0, "total": 0}
 
 
-async def test_create_server_registers_all_thirteen_tools():
+async def test_create_server_registers_all_fifteen_tools():
     server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
@@ -61,6 +67,8 @@ async def test_create_server_registers_all_thirteen_tools():
         "get_note",
         "list_bookmarks",
         "get_bookmark",
+        "list_branches",
+        "list_resources",
         "search_contacts",
         "get_contact",
         "count_contacts",

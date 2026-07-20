@@ -972,6 +972,114 @@ async def test_get_bookmark_wraps_http_errors_as_zoho_api_error(
         await zoho_client.get_bookmark("does-not-exist")
 
 
+async def test_list_branches_fetches_and_normalizes(respx_mock, zoho_client):
+    route = respx_mock.get("https://calendar.zoho.com/api/v1/branches").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "branch_id": "branch-1",
+                    "branch_name": "Example Branch",
+                    "time_zone": "America/Los_Angeles",
+                    "buildings": [],
+                }
+            ],
+        )
+    )
+
+    results = await zoho_client.list_branches()
+
+    assert route.called
+    assert (
+        route.calls.last.request.headers["Authorization"]
+        == "Zoho-oauthtoken fake-access-token"
+    )
+    assert results == [
+        {
+            "id": "branch-1",
+            "name": "Example Branch",
+            "timezone": "America/Los_Angeles",
+            "buildings": [],
+        }
+    ]
+
+
+async def test_list_branches_raises_clear_error_on_non_list_response(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://calendar.zoho.com/api/v1/branches").mock(
+        return_value=httpx.Response(200, json={"error": "not a list"})
+    )
+
+    with pytest.raises(ZohoAPIError, match="branches"):
+        await zoho_client.list_branches()
+
+
+async def test_list_branches_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://calendar.zoho.com/api/v1/branches").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_branches()
+
+
+async def test_list_resources_sends_branch_building_floor_ids(respx_mock, zoho_client):
+    route = respx_mock.get("https://calendar.zoho.com/api/v1/resources").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "resource_id": "resource-1",
+                    "resource_name": "Meeting Room",
+                    "res_email_id": "resource-1@example.com",
+                    "capacity": 10,
+                    "res_location": "Example Branch/Example Building/Floor 1",
+                }
+            ],
+        )
+    )
+
+    results = await zoho_client.list_resources(
+        branch_id="branch-1", building_id="building-1", floor_id="floor-1"
+    )
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.url.params["branchId"] == "branch-1"
+    assert request.url.params["buildingId"] == "building-1"
+    assert request.url.params["floorId"] == "floor-1"
+    assert results[0]["name"] == "Meeting Room"
+
+
+async def test_list_resources_raises_clear_error_on_non_list_response(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://calendar.zoho.com/api/v1/resources").mock(
+        return_value=httpx.Response(200, json={"error": "not a list"})
+    )
+
+    with pytest.raises(ZohoAPIError, match="resources"):
+        await zoho_client.list_resources(
+            branch_id="branch-1", building_id="building-1", floor_id="floor-1"
+        )
+
+
+async def test_list_resources_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://calendar.zoho.com/api/v1/resources").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_resources(
+            branch_id="branch-1", building_id="building-1", floor_id="floor-1"
+        )
+
+
 async def test_list_events_returns_empty_list_when_events_key_absent(
     respx_mock, zoho_client
 ):

@@ -21,6 +21,8 @@ ZOHO_CALENDAR_BASE_URL = "https://calendar.zoho.com/api/v1"
 ZOHO_TASKS_BASE_URL = "https://mail.zoho.com/api/tasks/me"
 ZOHO_NOTES_BASE_URL = "https://mail.zoho.com/api/notes/me"
 ZOHO_BOOKMARKS_BASE_URL = "https://mail.zoho.com/api/links/me"
+ZOHO_BRANCHES_URL = "https://calendar.zoho.com/api/v1/branches"
+ZOHO_RESOURCES_URL = "https://calendar.zoho.com/api/v1/resources"
 MAX_EVENT_RANGE_DAYS = 31
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
@@ -336,6 +338,83 @@ def normalize_bookmark(raw: dict) -> dict:
         }
     except (KeyError, TypeError) as e:
         raise ZohoAPIError(f"Malformed bookmark from Zoho: {e}") from e
+
+
+def normalize_floor(raw: dict) -> dict:
+    """Normalize one floor from Zoho Calendar's Resource Booking API.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``floor_id``/``floor_name``.
+    """
+    try:
+        return {
+            "id": raw["floor_id"],
+            "name": raw["floor_name"],
+            "has_resource": raw.get("has_resource", False),
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed floor from Zoho: {e}") from e
+
+
+def normalize_building(raw: dict) -> dict:
+    """Normalize one building from Zoho Calendar's Resource Booking API.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``building_id``/``building_name``,
+            or an entry in ``floors`` is malformed.
+    """
+    try:
+        return {
+            "id": raw["building_id"],
+            "name": raw["building_name"],
+            "floors": [normalize_floor(f) for f in raw.get("floors") or []],
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed building from Zoho: {e}") from e
+
+
+def normalize_branch(raw: dict) -> dict:
+    """Normalize one branch from Zoho Calendar's Resource Booking API.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``branch_id``/``branch_name``,
+            or an entry in ``buildings`` is malformed.
+    """
+    try:
+        return {
+            "id": raw["branch_id"],
+            "name": raw["branch_name"],
+            "timezone": raw.get("time_zone", ""),
+            "buildings": [normalize_building(b) for b in raw.get("buildings") or []],
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed branch from Zoho: {e}") from e
+
+
+def normalize_resource(raw: dict) -> dict:
+    """Normalize one resource from Zoho Calendar's Resource Booking API.
+
+    ``email`` is the resource's own bookable calendar address (invite it
+    to an event to book it). ``location`` is ``res_location``, a
+    "Branch/Building/Floor" path.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``resource_id``/``resource_name``.
+    """
+    try:
+        return {
+            "id": raw["resource_id"],
+            "name": raw["resource_name"],
+            "category": raw.get("category_name") or "",
+            "email": raw.get("res_email_id") or "",
+            "capacity": raw.get("capacity", 0),
+            "location": raw.get("res_location") or "",
+            "branch_id": raw.get("branch_id") or "",
+            "building_id": raw.get("building_id") or "",
+            "floor_id": raw.get("floor_id") or "",
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed resource from Zoho: {e}") from e
 
 
 async def zoho_authenticated_get(
@@ -666,6 +745,53 @@ class ZohoClient:
         if not events:
             raise ZohoAPIError(f"No event found for uid={uid!r}")
         return normalize_event_detail(events[0])
+
+    async def list_branches(self) -> list[dict]:
+        """List the office branches configured for Resource Booking,
+        each with its nested buildings and floors.
+
+        An empty list is a normal, common result -- Resource Booking is
+        an office-facility feature most personal/small accounts never
+        set up, not an error condition.
+
+        Raises:
+            ZohoAPIError: if the response isn't a JSON list, or the
+                Calendar API rejects or fails the request.
+        """
+        payload = await self._get(ZOHO_BRANCHES_URL)
+        if not isinstance(payload, list):
+            raise ZohoAPIError(
+                f"Malformed branches response from Zoho: expected a list, "
+                f"got {type(payload).__name__}"
+            )
+        return [normalize_branch(b) for b in payload]
+
+    async def list_resources(
+        self, branch_id: str, building_id: str, floor_id: str
+    ) -> list[dict]:
+        """List the bookable resources (rooms, equipment) on one floor.
+
+        All three ids are required by Zoho's own API -- get them from
+        ``list_branches``.
+
+        Raises:
+            ZohoAPIError: if the response isn't a JSON list, or the
+                Calendar API rejects or fails the request.
+        """
+        payload = await self._get(
+            ZOHO_RESOURCES_URL,
+            params={
+                "branchId": branch_id,
+                "buildingId": building_id,
+                "floorId": floor_id,
+            },
+        )
+        if not isinstance(payload, list):
+            raise ZohoAPIError(
+                f"Malformed resources response from Zoho: expected a list, "
+                f"got {type(payload).__name__}"
+            )
+        return [normalize_resource(r) for r in payload]
 
     async def list_tasks(
         self, limit: int = 20, offset: int = 0

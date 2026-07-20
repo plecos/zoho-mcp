@@ -6,11 +6,13 @@ import pytest
 from zoho_mcp.zoho.client import (
     ZohoAPIError,
     normalize_bookmark,
+    normalize_branch,
     normalize_email_content,
     normalize_email_summary,
     normalize_event,
     normalize_event_detail,
     normalize_note,
+    normalize_resource,
     normalize_task,
 )
 
@@ -357,6 +359,63 @@ def test_normalize_task_raises_clear_error_on_missing_field():
 
     with pytest.raises(ZohoAPIError, match="task"):
         normalize_task(raw)
+
+
+def test_normalize_branch_maps_core_fields():
+    raw = load_fixture("branches_response.json")[0]
+
+    result = normalize_branch(raw)
+
+    assert result["id"] == "branch-1"
+    assert result["name"] == "Example Branch"
+    assert result["timezone"] == "America/Los_Angeles"
+    assert len(result["buildings"]) == 1
+
+
+def test_normalize_branch_maps_nested_buildings_and_floors():
+    raw = load_fixture("branches_response.json")[0]
+
+    result = normalize_branch(raw)
+
+    building = result["buildings"][0]
+    assert building["id"] == "building-1"
+    assert building["name"] == "Example Building A"
+    assert building["floors"] == [
+        {"id": "floor-1", "name": "Floor Number 1", "has_resource": True},
+        {"id": "floor-2", "name": "Ground Floor", "has_resource": False},
+    ]
+
+
+def test_normalize_branch_raises_clear_error_on_missing_field():
+    raw = load_fixture("branches_response.json")[0]
+    del raw["branch_name"]
+
+    with pytest.raises(ZohoAPIError, match="branch"):
+        normalize_branch(raw)
+
+
+def test_normalize_resource_maps_core_fields():
+    raw = load_fixture("resources_response.json")[0]
+
+    result = normalize_resource(raw)
+
+    assert result["id"] == "resource-1"
+    assert result["name"] == "Meeting Room"
+    assert result["category"] == "Meeting Room"
+    assert result["location"] == "Example Branch/Example Building A/Floor Number 1"
+    assert result["email"] == "resource-1@example.com"
+    assert result["capacity"] == 10
+    assert result["branch_id"] == "branch-1"
+    assert result["building_id"] == "building-1"
+    assert result["floor_id"] == "floor-1"
+
+
+def test_normalize_resource_raises_clear_error_on_missing_field():
+    raw = load_fixture("resources_response.json")[0]
+    del raw["resource_id"]
+
+    with pytest.raises(ZohoAPIError, match="resource"):
+        normalize_resource(raw)
 
 
 def test_normalize_note_maps_core_fields():

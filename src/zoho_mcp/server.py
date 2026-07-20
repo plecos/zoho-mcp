@@ -2,7 +2,8 @@
 
 No business logic lives here -- ``create_server`` wires the already-tested
 tool wrappers (``tools/mail.py``, ``tools/calendar.py``, ``tools/tasks.py``,
-``tools/notes.py``, ``tools/bookmarks.py``, ``tools/contacts.py``)
+``tools/notes.py``, ``tools/bookmarks.py``, ``tools/resources.py``,
+``tools/contacts.py``)
 to a FastMCP instance, and ``main`` builds the real Zoho clients from
 environment/keyring config and runs the server over stdio.
 """
@@ -19,6 +20,7 @@ from zoho_mcp.tools import calendar as calendar_tools
 from zoho_mcp.tools import contacts as contacts_tools
 from zoho_mcp.tools import mail as mail_tools
 from zoho_mcp.tools import notes as notes_tools
+from zoho_mcp.tools import resources as resources_tools
 from zoho_mcp.tools import tasks as tasks_tools
 from zoho_mcp.zoho.auth import ZohoTokenManager, load_refresh_token
 from zoho_mcp.zoho.client import ZohoClient
@@ -99,6 +101,35 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         fields for a recurring event are not reliable.
         """
         return await calendar_tools.get_event(client, uid=uid)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_branches() -> list[dict]:
+        """List the office branches configured for Zoho Calendar's
+        Resource Booking feature (meeting rooms, equipment), each with
+        nested buildings and floors.
+
+        An empty list is normal -- Resource Booking is an office-facility
+        feature most personal/small accounts never set up, not an error.
+        Use a floor's id (only floors with has_resource true have any)
+        with list_resources to see what's actually bookable there.
+        """
+        return await resources_tools.list_branches(client)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_resources(
+        branch_id: str, building_id: str, floor_id: str
+    ) -> list[dict]:
+        """List the bookable resources (rooms, equipment) on one floor.
+
+        branch_id/building_id/floor_id: from a prior list_branches result
+        -- all three are required by Zoho's own API.
+
+        Each resource has an email address -- invite it to a calendar
+        event (as an attendee) to book it.
+        """
+        return await resources_tools.list_resources(
+            client, branch_id=branch_id, building_id=building_id, floor_id=floor_id
+        )
 
     @mcp.tool(annotations=_READ_ONLY)
     async def list_tasks(limit: int = 20, offset: int = 0) -> dict:

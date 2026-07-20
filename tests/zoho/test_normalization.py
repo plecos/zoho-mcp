@@ -5,12 +5,16 @@ import pytest
 
 from zoho_mcp.zoho.client import (
     ZohoAPIError,
+    normalize_attachment,
     normalize_bookmark,
     normalize_branch,
+    normalize_calendar,
     normalize_email_content,
     normalize_email_summary,
     normalize_event,
     normalize_event_detail,
+    normalize_folder,
+    normalize_label,
     normalize_note,
     normalize_resource,
     normalize_task,
@@ -416,6 +420,81 @@ def test_normalize_resource_raises_clear_error_on_missing_field():
 
     with pytest.raises(ZohoAPIError, match="resource"):
         normalize_resource(raw)
+
+
+def test_normalize_folder_maps_core_fields():
+    raw = load_fixture("folders_response.json")["data"][1]
+
+    result = normalize_folder(raw)
+
+    assert result == {
+        "id": "folder-2",
+        "name": "Work",
+        "path": "/Inbox/Work",
+        "type": "Inbox",
+    }
+
+
+def test_normalize_folder_raises_clear_error_on_missing_field():
+    raw = load_fixture("folders_response.json")["data"][0]
+    del raw["folderName"]
+
+    with pytest.raises(ZohoAPIError, match="folder"):
+        normalize_folder(raw)
+
+
+def test_normalize_label_maps_core_fields():
+    raw = load_fixture("labels_response.json")["data"][0]
+
+    result = normalize_label(raw)
+
+    assert result == {"id": "label-1", "name": "Notification", "color": "#FFD700"}
+
+
+def test_normalize_label_raises_clear_error_on_missing_field():
+    raw = load_fixture("labels_response.json")["data"][0]
+    del raw["displayName"]
+
+    with pytest.raises(ZohoAPIError, match="label"):
+        normalize_label(raw)
+
+
+def test_normalize_attachment_maps_core_fields():
+    raw = load_fixture("attachment_info_response.json")["data"]["attachments"][0]
+
+    result = normalize_attachment(raw)
+
+    assert result == {"id": "attach-1", "name": "roadmap.pdf", "size_bytes": 666755}
+
+
+def test_normalize_attachment_raises_clear_error_on_missing_field():
+    raw = load_fixture("attachment_info_response.json")["data"]["attachments"][0]
+    del raw["attachmentName"]
+
+    with pytest.raises(ZohoAPIError, match="attachment"):
+        normalize_attachment(raw)
+
+
+def test_normalize_calendar_maps_core_fields():
+    raw = load_fixture("calendars_response.json")["calendars"][0]
+
+    result = normalize_calendar(raw)
+
+    assert result == {
+        "id": "cal-556677",
+        "name": "ken",
+        "is_default": True,
+        "timezone": "America/Los_Angeles",
+        "privilege": "owner",
+    }
+
+
+def test_normalize_calendar_raises_clear_error_on_missing_field():
+    raw = load_fixture("calendars_response.json")["calendars"][0]
+    del raw["uid"]
+
+    with pytest.raises(ZohoAPIError, match="calendar"):
+        normalize_calendar(raw)
 
 
 def test_normalize_note_maps_core_fields():

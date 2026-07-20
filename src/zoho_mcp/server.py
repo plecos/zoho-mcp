@@ -75,20 +75,61 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         )
 
     @mcp.tool(annotations=_READ_ONLY)
-    async def list_events(start: str, end: str) -> list[dict]:
+    async def list_attachments(message_id: str, folder_id: str) -> list[dict]:
+        """List attachment metadata for one email found via search_emails.
+
+        Returns [{"id", "name", "size_bytes"}, ...] -- metadata only.
+        Reading the actual file content of an attachment isn't supported.
+        """
+        return await mail_tools.list_attachments(
+            client, message_id=message_id, folder_id=folder_id
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_folders() -> list[dict]:
+        """List all folders in the mailbox, including custom subfolders.
+
+        Each folder has id, name, path (e.g. "/Inbox/Work" -- the
+        hierarchy signal, not any id field), and type. Pass a folder's
+        name to search_emails' in: qualifier to search it.
+        """
+        return await mail_tools.list_folders(client)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_labels() -> list[dict]:
+        """List all labels/tags configured in the mailbox.
+
+        Each label has id, name, color. Pass a label's name to
+        search_emails' label: qualifier to search it.
+        """
+        return await mail_tools.list_labels(client)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_events(
+        start: str, end: str, calendar_id: str | None = None
+    ) -> list[dict]:
         """List Zoho Calendar events in a time range (max 31 days).
 
         start/end: ISO 8601 datetime strings with an explicit UTC offset
         (any offset works, e.g. "+00:00" or "-07:00").
 
+        calendar_id (optional): which calendar to query -- defaults to
+        the user's configured default calendar. Use list_calendars to see
+        what else is available if the user has more than one.
+
         Returned event times are already in the mailbox's own local
         timezone, not UTC -- do not convert them yourself.
         """
-        return await calendar_tools.list_events(client, start=start, end=end)
+        return await calendar_tools.list_events(
+            client, start=start, end=end, calendar_id=calendar_id
+        )
 
     @mcp.tool(annotations=_READ_ONLY)
-    async def get_event(uid: str) -> dict:
+    async def get_event(uid: str, calendar_id: str | None = None) -> dict:
         """Fetch full details for one event, given an id from list_events.
+
+        calendar_id (optional): which calendar the event belongs to --
+        defaults to the user's configured default calendar.
 
         Use this when you need an event's organizer, full attendee list
         (list_events can show only your own attendee entry, not every
@@ -100,7 +141,17 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         start/end from list_events for timing; this call's own date
         fields for a recurring event are not reliable.
         """
-        return await calendar_tools.get_event(client, uid=uid)
+        return await calendar_tools.get_event(client, uid=uid, calendar_id=calendar_id)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_calendars() -> list[dict]:
+        """List all calendars the user has access to.
+
+        Each calendar has id, name, is_default, timezone, privilege. Pass
+        a calendar's id to list_events/get_event's calendar_id argument
+        to target it instead of the default.
+        """
+        return await calendar_tools.list_calendars(client)
 
     @mcp.tool(annotations=_READ_ONLY)
     async def list_branches() -> list[dict]:

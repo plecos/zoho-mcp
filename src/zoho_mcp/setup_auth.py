@@ -37,6 +37,8 @@ SCOPES = [
     "ZohoMail.links.READ",
     "ZohoCalendar.resources.READ",
     "ZohoCalendar.branches.READ",
+    "ZohoMail.tags.READ",
+    "ZohoCalendar.freebusy.READ",
 ]
 DEFAULT_CALLBACK_PORT = 8765
 

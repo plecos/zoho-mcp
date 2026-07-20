@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from zoho_mcp.tools.calendar import get_event, list_events
+from zoho_mcp.tools.calendar import get_event, list_calendars, list_events
 
 
 class FakeZohoClient:
@@ -11,14 +11,22 @@ class FakeZohoClient:
         self.list_events_result = [{"id": "evt-1", "title": "Sync"}]
         self.get_event_calls = []
         self.get_event_result = {"id": "evt-1", "title": "Sync", "attendees": []}
+        self.list_calendars_calls = 0
+        self.list_calendars_result = [{"id": "cal-1", "name": "ken"}]
 
-    async def list_events(self, start, end):
-        self.list_events_calls.append({"start": start, "end": end})
+    async def list_events(self, start, end, calendar_id=None):
+        self.list_events_calls.append(
+            {"start": start, "end": end, "calendar_id": calendar_id}
+        )
         return self.list_events_result
 
-    async def get_event(self, uid):
-        self.get_event_calls.append(uid)
+    async def get_event(self, uid, calendar_id=None):
+        self.get_event_calls.append({"uid": uid, "calendar_id": calendar_id})
         return self.get_event_result
+
+    async def list_calendars(self):
+        self.list_calendars_calls += 1
+        return self.list_calendars_result
 
 
 async def test_list_events_parses_iso8601_utc_strings_and_delegates():
@@ -32,6 +40,7 @@ async def test_list_events_parses_iso8601_utc_strings_and_delegates():
         {
             "start": datetime(2024, 10, 29, 16, 0, 0, tzinfo=timezone.utc),
             "end": datetime(2024, 10, 29, 17, 0, 0, tzinfo=timezone.utc),
+            "calendar_id": None,
         }
     ]
     assert result == client.list_events_result
@@ -48,6 +57,7 @@ async def test_list_events_converts_non_utc_offset_to_utc():
         {
             "start": datetime(2024, 10, 29, 16, 0, 0, tzinfo=timezone.utc),
             "end": datetime(2024, 10, 29, 17, 0, 0, tzinfo=timezone.utc),
+            "calendar_id": None,
         }
     ]
 
@@ -74,10 +84,40 @@ async def test_list_events_rejects_naive_datetime_without_utc_offset():
     assert client.list_events_calls == []
 
 
+async def test_list_events_forwards_explicit_calendar_id():
+    client = FakeZohoClient()
+
+    await list_events(
+        client,
+        start="2024-10-29T16:00:00+00:00",
+        end="2024-10-29T17:00:00+00:00",
+        calendar_id="other-cal",
+    )
+
+    assert client.list_events_calls[0]["calendar_id"] == "other-cal"
+
+
 async def test_get_event_delegates_to_client_with_uid():
     client = FakeZohoClient()
 
     result = await get_event(client, uid="evt-1")
 
-    assert client.get_event_calls == ["evt-1"]
+    assert client.get_event_calls == [{"uid": "evt-1", "calendar_id": None}]
     assert result == client.get_event_result
+
+
+async def test_get_event_forwards_explicit_calendar_id():
+    client = FakeZohoClient()
+
+    await get_event(client, uid="evt-1", calendar_id="other-cal")
+
+    assert client.get_event_calls == [{"uid": "evt-1", "calendar_id": "other-cal"}]
+
+
+async def test_list_calendars_delegates_to_client():
+    client = FakeZohoClient()
+
+    result = await list_calendars(client)
+
+    assert client.list_calendars_calls == 1
+    assert result == client.list_calendars_result

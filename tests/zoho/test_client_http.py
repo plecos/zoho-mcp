@@ -1093,3 +1093,273 @@ async def test_list_events_returns_empty_list_when_events_key_absent(
     results = await zoho_client.list_events(start=start, end=end)
 
     assert results == []
+
+
+async def test_list_events_uses_given_calendar_id_instead_of_default(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    other_calendar_route = respx_mock.get(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events"
+    ).mock(return_value=httpx.Response(200, json={"events": []}))
+    default_calendar_route = respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    )
+    start = datetime(2024, 10, 29, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2024, 10, 29, 17, 0, 0, tzinfo=timezone.utc)
+
+    await zoho_client.list_events(start=start, end=end, calendar_id="other-cal")
+
+    assert other_calendar_route.called
+    assert not default_calendar_route.called
+
+
+async def test_get_event_uses_given_calendar_id_instead_of_default(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events/evt-1"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [
+                    {"uid": "evt-1", "title": "Sync", "organizer": "user@example.com"}
+                ]
+            },
+        )
+    )
+
+    result = await zoho_client.get_event("evt-1", calendar_id="other-cal")
+
+    assert route.called
+    assert result["id"] == "evt-1"
+
+
+async def test_list_folders_fetches_and_normalizes(respx_mock, zoho_client):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/folders"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "folderId": "folder-1",
+                        "folderName": "Inbox",
+                        "path": "/Inbox",
+                        "folderType": "Inbox",
+                    }
+                ]
+            },
+        )
+    )
+
+    results = await zoho_client.list_folders()
+
+    assert route.called
+    assert (
+        route.calls.last.request.headers["Authorization"]
+        == "Zoho-oauthtoken fake-access-token"
+    )
+    assert results == [
+        {"id": "folder-1", "name": "Inbox", "path": "/Inbox", "type": "Inbox"}
+    ]
+
+
+async def test_list_folders_returns_empty_list_when_data_key_absent(
+    respx_mock, zoho_client
+):
+    respx_mock.get(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/folders").mock(
+        return_value=httpx.Response(200, json={"status": {"code": 200}})
+    )
+
+    results = await zoho_client.list_folders()
+
+    assert results == []
+
+
+async def test_list_folders_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/folders").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_folders()
+
+
+async def test_list_labels_fetches_and_normalizes(respx_mock, zoho_client):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/labels"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "labelId": "label-1",
+                        "displayName": "Notification",
+                        "color": "#FFD700",
+                    }
+                ]
+            },
+        )
+    )
+
+    results = await zoho_client.list_labels()
+
+    assert route.called
+    assert (
+        route.calls.last.request.headers["Authorization"]
+        == "Zoho-oauthtoken fake-access-token"
+    )
+    assert results == [{"id": "label-1", "name": "Notification", "color": "#FFD700"}]
+
+
+async def test_list_labels_returns_empty_list_when_data_key_absent(
+    respx_mock, zoho_client
+):
+    respx_mock.get(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/labels").mock(
+        return_value=httpx.Response(200, json={"status": {"code": 200}})
+    )
+
+    results = await zoho_client.list_labels()
+
+    assert results == []
+
+
+async def test_list_labels_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.get(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/labels").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_labels()
+
+
+async def test_list_attachments_fetches_and_normalizes(respx_mock, zoho_client):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}"
+        f"/folders/1122334455/messages/1730217600123456789/attachmentinfo"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "messageId": "1730217600123456789",
+                    "attachments": [
+                        {
+                            "attachmentId": "attach-1",
+                            "attachmentName": "roadmap.pdf",
+                            "attachmentSize": 666755,
+                        }
+                    ],
+                }
+            },
+        )
+    )
+
+    results = await zoho_client.list_attachments(
+        message_id="1730217600123456789", folder_id="1122334455"
+    )
+
+    assert route.called
+    assert (
+        route.calls.last.request.headers["Authorization"]
+        == "Zoho-oauthtoken fake-access-token"
+    )
+    assert results == [{"id": "attach-1", "name": "roadmap.pdf", "size_bytes": 666755}]
+
+
+async def test_list_attachments_returns_empty_list_when_none_present(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}"
+        f"/folders/1122334455/messages/1730217600123456789/attachmentinfo"
+    ).mock(
+        return_value=httpx.Response(
+            200, json={"data": {"messageId": "1730217600123456789"}}
+        )
+    )
+
+    results = await zoho_client.list_attachments(
+        message_id="1730217600123456789", folder_id="1122334455"
+    )
+
+    assert results == []
+
+
+async def test_list_attachments_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}"
+        f"/folders/1122334455/messages/1730217600123456789/attachmentinfo"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_attachments(
+            message_id="1730217600123456789", folder_id="1122334455"
+        )
+
+
+async def test_list_calendars_fetches_and_normalizes(respx_mock, zoho_client):
+    route = respx_mock.get("https://calendar.zoho.com/api/v1/calendars").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "calendars": [
+                    {
+                        "uid": "cal-556677",
+                        "name": "ken",
+                        "isdefault": True,
+                        "timezone": "America/Los_Angeles",
+                        "privilege": "owner",
+                    }
+                ]
+            },
+        )
+    )
+
+    results = await zoho_client.list_calendars()
+
+    assert route.called
+    assert (
+        route.calls.last.request.headers["Authorization"]
+        == "Zoho-oauthtoken fake-access-token"
+    )
+    assert results == [
+        {
+            "id": "cal-556677",
+            "name": "ken",
+            "is_default": True,
+            "timezone": "America/Los_Angeles",
+            "privilege": "owner",
+        }
+    ]
+
+
+async def test_list_calendars_returns_empty_list_when_calendars_key_absent(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://calendar.zoho.com/api/v1/calendars").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    results = await zoho_client.list_calendars()
+
+    assert results == []
+
+
+async def test_list_calendars_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://calendar.zoho.com/api/v1/calendars").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_calendars()

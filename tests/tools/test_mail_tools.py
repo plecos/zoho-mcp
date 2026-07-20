@@ -1,4 +1,10 @@
-from zoho_mcp.tools.mail import get_email, search_emails
+from zoho_mcp.tools.mail import (
+    get_email,
+    list_attachments,
+    list_folders,
+    list_labels,
+    search_emails,
+)
 
 
 class FakeZohoClient:
@@ -7,6 +13,12 @@ class FakeZohoClient:
         self.get_email_calls = []
         self.search_result = [{"id": "1", "subject": "hi"}]
         self.get_email_result = {"id": "1", "text": "hello"}
+        self.list_attachments_calls = []
+        self.list_attachments_result = [{"id": "attach-1", "name": "roadmap.pdf"}]
+        self.list_folders_calls = 0
+        self.list_folders_result = [{"id": "folder-1", "name": "Inbox"}]
+        self.list_labels_calls = 0
+        self.list_labels_result = [{"id": "label-1", "name": "Notification"}]
 
     async def search_emails(self, query="", limit=20, days_back=None):
         self.search_calls.append(
@@ -17,6 +29,20 @@ class FakeZohoClient:
     async def get_email(self, message_id, folder_id):
         self.get_email_calls.append({"message_id": message_id, "folder_id": folder_id})
         return self.get_email_result
+
+    async def list_attachments(self, message_id, folder_id):
+        self.list_attachments_calls.append(
+            {"message_id": message_id, "folder_id": folder_id}
+        )
+        return self.list_attachments_result
+
+    async def list_folders(self):
+        self.list_folders_calls += 1
+        return self.list_folders_result
+
+    async def list_labels(self):
+        self.list_labels_calls += 1
+        return self.list_labels_result
 
 
 async def test_search_emails_delegates_to_client_and_returns_result():
@@ -51,3 +77,32 @@ async def test_get_email_delegates_to_client_with_message_and_folder_id():
 
     assert client.get_email_calls == [{"message_id": "msg-1", "folder_id": "folder-1"}]
     assert result == client.get_email_result
+
+
+async def test_list_attachments_delegates_to_client_with_message_and_folder_id():
+    client = FakeZohoClient()
+
+    result = await list_attachments(client, message_id="msg-1", folder_id="folder-1")
+
+    assert client.list_attachments_calls == [
+        {"message_id": "msg-1", "folder_id": "folder-1"}
+    ]
+    assert result == client.list_attachments_result
+
+
+async def test_list_folders_delegates_to_client():
+    client = FakeZohoClient()
+
+    result = await list_folders(client)
+
+    assert client.list_folders_calls == 1
+    assert result == client.list_folders_result
+
+
+async def test_list_labels_delegates_to_client():
+    client = FakeZohoClient()
+
+    result = await list_labels(client)
+
+    assert client.list_labels_calls == 1
+    assert result == client.list_labels_result

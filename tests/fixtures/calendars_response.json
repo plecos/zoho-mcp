@@ -1,0 +1,11 @@
+{
+  "calendars": [
+    {
+      "uid": "cal-556677",
+      "name": "ken",
+      "isdefault": true,
+      "timezone": "America/Los_Angeles",
+      "privilege": "owner"
+    }
+  ]
+}

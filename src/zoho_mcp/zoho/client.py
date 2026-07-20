@@ -164,6 +164,86 @@ def normalize_email_content(raw: dict, *, strip_invisible_chars: bool = False) -
         raise ZohoAPIError(f"Malformed email content from Zoho: {e}") from e
 
 
+def normalize_folder(raw: dict) -> dict:
+    """Normalize one folder from Zoho Mail's Folders API.
+
+    ``path`` (e.g. "/Inbox/Work") is the hierarchy signal -- ``folderId``/
+    ``previousFolderId`` is NOT a parent reference despite the name; it's
+    a display-order "previous sibling" pointer (confirmed live: Drafts'
+    ``previousFolderId`` is Inbox's own folderId, Templates' is Drafts',
+    and so on -- a linked list, not a tree), so it's deliberately excluded
+    here rather than mislabeled as a parent id.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``folderId``/``folderName``/
+            ``path``/``folderType``.
+    """
+    try:
+        return {
+            "id": raw["folderId"],
+            "name": raw["folderName"],
+            "path": raw["path"],
+            "type": raw["folderType"],
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed folder from Zoho: {e}") from e
+
+
+def normalize_label(raw: dict) -> dict:
+    """Normalize one label from Zoho Mail's Labels API.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``labelId``/``displayName``.
+    """
+    try:
+        return {
+            "id": raw["labelId"],
+            "name": raw["displayName"],
+            "color": raw.get("color", ""),
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed label from Zoho: {e}") from e
+
+
+def normalize_attachment(raw: dict) -> dict:
+    """Normalize one attachment entry from Zoho Mail's attachment info API.
+
+    Metadata only -- fetching/parsing actual attachment content (PDFs,
+    images, etc.) is out of scope; there's no document-parsing
+    infrastructure here to make binary content usefully consumable.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``attachmentId``/
+            ``attachmentName``/``attachmentSize``.
+    """
+    try:
+        return {
+            "id": raw["attachmentId"],
+            "name": raw["attachmentName"],
+            "size_bytes": raw["attachmentSize"],
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed attachment from Zoho: {e}") from e
+
+
+def normalize_calendar(raw: dict) -> dict:
+    """Normalize one calendar from Zoho Calendar's Calendars API.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``uid``/``name``.
+    """
+    try:
+        return {
+            "id": raw["uid"],
+            "name": raw["name"],
+            "is_default": raw.get("isdefault", False),
+            "timezone": raw.get("timezone", ""),
+            "privilege": raw.get("privilege", ""),
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed calendar from Zoho: {e}") from e
+
+
 def normalize_event(raw: dict, mailbox_timezone: str) -> dict:
     """Normalize one entry from Zoho Calendar's Events List ``events`` array.
 
@@ -692,8 +772,53 @@ class ZohoClient:
             payload["data"], strip_invisible_chars=self._strip_invisible_chars
         )
 
-    async def list_events(self, start: datetime, end: datetime) -> list[dict]:
+    async def list_attachments(self, message_id: str, folder_id: str) -> list[dict]:
+        """List attachment metadata (name, size) for one email.
+
+        Metadata only -- fetching/parsing actual attachment content is
+        out of scope, see ``normalize_attachment``.
+
+        Raises:
+            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        """
+        payload = await self._get(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}"
+            f"/folders/{folder_id}/messages/{message_id}/attachmentinfo"
+        )
+        attachments = payload.get("data", {}).get("attachments", [])
+        return [normalize_attachment(a) for a in attachments]
+
+    async def list_folders(self) -> list[dict]:
+        """List all folders in the mailbox, including custom subfolders.
+
+        Raises:
+            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        """
+        payload = await self._get(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/folders"
+        )
+        return [normalize_folder(f) for f in payload.get("data", [])]
+
+    async def list_labels(self) -> list[dict]:
+        """List all labels/tags configured in the mailbox.
+
+        Raises:
+            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        """
+        payload = await self._get(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/labels"
+        )
+        return [normalize_label(item) for item in payload.get("data", [])]
+
+    async def list_events(
+        self, start: datetime, end: datetime, calendar_id: str | None = None
+    ) -> list[dict]:
         """List calendar events in ``[start, end]``.
+
+        Args:
+            calendar_id: which calendar to query -- defaults to the
+                configured ``ZOHO_CALENDAR_UID`` if omitted. Use
+                ``list_calendars`` to see what else is available.
 
         Raises:
             ZohoAPIError: if the range exceeds Zoho's 31-day cap, or the
@@ -719,7 +844,7 @@ class ZohoClient:
         # UTC, so the LLM never has to convert a timezone it doesn't know.
         mailbox_timezone = await self._get_mailbox_timezone()
         payload = await self._get(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{self._calendar_uid}/events",
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events",
             params={"range": range_param},
         )
         return [
@@ -727,8 +852,12 @@ class ZohoClient:
             for item in payload.get("events", [])
         ]
 
-    async def get_event(self, uid: str) -> dict:
+    async def get_event(self, uid: str, calendar_id: str | None = None) -> dict:
         """Fetch full details for one event by uid.
+
+        Args:
+            calendar_id: which calendar the event belongs to -- defaults
+                to the configured ``ZOHO_CALENDAR_UID`` if omitted.
 
         See ``normalize_event_detail`` for why this deliberately omits
         start/end -- get the occurrence's actual date/time from
@@ -739,12 +868,21 @@ class ZohoClient:
                 Calendar API rejects or fails the request.
         """
         payload = await self._get(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{self._calendar_uid}/events/{uid}"
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}"
         )
         events = payload.get("events", [])
         if not events:
             raise ZohoAPIError(f"No event found for uid={uid!r}")
         return normalize_event_detail(events[0])
+
+    async def list_calendars(self) -> list[dict]:
+        """List all calendars the user has access to.
+
+        Raises:
+            ZohoAPIError: if the Calendar API rejects or fails the request.
+        """
+        payload = await self._get(f"{ZOHO_CALENDAR_BASE_URL}/calendars")
+        return [normalize_calendar(c) for c in payload.get("calendars", [])]
 
     async def list_branches(self) -> list[dict]:
         """List the office branches configured for Resource Booking,

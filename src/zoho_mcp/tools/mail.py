@@ -55,3 +55,57 @@ async def get_email(client: ZohoClient, message_id: str, folder_id: str) -> dict
         ZohoAPIError: if the Zoho Mail API rejects or fails the request.
     """
     return await client.get_email(message_id=message_id, folder_id=folder_id)
+
+
+async def list_attachments(
+    client: ZohoClient, message_id: str, folder_id: str
+) -> list[dict]:
+    """List attachment metadata (name, size) for one email.
+
+    Args:
+        client: injected Zoho client.
+        message_id: an email's ``id`` from a prior ``search_emails`` result.
+        folder_id: that same email's ``folder_id`` from ``search_emails``.
+
+    Returns:
+        ``[{"id": ..., "name": ..., "size_bytes": ...}, ...]``. Metadata
+        only -- reading the actual file content of an attachment isn't
+        supported.
+
+    Raises:
+        ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+    """
+    return await client.list_attachments(message_id=message_id, folder_id=folder_id)
+
+
+async def list_folders(client: ZohoClient) -> list[dict]:
+    """List all folders in the mailbox, including custom subfolders.
+
+    Args:
+        client: injected Zoho client.
+
+    Returns:
+        Each folder has id, name, path (e.g. "/Inbox/Work" -- the
+        hierarchy signal), and type. Pass a folder's name to
+        ``search_emails``'s ``in:`` qualifier to search it.
+
+    Raises:
+        ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+    """
+    return await client.list_folders()
+
+
+async def list_labels(client: ZohoClient) -> list[dict]:
+    """List all labels/tags configured in the mailbox.
+
+    Args:
+        client: injected Zoho client.
+
+    Returns:
+        Each label has id, name, color. Pass a label's name to
+        ``search_emails``'s ``label:`` qualifier to search it.
+
+    Raises:
+        ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+    """
+    return await client.list_labels()

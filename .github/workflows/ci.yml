@@ -13,6 +13,7 @@ jobs:
       - uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
+          cache-suffix: lint
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -24,6 +25,7 @@ jobs:
       - uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
+          cache-suffix: typecheck
       - run: uv sync --locked
       - run: uv run mypy
 
@@ -34,5 +36,6 @@ jobs:
       - uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
+          cache-suffix: test
       - run: uv sync --locked
       - run: uv run pytest -q

@@ -1239,6 +1239,57 @@ async def test_list_labels_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_
         await zoho_client.list_labels()
 
 
+async def test_list_signatures_fetches_and_normalizes(respx_mock, zoho_client):
+    route = respx_mock.get("https://mail.zoho.com/api/accounts/signature").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "sig-1",
+                        "name": "default",
+                        "content": "<div>Regards,<br/>Jamie Rivera</div>",
+                    }
+                ]
+            },
+        )
+    )
+
+    results = await zoho_client.list_signatures()
+
+    assert route.called
+    assert (
+        route.calls.last.request.headers["Authorization"]
+        == "Zoho-oauthtoken fake-access-token"
+    )
+    assert results[0]["id"] == "sig-1"
+    assert results[0]["name"] == "default"
+    assert "Jamie Rivera" in results[0]["content"]
+
+
+async def test_list_signatures_returns_empty_list_when_data_key_absent(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/accounts/signature").mock(
+        return_value=httpx.Response(200, json={"status": {"code": 200}})
+    )
+
+    results = await zoho_client.list_signatures()
+
+    assert results == []
+
+
+async def test_list_signatures_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/accounts/signature").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_signatures()
+
+
 async def test_list_attachments_fetches_and_normalizes(respx_mock, zoho_client):
     route = respx_mock.get(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}"

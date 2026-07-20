@@ -164,6 +164,28 @@ def normalize_email_content(raw: dict, *, strip_invisible_chars: bool = False) -
         raise ZohoAPIError(f"Malformed email content from Zoho: {e}") from e
 
 
+def normalize_signature(raw: dict) -> dict:
+    """Normalize one signature from Zoho Mail's Signature API.
+
+    ``content`` is stripped from HTML to plain text, same as
+    ``normalize_email_content``.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``id``/``name``/``content``.
+    """
+    try:
+        text = BeautifulSoup(raw["content"], "html.parser").get_text(
+            separator="\n", strip=True
+        )
+        return {
+            "id": raw["id"],
+            "name": raw["name"],
+            "content": text,
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed signature from Zoho: {e}") from e
+
+
 def normalize_folder(raw: dict) -> dict:
     """Normalize one folder from Zoho Mail's Folders API.
 
@@ -809,6 +831,15 @@ class ZohoClient:
             f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/labels"
         )
         return [normalize_label(item) for item in payload.get("data", [])]
+
+    async def list_signatures(self) -> list[dict]:
+        """List all configured email signatures.
+
+        Raises:
+            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        """
+        payload = await self._get(f"{ZOHO_MAIL_BASE_URL}/accounts/signature")
+        return [normalize_signature(item) for item in payload.get("data", [])]
 
     async def list_events(
         self, start: datetime, end: datetime, calendar_id: str | None = None

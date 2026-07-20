@@ -105,6 +105,14 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         return await mail_tools.list_labels(client)
 
     @mcp.tool(annotations=_READ_ONLY)
+    async def list_signatures() -> list[dict]:
+        """List all configured email signatures.
+
+        Each has id, name, content (plain text).
+        """
+        return await mail_tools.list_signatures(client)
+
+    @mcp.tool(annotations=_READ_ONLY)
     async def list_events(
         start: str, end: str, calendar_id: str | None = None
     ) -> list[dict]:

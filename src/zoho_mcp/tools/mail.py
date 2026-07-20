@@ -109,3 +109,18 @@ async def list_labels(client: ZohoClient) -> list[dict]:
         ZohoAPIError: if the Zoho Mail API rejects or fails the request.
     """
     return await client.list_labels()
+
+
+async def list_signatures(client: ZohoClient) -> list[dict]:
+    """List all configured email signatures.
+
+    Args:
+        client: injected Zoho client.
+
+    Returns:
+        Each signature has id, name, content (plain text).
+
+    Raises:
+        ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+    """
+    return await client.list_signatures()

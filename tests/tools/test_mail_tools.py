@@ -3,6 +3,7 @@ from zoho_mcp.tools.mail import (
     list_attachments,
     list_folders,
     list_labels,
+    list_signatures,
     search_emails,
 )
 
@@ -19,6 +20,8 @@ class FakeZohoClient:
         self.list_folders_result = [{"id": "folder-1", "name": "Inbox"}]
         self.list_labels_calls = 0
         self.list_labels_result = [{"id": "label-1", "name": "Notification"}]
+        self.list_signatures_calls = 0
+        self.list_signatures_result = [{"id": "sig-1", "name": "default"}]
 
     async def search_emails(self, query="", limit=20, days_back=None):
         self.search_calls.append(
@@ -43,6 +46,10 @@ class FakeZohoClient:
     async def list_labels(self):
         self.list_labels_calls += 1
         return self.list_labels_result
+
+    async def list_signatures(self):
+        self.list_signatures_calls += 1
+        return self.list_signatures_result
 
 
 async def test_search_emails_delegates_to_client_and_returns_result():
@@ -106,3 +113,12 @@ async def test_list_labels_delegates_to_client():
 
     assert client.list_labels_calls == 1
     assert result == client.list_labels_result
+
+
+async def test_list_signatures_delegates_to_client():
+    client = FakeZohoClient()
+
+    result = await list_signatures(client)
+
+    assert client.list_signatures_calls == 1
+    assert result == client.list_signatures_result

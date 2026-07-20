@@ -17,6 +17,7 @@ from zoho_mcp.zoho.client import (
     normalize_label,
     normalize_note,
     normalize_resource,
+    normalize_signature,
     normalize_task,
 )
 
@@ -495,6 +496,26 @@ def test_normalize_calendar_raises_clear_error_on_missing_field():
 
     with pytest.raises(ZohoAPIError, match="calendar"):
         normalize_calendar(raw)
+
+
+def test_normalize_signature_strips_html_to_plain_text():
+    raw = load_fixture("signatures_response.json")["data"][0]
+
+    result = normalize_signature(raw)
+
+    assert result["id"] == "sig-1"
+    assert result["name"] == "default"
+    assert "<" not in result["content"]
+    assert "Regards" in result["content"]
+    assert "Jamie Rivera" in result["content"]
+
+
+def test_normalize_signature_raises_clear_error_on_missing_field():
+    raw = load_fixture("signatures_response.json")["data"][0]
+    del raw["content"]
+
+    with pytest.raises(ZohoAPIError, match="signature"):
+        normalize_signature(raw)
 
 
 def test_normalize_note_maps_core_fields():

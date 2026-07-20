@@ -175,3 +175,67 @@ async def create_event(
         attendees=attendees,
         calendar_id=calendar_id,
     )
+
+
+async def update_event(
+    client: ZohoClient,
+    uid: str,
+    title: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    description: str | None = None,
+    location: str | None = None,
+    attendees: list[str] | None = None,
+    calendar_id: str | None = None,
+) -> dict:
+    """Update an existing calendar event. Only given fields are changed.
+
+    Args:
+        client: injected Zoho client.
+        uid: the event's id, from a prior list_events/get_event/create_event result.
+        title/start/end/description/location/attendees: only the fields
+            being changed need to be given. start/end (ISO 8601 datetime
+            strings with a UTC offset) must be given together.
+        calendar_id: which calendar the event belongs to -- defaults to
+            the user's configured default calendar if omitted.
+
+    Returns:
+        The updated event, normalized the same way as get_event.
+
+    Raises:
+        ValueError: if start/end are given and aren't valid ISO 8601
+            strings with a UTC offset.
+        ZohoAPIError: if start/end are given inconsistently, end isn't
+            after start, no event is found for uid, or the Calendar API
+            rejects or fails the request.
+    """
+    return await client.update_event(
+        uid=uid,
+        title=title,
+        start=_parse_iso8601_utc(start, field_name="start")
+        if start is not None
+        else None,
+        end=_parse_iso8601_utc(end, field_name="end") if end is not None else None,
+        description=description,
+        location=location,
+        attendees=attendees,
+        calendar_id=calendar_id,
+    )
+
+
+async def delete_event(
+    client: ZohoClient, uid: str, calendar_id: str | None = None
+) -> None:
+    """Delete an existing calendar event.
+
+    Args:
+        client: injected Zoho client.
+        uid: the event's id, from a prior list_events/get_event/create_event result.
+        calendar_id: which calendar the event belongs to -- defaults to
+            the user's configured default calendar if omitted.
+
+    Raises:
+        ZohoAPIError: if no event is found for uid, or the Calendar API
+            rejects or fails the request.
+    """
+    await client.delete_event(uid, calendar_id=calendar_id)

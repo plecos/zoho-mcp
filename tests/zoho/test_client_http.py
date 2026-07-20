@@ -1651,3 +1651,259 @@ async def test_create_event_wraps_http_errors_as_zoho_api_error(
 
     with pytest.raises(ZohoAPIError):
         await zoho_client.create_event(title="Sync", start=start, end=end)
+
+
+def _raw_event_for_update():
+    return {
+        "uid": "evt-1",
+        "title": "Old Title",
+        "organizer": "user@example.com",
+        "createdby": "user@example.com",
+        "modifiedby": "user@example.com",
+        "viewEventURL": "https://calendar.zoho.com/zc/viewevent/evt-1",
+        "role": "organizer",
+        "calid": "cal-internal-id",
+        "caluid": "cal-internal-uid",
+        # Confirmed live: this response-only field is NOT valid write
+        # input (a different, incompatible thing from the write-side
+        # "notify_attendee") -- resending it verbatim causes a real 400
+        # "PATTERN_NOT_MATCHED" error. Included here so the merge logic
+        # is tested against the exact shape that broke live.
+        "notifyType": 0,
+        "etag": "111222333",
+        "dateandtime": {
+            "start": "20260721T160000Z",
+            "end": "20260721T170000Z",
+        },
+        "description": "Old description",
+        "location": "Old location",
+        "attendees": [{"email": "old@example.com", "status": "ACCEPTED"}],
+        "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO",
+        "reminders": [{"action": "popup", "minutes": -30}],
+    }
+
+
+async def test_update_event_fetches_current_event_then_puts_merged_result(
+    respx_mock, zoho_client
+):
+    get_route = respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    put_route = respx_mock.put(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [
+                    {
+                        "uid": "evt-1",
+                        "title": "New Title",
+                        "organizer": "user@example.com",
+                    }
+                ]
+            },
+        )
+    )
+
+    result = await zoho_client.update_event(uid="evt-1", title="New Title")
+
+    assert get_route.called
+    assert put_route.called
+    sent_eventdata = json.loads(put_route.calls.last.request.url.params["eventdata"])
+    # Changed field applied...
+    assert sent_eventdata["title"] == "New Title"
+    # ...but everything untouched carried forward as-is, including etag
+    # (mandatory for the update to be accepted) and fields with no
+    # dedicated update_event argument at all (rrule, reminders) -- Zoho's
+    # update is a full replace, so omitting these would silently delete them.
+    assert sent_eventdata["etag"] == "111222333"
+    assert sent_eventdata["description"] == "Old description"
+    assert sent_eventdata["location"] == "Old location"
+    assert sent_eventdata["rrule"] == "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO"
+    assert sent_eventdata["reminders"] == [{"action": "popup", "minutes": -30}]
+    assert "uid" not in sent_eventdata  # goes in the URL, not the body
+    # Response-only fields, including the exact one that caused a real
+    # live 400 "PATTERN_NOT_MATCHED" when echoed back verbatim.
+    for field in (
+        "notifyType",
+        "organizer",
+        "createdby",
+        "modifiedby",
+        "viewEventURL",
+        "role",
+        "calid",
+        "caluid",
+    ):
+        assert field not in sent_eventdata
+    assert result["id"] == "evt-1"
+    assert result["title"] == "New Title"
+
+
+async def test_update_event_overrides_only_given_fields(respx_mock, zoho_client):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    put_route = respx_mock.put(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [
+                    {"uid": "evt-1", "title": "Old Title", "organizer": "u@e.com"}
+                ]
+            },
+        )
+    )
+    start = datetime(2026, 7, 22, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 22, 17, 0, 0, tzinfo=timezone.utc)
+
+    await zoho_client.update_event(
+        uid="evt-1",
+        start=start,
+        end=end,
+        description="New description",
+        location="New location",
+        attendees=["new@example.com"],
+    )
+
+    sent_eventdata = json.loads(put_route.calls.last.request.url.params["eventdata"])
+    assert sent_eventdata["title"] == "Old Title"  # untouched
+    assert sent_eventdata["dateandtime"] == {
+        "start": "20260722T160000Z",
+        "end": "20260722T170000Z",
+        "timezone": "UTC",
+    }
+    assert sent_eventdata["description"] == "New description"
+    assert sent_eventdata["location"] == "New location"
+    assert sent_eventdata["attendees"] == [
+        {"email": "new@example.com", "status": "NEEDS-ACTION"}
+    ]
+
+
+async def test_update_event_uses_given_calendar_id_instead_of_default(
+    respx_mock, zoho_client
+):
+    get_route = respx_mock.get(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    put_route = respx_mock.put(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events/evt-1"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"events": [{"uid": "evt-1", "title": "T", "organizer": "u@e.com"}]},
+        )
+    )
+
+    await zoho_client.update_event(uid="evt-1", title="T", calendar_id="other-cal")
+
+    assert get_route.called
+    assert put_route.called
+
+
+async def test_update_event_rejects_start_without_end(respx_mock, zoho_client):
+    route = respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    )
+
+    with pytest.raises(ZohoAPIError, match="start and end must be given together"):
+        await zoho_client.update_event(
+            uid="evt-1", start=datetime(2026, 7, 22, tzinfo=timezone.utc)
+        )
+
+    assert not route.called
+
+
+async def test_update_event_rejects_end_before_start(respx_mock, zoho_client):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    start = datetime(2026, 7, 22, 17, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 22, 16, 0, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError, match="end must be after start"):
+        await zoho_client.update_event(uid="evt-1", start=start, end=end)
+
+
+async def test_update_event_raises_clear_error_when_event_not_found(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-missing"
+    ).mock(return_value=httpx.Response(200, json={"events": []}))
+
+    with pytest.raises(ZohoAPIError, match="evt-missing"):
+        await zoho_client.update_event(uid="evt-missing", title="New Title")
+
+
+async def test_update_event_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    respx_mock.put(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.update_event(uid="evt-1", title="New Title")
+
+
+async def test_delete_event_fetches_etag_then_deletes(respx_mock, zoho_client):
+    get_route = respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    delete_route = respx_mock.delete(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    await zoho_client.delete_event(uid="evt-1")
+
+    assert get_route.called
+    assert delete_route.called
+    sent_eventdata = json.loads(delete_route.calls.last.request.url.params["eventdata"])
+    assert sent_eventdata["etag"] == "111222333"
+
+
+async def test_delete_event_uses_given_calendar_id_instead_of_default(
+    respx_mock, zoho_client
+):
+    get_route = respx_mock.get(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    delete_route = respx_mock.delete(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    await zoho_client.delete_event(uid="evt-1", calendar_id="other-cal")
+
+    assert get_route.called
+    assert delete_route.called
+
+
+async def test_delete_event_raises_clear_error_when_event_not_found(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-missing"
+    ).mock(return_value=httpx.Response(200, json={"events": []}))
+
+    with pytest.raises(ZohoAPIError, match="evt-missing"):
+        await zoho_client.delete_event(uid="evt-missing")
+
+
+async def test_delete_event_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    respx_mock.delete(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.delete_event(uid="evt-1")

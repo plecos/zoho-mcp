@@ -24,6 +24,40 @@ ZOHO_BOOKMARKS_BASE_URL = "https://mail.zoho.com/api/links/me"
 ZOHO_BRANCHES_URL = "https://calendar.zoho.com/api/v1/branches"
 ZOHO_RESOURCES_URL = "https://calendar.zoho.com/api/v1/resources"
 MAX_EVENT_RANGE_DAYS = 31
+
+# Zoho's own documented eventdata fields accepted by create/update -- see
+# https://www.zoho.com/calendar/help/api/post-create-event.html. Confirmed
+# live that blindly echoing an event's *entire* raw GET response back into
+# an update's eventdata fails: the GET response's "notifyType" (an int,
+# response-only) isn't valid input and gets rejected with a 400
+# "PATTERN_NOT_MATCHED" -- it is NOT the same field as the write-side
+# "notify_attendee". update_event carries forward only fields in this set
+# from the current event, rather than the full raw object, specifically
+# to avoid resending response-only fields Zoho's write endpoint rejects.
+_EVENT_WRITABLE_FIELDS = frozenset(
+    {
+        "title",
+        "isallday",
+        "isprivate",
+        "url",
+        "location",
+        "description",
+        "richtext_description",
+        "color",
+        "attendees",
+        "group_attendees",
+        "reminders",
+        "calendar_alarm",
+        "notify_attendee",
+        "attach",
+        "transparency",
+        "conference",
+        "allowForwarding",
+        "rrule",
+        "repeat",
+        "dateandtime",
+    }
+)
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
 MIN_TASKS_LIMIT = 1
@@ -1120,6 +1154,133 @@ class ZohoClient:
         if not events:
             raise ZohoAPIError("Zoho did not return the created event")
         return normalize_event_detail(events[0])
+
+    async def _get_raw_event(self, uid: str, calendar_id: str | None = None) -> dict:
+        """Fetch one event's raw, complete Zoho representation (unnormalized).
+
+        Used internally by ``update_event``/``delete_event``, which need
+        the current ``etag`` (mandatory for both) and, for update, the
+        full current field set to merge against -- Zoho's update endpoint
+        replaces the entire event, so any field not resent is deleted.
+
+        Raises:
+            ZohoAPIError: if no event is found for ``uid``, or the
+                Calendar API rejects or fails the request.
+        """
+        payload = await self._get(
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}"
+        )
+        events = payload.get("events", [])
+        if not events:
+            raise ZohoAPIError(f"No event found for uid={uid!r}")
+        return events[0]
+
+    async def update_event(
+        self,
+        uid: str,
+        title: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        description: str | None = None,
+        location: str | None = None,
+        attendees: list[str] | None = None,
+        calendar_id: str | None = None,
+    ) -> dict:
+        """Update an existing calendar event.
+
+        Only fields explicitly given are changed -- everything else is
+        carried forward from the event's current state (fields in
+        ``_EVENT_WRITABLE_FIELDS`` only, not the full raw GET response --
+        confirmed live that resending an event's full raw representation
+        verbatim fails, since some fields the GET response includes
+        aren't valid write input; see ``_EVENT_WRITABLE_FIELDS``). This
+        matters because Zoho's update endpoint is a full replace, not a
+        partial patch: it "overwrites all existing fields with the values
+        provided in the request" (confirmed in Zoho's own docs), so any
+        writable field silently omitted -- including ones this method
+        doesn't expose an argument for, like ``rrule``/``reminders`` --
+        would be deleted from the event, not left alone.
+
+        Args:
+            uid: the event's id, from a prior ``list_events``/``get_event``/
+                ``create_event`` result.
+            title/start/end/description/location/attendees: only the
+                fields being changed need to be given. ``start``/``end``
+                must be given together (both or neither) -- there's no
+                sensible default for "change only one".
+            calendar_id: which calendar the event belongs to -- defaults
+                to the configured default calendar if omitted.
+
+        Returns:
+            The updated event, normalized the same way as ``get_event``.
+
+        Raises:
+            ZohoAPIError: if ``start``/``end`` are given inconsistently,
+                ``end`` isn't after ``start``, no event is found for
+                ``uid``, or the Calendar API rejects or fails the request.
+        """
+        if (start is None) != (end is None):
+            raise ZohoAPIError("start and end must be given together")
+        if start is not None and end is not None and end <= start:
+            raise ZohoAPIError(
+                f"end must be after start (got start={start.isoformat()}, "
+                f"end={end.isoformat()})"
+            )
+
+        raw = await self._get_raw_event(uid, calendar_id)
+        eventdata = {k: v for k, v in raw.items() if k in _EVENT_WRITABLE_FIELDS}
+        eventdata["etag"] = raw[
+            "etag"
+        ]  # mandatory for update, not itself writable data
+
+        if title is not None:
+            eventdata["title"] = title
+        if start is not None and end is not None:
+            eventdata["dateandtime"] = {
+                "start": start.astimezone(timezone.utc).strftime(
+                    ZOHO_EVENT_RANGE_REQUEST_FORMAT
+                ),
+                "end": end.astimezone(timezone.utc).strftime(
+                    ZOHO_EVENT_RANGE_REQUEST_FORMAT
+                ),
+                "timezone": "UTC",
+            }
+        if description is not None:
+            eventdata["description"] = description
+        if location is not None:
+            eventdata["location"] = location
+        if attendees is not None:
+            eventdata["attendees"] = [
+                {"email": email, "status": "NEEDS-ACTION"} for email in attendees
+            ]
+
+        payload = await self._put(
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}",
+            params={"eventdata": json.dumps(eventdata)},
+        )
+        events = payload.get("events", [])
+        if not events:
+            raise ZohoAPIError("Zoho did not return the updated event")
+        return normalize_event_detail(events[0])
+
+    async def delete_event(self, uid: str, calendar_id: str | None = None) -> None:
+        """Delete an existing calendar event.
+
+        Args:
+            uid: the event's id, from a prior ``list_events``/``get_event``/
+                ``create_event`` result.
+            calendar_id: which calendar the event belongs to -- defaults
+                to the configured default calendar if omitted.
+
+        Raises:
+            ZohoAPIError: if no event is found for ``uid``, or the
+                Calendar API rejects or fails the request.
+        """
+        raw = await self._get_raw_event(uid, calendar_id)
+        await self._delete(
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}",
+            params={"eventdata": json.dumps({"etag": raw["etag"]})},
+        )
 
     async def list_branches(self) -> list[dict]:
         """List the office branches configured for Resource Booking,

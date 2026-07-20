@@ -30,6 +30,8 @@ _READ_ONLY = ToolAnnotations(readOnlyHint=True)
 _CREATE = ToolAnnotations(
     readOnlyHint=False, destructiveHint=False, idempotentHint=False
 )
+_UPDATE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True)
+_DELETE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True)
 
 
 def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> FastMCP:
@@ -219,6 +221,54 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             attendees=attendees,
             calendar_id=calendar_id,
         )
+
+    @mcp.tool(annotations=_UPDATE)
+    async def update_event(
+        uid: str,
+        title: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        description: str | None = None,
+        location: str | None = None,
+        attendees: list[str] | None = None,
+        calendar_id: str | None = None,
+    ) -> dict:
+        """Update an existing Zoho Calendar event. Only given fields are
+        changed -- everything else about the event is left as-is.
+
+        uid: the event's id, from a prior list_events/get_event/
+        create_event result.
+        title/start/end/description/location/attendees (all optional):
+        only pass the ones you're changing. start/end (ISO 8601 datetime
+        strings with an explicit UTC offset) must be given together --
+        there's no sensible default for changing only one.
+        calendar_id (optional): which calendar the event belongs to --
+        defaults to the user's configured default calendar.
+
+        Returns the updated event, normalized the same way as get_event.
+        """
+        return await calendar_tools.update_event(
+            client,
+            uid=uid,
+            title=title,
+            start=start,
+            end=end,
+            description=description,
+            location=location,
+            attendees=attendees,
+            calendar_id=calendar_id,
+        )
+
+    @mcp.tool(annotations=_DELETE)
+    async def delete_event(uid: str, calendar_id: str | None = None) -> None:
+        """Delete an existing Zoho Calendar event. Irreversible.
+
+        uid: the event's id, from a prior list_events/get_event/
+        create_event result.
+        calendar_id (optional): which calendar the event belongs to --
+        defaults to the user's configured default calendar.
+        """
+        await calendar_tools.delete_event(client, uid=uid, calendar_id=calendar_id)
 
     @mcp.tool(annotations=_READ_ONLY)
     async def list_branches() -> list[dict]:

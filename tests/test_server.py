@@ -32,6 +32,22 @@ class FakeZohoClient:
     ):
         return {}
 
+    async def update_event(
+        self,
+        uid,
+        title=None,
+        start=None,
+        end=None,
+        description=None,
+        location=None,
+        attendees=None,
+        calendar_id=None,
+    ):
+        return {}
+
+    async def delete_event(self, uid, calendar_id=None):
+        return None
+
     async def list_attachments(self, message_id, folder_id):
         return []
 
@@ -80,7 +96,7 @@ class FakeContactsClient:
         return {"personal": 0, "organization": 0, "total": 0}
 
 
-async def test_create_server_registers_all_twenty_two_tools():
+async def test_create_server_registers_all_twenty_four_tools():
     server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
@@ -98,6 +114,8 @@ async def test_create_server_registers_all_twenty_two_tools():
         "list_calendars",
         "get_freebusy",
         "create_event",
+        "update_event",
+        "delete_event",
         "list_tasks",
         "get_task",
         "list_notes",
@@ -112,19 +130,23 @@ async def test_create_server_registers_all_twenty_two_tools():
     }
 
 
+_WRITE_TOOL_NAMES = {"create_event", "update_event", "delete_event"}
+
+
 async def test_read_only_tools_are_annotated_correctly():
     server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
-    read_only_tools = [t for t in tools if t.name != "create_event"]
+    read_only_tools = [t for t in tools if t.name not in _WRITE_TOOL_NAMES]
 
     assert all(tool.annotations.readOnlyHint is True for tool in read_only_tools)
 
 
-async def test_create_event_is_not_annotated_read_only():
+async def test_write_tools_are_not_annotated_read_only():
     server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
-    create_event_tool = next(t for t in tools if t.name == "create_event")
+    write_tools = [t for t in tools if t.name in _WRITE_TOOL_NAMES]
 
-    assert create_event_tool.annotations.readOnlyHint is False
+    assert len(write_tools) == len(_WRITE_TOOL_NAMES)
+    assert all(tool.annotations.readOnlyHint is False for tool in write_tools)

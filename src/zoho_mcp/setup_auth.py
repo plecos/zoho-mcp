@@ -49,7 +49,9 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.end_headers()
-        self.wfile.write(b"<html><body>Authorized. You can close this tab.</body></html>")
+        self.wfile.write(
+            b"<html><body>Authorized. You can close this tab.</body></html>"
+        )
 
     def log_message(self, format: str, *args: object) -> None:
         pass  # suppress http.server's default request logging to stderr

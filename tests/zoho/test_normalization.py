@@ -315,7 +315,13 @@ def test_normalize_task_treats_null_description_and_tags_as_empty():
     # Matches the Contacts/Calendar precedent -- Zoho can send an explicit
     # null (not an absent key) for empty fields, which raw.get(key, "")
     # would not catch.
-    raw = {"id": "1", "title": "Solo task", "status": "Open", "description": None, "tags": None}
+    raw = {
+        "id": "1",
+        "title": "Solo task",
+        "status": "Open",
+        "description": None,
+        "tags": None,
+    }
 
     result = normalize_task(raw)
 

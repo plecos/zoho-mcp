@@ -60,7 +60,9 @@ def _epoch_ms_to_iso8601(epoch_ms: str, tz_name: str) -> str:
     doesn't know, which is exactly what produced a wrong displayed time
     despite the underlying UTC value always having been correct.
     """
-    return datetime.fromtimestamp(int(epoch_ms) / 1000, tz=ZoneInfo(tz_name)).isoformat()
+    return datetime.fromtimestamp(
+        int(epoch_ms) / 1000, tz=ZoneInfo(tz_name)
+    ).isoformat()
 
 
 def _zoho_event_time_to_iso8601(value: str, tz_name: str) -> str:
@@ -170,7 +172,9 @@ def normalize_event(raw: dict, mailbox_timezone: str) -> dict:
         return {
             "id": raw["uid"],
             "title": raw["title"],
-            "start": _zoho_event_time_to_iso8601(dateandtime["start"], mailbox_timezone),
+            "start": _zoho_event_time_to_iso8601(
+                dateandtime["start"], mailbox_timezone
+            ),
             "end": _zoho_event_time_to_iso8601(dateandtime["end"], mailbox_timezone),
             "attendees": [
                 {"email": a["email"], "status": a["status"]}
@@ -576,7 +580,9 @@ class ZohoClient:
             params={"searchKey": search_key, "limit": limit},
         )
         raw_items = payload.get("data", [])
-        results = [normalize_email_summary(item, mailbox_timezone) for item in raw_items]
+        results = [
+            normalize_email_summary(item, mailbox_timezone) for item in raw_items
+        ]
 
         # Skip the folder-type fetch entirely when there's nothing to
         # filter, or when the caller explicitly scoped the search to a

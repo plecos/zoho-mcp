@@ -91,7 +91,9 @@ async def test_refresh_raises_zoho_auth_error_on_failure(respx_mock, http_client
 
 
 async def test_refresh_wraps_network_error_as_zoho_auth_error(respx_mock, http_client):
-    respx_mock.post(TOKEN_URL).mock(side_effect=httpx.ConnectError("connection refused"))
+    respx_mock.post(TOKEN_URL).mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
     manager = ZohoTokenManager(
         client_id="id",
         client_secret="secret",
@@ -141,9 +143,7 @@ def test_store_refresh_token_writes_via_keyring(monkeypatch):
     calls = {}
     monkeypatch.setattr(
         "zoho_mcp.zoho.auth.keyring.set_password",
-        lambda service, key, value: calls.update(
-            service=service, key=key, value=value
-        ),
+        lambda service, key, value: calls.update(service=service, key=key, value=value),
     )
 
     store_refresh_token("abc123")

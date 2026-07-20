@@ -100,9 +100,7 @@ async def test_search_contacts_surfaces_has_more_true_from_either_scope(
 async def test_search_contacts_truncates_merged_results_to_limit_and_flags_has_more(
     respx_mock, contacts_client
 ):
-    self_contacts = [
-        {"contact_id": f"self-{i}", "first_name": "Sam"} for i in range(3)
-    ]
+    self_contacts = [{"contact_id": f"self-{i}", "first_name": "Sam"} for i in range(3)]
     org_contacts = [{"contact_id": f"org-{i}", "first_name": "Org"} for i in range(3)]
     respx_mock.get(ZOHO_CONTACTS_SELF_URL).mock(
         return_value=httpx.Response(200, json={"contacts": self_contacts})
@@ -225,7 +223,9 @@ async def test_search_contacts_wraps_http_errors_as_zoho_api_error(
         await contacts_client.search_contacts(query="Jamie")
 
 
-async def test_get_contact_fetches_by_id_from_personal_scope(respx_mock, contacts_client):
+async def test_get_contact_fetches_by_id_from_personal_scope(
+    respx_mock, contacts_client
+):
     route = respx_mock.get(f"{ZOHO_CONTACTS_SELF_URL}/44205000000003001").mock(
         return_value=httpx.Response(
             200, json=load_fixture("contacts_single_response.json")
@@ -373,9 +373,7 @@ async def test_count_contacts_wraps_http_errors_as_zoho_api_error(
         return_value=httpx.Response(401, json={"error": "invalid token"})
     )
     respx_mock.get(ZOHO_CONTACTS_ORG_URL).mock(
-        return_value=httpx.Response(
-            200, json={"contacts": {"contacts": 4}}
-        )
+        return_value=httpx.Response(200, json={"contacts": {"contacts": 4}})
     )
 
     with pytest.raises(ZohoAPIError):

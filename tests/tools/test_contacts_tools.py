@@ -10,7 +10,11 @@ class FakeContactsClient:
             [{"id": "1", "scope": "personal", "first_name": "Jamie"}],
             False,
         )
-        self.get_contact_result = {"id": "1", "scope": "personal", "first_name": "Jamie"}
+        self.get_contact_result = {
+            "id": "1",
+            "scope": "personal",
+            "first_name": "Jamie",
+        }
         self.count_result = {
             "personal": {"contacts": 212, "archived": 0, "inactive": 0},
             "organization": {"contacts": 4, "archived": 0, "inactive": 0},

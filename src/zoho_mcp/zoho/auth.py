@@ -137,9 +137,7 @@ async def exchange_code_for_tokens(
             },
         )
     except httpx.HTTPError as e:
-        raise ZohoAuthError(
-            f"Network error exchanging authorization code: {e}"
-        ) from e
+        raise ZohoAuthError(f"Network error exchanging authorization code: {e}") from e
 
     try:
         payload = response.json()

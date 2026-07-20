@@ -21,7 +21,10 @@ from zoho_mcp.zoho.client import ZohoAPIError, zoho_authenticated_get
 
 ZOHO_CONTACTS_SELF_URL = "https://contacts.zoho.com/api/v1/accounts/self/contacts"
 ZOHO_CONTACTS_ORG_URL = "https://contacts.zoho.com/api/v1/accounts/org/contacts"
-_SCOPE_URLS = {"personal": ZOHO_CONTACTS_SELF_URL, "organization": ZOHO_CONTACTS_ORG_URL}
+_SCOPE_URLS = {
+    "personal": ZOHO_CONTACTS_SELF_URL,
+    "organization": ZOHO_CONTACTS_ORG_URL,
+}
 MIN_SEARCH_LIMIT = 1
 # "filter_type" is undocumented -- not in Zoho's published parameter list
 # (https://www.zoho.com/contacts/api/parameters.html), found by inspecting
@@ -165,7 +168,10 @@ class ZohoContactsClient:
 
         contacts = [
             normalize_contact(c, "personal") for c in self_payload.get("contacts", [])
-        ] + [normalize_contact(c, "organization") for c in org_payload.get("contacts", [])]
+        ] + [
+            normalize_contact(c, "organization")
+            for c in org_payload.get("contacts", [])
+        ]
         has_more = bool(self_payload.get("has_more", False)) or bool(
             org_payload.get("has_more", False)
         )
@@ -191,7 +197,9 @@ class ZohoContactsClient:
                 API rejects or fails the request.
         """
         url = _scope_url(scope)
-        payload = await self._get(f"{url}/{contact_id}", params={"include": "emails,phones"})
+        payload = await self._get(
+            f"{url}/{contact_id}", params={"include": "emails,phones"}
+        )
         return normalize_contact(payload["contacts"], scope)
 
     async def count_contacts(self) -> dict:
@@ -211,7 +219,9 @@ class ZohoContactsClient:
             ZohoAPIError: if either scope's response is malformed or the
                 request fails.
         """
-        self_payload = await self._get(ZOHO_CONTACTS_SELF_URL, params={"fields": "count"})
+        self_payload = await self._get(
+            ZOHO_CONTACTS_SELF_URL, params={"fields": "count"}
+        )
         org_payload = await self._get(ZOHO_CONTACTS_ORG_URL, params={"fields": "count"})
         try:
             personal = {
@@ -225,7 +235,9 @@ class ZohoContactsClient:
                 "inactive": org_payload["contacts"]["inactive"],
             }
         except (KeyError, TypeError) as e:
-            raise ZohoAPIError(f"Malformed contacts count response from Zoho: {e}") from e
+            raise ZohoAPIError(
+                f"Malformed contacts count response from Zoho: {e}"
+            ) from e
         return {
             "personal": personal,
             "organization": organization,

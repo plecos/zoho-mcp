@@ -56,7 +56,9 @@ async def test_list_events_rejects_malformed_date_string():
     client = FakeZohoClient()
 
     with pytest.raises(ValueError, match="ISO 8601"):
-        await list_events(client, start="tomorrow morning", end="2024-10-29T17:00:00+00:00")
+        await list_events(
+            client, start="tomorrow morning", end="2024-10-29T17:00:00+00:00"
+        )
 
     assert client.list_events_calls == []
 

@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-import respx
 import time_machine
 
 from zoho_mcp.zoho.client import ZohoAPIError, ZohoClient
@@ -463,9 +462,7 @@ async def test_search_emails_skips_folder_filter_when_query_scopes_a_folder(
     assert folders_route.call_count == 0
 
 
-async def test_search_emails_caches_folder_types_across_calls(
-    respx_mock, zoho_client
-):
+async def test_search_emails_caches_folder_types_across_calls(respx_mock, zoho_client):
     mock_pacific_accounts_endpoint(respx_mock)
     folders_route = mock_folder_types_endpoint(respx_mock)
     respx_mock.get(
@@ -540,7 +537,10 @@ async def test_get_event_fetches_by_uid_and_normalizes(respx_mock, zoho_client):
                         "location": "https://meet.example.com/abc",
                         "attendees": [
                             {"email": "jamie.rivera@example.com", "status": "accepted"},
-                            {"email": "morgan.lee@example.com", "status": "needsaction"},
+                            {
+                                "email": "morgan.lee@example.com",
+                                "status": "needsaction",
+                            },
                         ],
                     }
                 ]
@@ -596,7 +596,9 @@ async def test_list_tasks_sends_limit_and_from_params(respx_mock, zoho_client):
             json={
                 "data": {
                     "paging": {},
-                    "tasks": [{"id": "1", "title": "Renew passport", "status": "In Progress"}],
+                    "tasks": [
+                        {"id": "1", "title": "Renew passport", "status": "In Progress"}
+                    ],
                 }
             },
         )
@@ -684,7 +686,11 @@ async def test_get_task_fetches_by_id_and_normalizes(respx_mock, zoho_client):
             json={
                 "data": {
                     "tasks": [
-                        {"id": "1001", "title": "Renew passport", "status": "In Progress"}
+                        {
+                            "id": "1001",
+                            "title": "Renew passport",
+                            "status": "In Progress",
+                        }
                     ]
                 }
             },
@@ -711,7 +717,9 @@ async def test_get_task_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_cli
         await zoho_client.get_task("does-not-exist")
 
 
-async def test_get_task_raises_clear_error_when_tasks_key_absent(respx_mock, zoho_client):
+async def test_get_task_raises_clear_error_when_tasks_key_absent(
+    respx_mock, zoho_client
+):
     respx_mock.get("https://mail.zoho.com/api/tasks/me/1001").mock(
         return_value=httpx.Response(200, json={"data": {}})
     )
@@ -822,7 +830,9 @@ async def test_get_note_fetches_by_id_and_normalizes(respx_mock, zoho_client):
     assert result["title"] == "Dinner party ideas"
 
 
-async def test_get_note_raises_clear_error_when_data_key_absent(respx_mock, zoho_client):
+async def test_get_note_raises_clear_error_when_data_key_absent(
+    respx_mock, zoho_client
+):
     mock_pacific_accounts_endpoint(respx_mock)
     respx_mock.get("https://mail.zoho.com/api/notes/me/1").mock(
         return_value=httpx.Response(200, json={"status": {"code": 200}})

@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
       - run: uv build
@@ -22,7 +22,7 @@ jobs:
           python -m venv /tmp/build-check
           /tmp/build-check/bin/pip install dist/*.whl
           /tmp/build-check/bin/python -c "import zoho_mcp.server; import zoho_mcp.setup_auth"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/

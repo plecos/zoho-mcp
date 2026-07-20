@@ -5,6 +5,7 @@ bodies, event timestamps) into the compact, LLM-facing shapes used by the
 MCP tools happens here and only here.
 """
 
+import html
 import json
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -101,6 +102,10 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
 
     Returns the compact shape the LLM sees: id, from, subject, date, snippet.
     ``date`` is in ``mailbox_timezone``, not UTC -- see ``_epoch_ms_to_iso8601``.
+    ``subject``/``snippet`` are HTML-entity-decoded -- confirmed live that
+    Zoho's search API frequently returns these with literal undecoded
+    entities (e.g. "&#39;" instead of an apostrophe, seen in ~10% of
+    subjects and ~36% of snippets in a real sample), not human-readable text.
 
     Raises:
         ZohoAPIError: if ``raw`` is missing an expected field or a field has
@@ -110,13 +115,13 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
         return {
             "id": raw["messageId"],
             "from": raw["fromAddress"],
-            "subject": raw["subject"],
+            "subject": html.unescape(raw["subject"]),
             # receivedTime, not sentDateInGMT: despite its name, sentDateInGMT
             # is not reliably GMT -- observed consistently off by exactly the
             # account's own UTC offset across unrelated senders. receivedTime
             # is Zoho's own authoritative server-side receipt timestamp.
             "date": _epoch_ms_to_iso8601(raw["receivedTime"], mailbox_timezone),
-            "snippet": raw["summary"],
+            "snippet": html.unescape(raw["summary"]),
             "folder_id": raw["folderId"],
             # Confirmed empirically (a freshly-sent, unopened email showed
             # status="0"; already-read mail showed "1"); any other/unknown

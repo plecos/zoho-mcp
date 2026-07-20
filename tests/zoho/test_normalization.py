@@ -92,6 +92,28 @@ def test_normalize_email_summary_raises_clear_error_on_non_numeric_date():
         normalize_email_summary(raw, MAILBOX_TZ)
 
 
+def test_normalize_email_summary_decodes_html_entities_in_subject():
+    # Confirmed live against real mail: ~10% of subjects and ~36% of
+    # snippets in a 200-email sample came back with literal undecoded
+    # entities like "&#39;" instead of an apostrophe -- Zoho's search API
+    # doesn't decode these itself.
+    raw = load_fixture("mail_list_response.json")["data"][0]
+    raw["subject"] = "You&#39;re invited to GASP&#39;s meeting"
+
+    result = normalize_email_summary(raw, MAILBOX_TZ)
+
+    assert result["subject"] == "You're invited to GASP's meeting"
+
+
+def test_normalize_email_summary_decodes_html_entities_in_snippet():
+    raw = load_fixture("mail_list_response.json")["data"][0]
+    raw["summary"] = "Let&#39;s sync tomorrow &amp; review the doc"
+
+    result = normalize_email_summary(raw, MAILBOX_TZ)
+
+    assert result["snippet"] == "Let's sync tomorrow & review the doc"
+
+
 def test_normalize_email_content_strips_html_to_plain_text():
     raw = load_fixture("mail_content_response.json")["data"]
 

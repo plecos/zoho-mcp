@@ -162,6 +162,26 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         return await calendar_tools.list_calendars(client)
 
     @mcp.tool(annotations=_READ_ONLY)
+    async def get_freebusy(email: str, start: str, end: str) -> list[dict]:
+        """Get busy time slots for a user's calendar in a time range.
+
+        email: the calendar owner's email address.
+        start/end: ISO 8601 datetime strings with an explicit UTC offset.
+
+        Only returns data for calendars that person has explicitly
+        enabled "include in my Free/Busy sharing" for (a per-calendar
+        Zoho Calendar setting) -- raises a clear error rather than
+        silently returning an empty (misreadable as "fully free") list
+        when that isn't the case.
+
+        Returned times are already in the mailbox's own local timezone,
+        not UTC -- do not convert them yourself.
+        """
+        return await calendar_tools.get_freebusy(
+            client, email=email, start=start, end=end
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
     async def list_branches() -> list[dict]:
         """List the office branches configured for Zoho Calendar's
         Resource Booking feature (meeting rooms, equipment), each with

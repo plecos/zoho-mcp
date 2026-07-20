@@ -15,6 +15,7 @@ from zoho_mcp.zoho.client import (
     normalize_event_detail,
     normalize_folder,
     normalize_label,
+    normalize_freebusy_slot,
     normalize_note,
     normalize_resource,
     normalize_signature,
@@ -516,6 +517,36 @@ def test_normalize_signature_raises_clear_error_on_missing_field():
 
     with pytest.raises(ZohoAPIError, match="signature"):
         normalize_signature(raw)
+
+
+def test_normalize_freebusy_slot_converts_times_to_mailbox_timezone():
+    raw = {
+        "startTime": "20260721T180000Z",
+        "endTime": "20260721T190000Z",
+        "fbtype": "busy",
+    }
+
+    result = normalize_freebusy_slot(raw, MAILBOX_TZ)
+
+    assert result == {
+        "start": "2026-07-21T11:00:00-07:00",
+        "end": "2026-07-21T12:00:00-07:00",
+        "status": "busy",
+    }
+
+
+def test_normalize_freebusy_slot_raises_clear_error_on_missing_field():
+    raw = {"startTime": "20260721T180000Z", "endTime": "20260721T190000Z"}
+
+    with pytest.raises(ZohoAPIError, match="free/busy"):
+        normalize_freebusy_slot(raw, MAILBOX_TZ)
+
+
+def test_normalize_freebusy_slot_raises_clear_error_on_malformed_time():
+    raw = {"startTime": "not-a-time", "endTime": "20260721T190000Z", "fbtype": "busy"}
+
+    with pytest.raises(ZohoAPIError, match="free/busy"):
+        normalize_freebusy_slot(raw, MAILBOX_TZ)
 
 
 def test_normalize_note_maps_core_fields():

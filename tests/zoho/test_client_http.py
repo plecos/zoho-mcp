@@ -1414,3 +1414,98 @@ async def test_list_calendars_wraps_http_errors_as_zoho_api_error(
 
     with pytest.raises(ZohoAPIError):
         await zoho_client.list_calendars()
+
+
+async def test_get_freebusy_fetches_and_normalizes(respx_mock, zoho_client):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get("https://calendar.zoho.com/api/v1/calendars/freebusy").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "freebusy": [
+                    {
+                        "startTime": "20260721T180000Z",
+                        "endTime": "20260721T190000Z",
+                        "fbtype": "busy",
+                    }
+                ]
+            },
+        )
+    )
+    start = datetime(2026, 7, 21, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 22, tzinfo=timezone.utc)
+
+    results = await zoho_client.get_freebusy(
+        email="jamie@example.com", start=start, end=end
+    )
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.url.params["uemail"] == "jamie@example.com"
+    assert request.url.params["sdate"] == "20260721T000000"
+    assert request.url.params["edate"] == "20260722T000000"
+    assert results == [
+        {
+            "start": "2026-07-21T11:00:00-07:00",
+            "end": "2026-07-21T12:00:00-07:00",
+            "status": "busy",
+        }
+    ]
+
+
+async def test_get_freebusy_returns_empty_list_when_freebusy_key_absent(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get("https://calendar.zoho.com/api/v1/calendars/freebusy").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    start = datetime(2026, 7, 21, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 22, tzinfo=timezone.utc)
+
+    results = await zoho_client.get_freebusy(
+        email="jamie@example.com", start=start, end=end
+    )
+
+    assert results == []
+
+
+async def test_get_freebusy_raises_clear_error_when_sharing_not_enabled(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get("https://calendar.zoho.com/api/v1/calendars/freebusy").mock(
+        return_value=httpx.Response(200, json={"fb_not_enabled": True})
+    )
+    start = datetime(2026, 7, 21, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 22, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError, match="not enabled"):
+        await zoho_client.get_freebusy(email="jamie@example.com", start=start, end=end)
+
+
+async def test_get_freebusy_rejects_end_before_start_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://calendar.zoho.com/api/v1/calendars/freebusy")
+    start = datetime(2026, 7, 22, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError, match="end must be after start"):
+        await zoho_client.get_freebusy(email="jamie@example.com", start=start, end=end)
+
+    assert not route.called
+
+
+async def test_get_freebusy_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get("https://calendar.zoho.com/api/v1/calendars/freebusy").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+    start = datetime(2026, 7, 21, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 22, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.get_freebusy(email="jamie@example.com", start=start, end=end)

@@ -7,7 +7,7 @@ MCP tools happens here and only here.
 
 import html
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -264,6 +264,26 @@ def normalize_calendar(raw: dict) -> dict:
         }
     except (KeyError, TypeError) as e:
         raise ZohoAPIError(f"Malformed calendar from Zoho: {e}") from e
+
+
+def normalize_freebusy_slot(raw: dict, mailbox_timezone: str) -> dict:
+    """Normalize one busy-time slot from Zoho Calendar's Free/Busy API.
+
+    ``start``/``end`` use the same wire format as event times, converted
+    the same way -- see ``_zoho_event_time_to_iso8601``.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing ``startTime``/``endTime``/
+            ``fbtype``, or the times aren't parseable.
+    """
+    try:
+        return {
+            "start": _zoho_event_time_to_iso8601(raw["startTime"], mailbox_timezone),
+            "end": _zoho_event_time_to_iso8601(raw["endTime"], mailbox_timezone),
+            "status": raw["fbtype"],
+        }
+    except (KeyError, TypeError, ValueError) as e:
+        raise ZohoAPIError(f"Malformed free/busy slot from Zoho: {e}") from e
 
 
 def normalize_event(raw: dict, mailbox_timezone: str) -> dict:
@@ -914,6 +934,46 @@ class ZohoClient:
         """
         payload = await self._get(f"{ZOHO_CALENDAR_BASE_URL}/calendars")
         return [normalize_calendar(c) for c in payload.get("calendars", [])]
+
+    async def get_freebusy(
+        self, email: str, start: datetime, end: datetime
+    ) -> list[dict]:
+        """Get busy time slots for a user's calendar in ``[start, end]``.
+
+        Only returns data for calendars that user has explicitly enabled
+        "include in my Free/Busy sharing" for (a per-calendar Zoho
+        Calendar setting) -- confirmed live, a calendar without it
+        returns no usable data at all rather than an empty/all-free
+        result, which is why this raises instead of silently returning
+        ``[]`` in that case.
+
+        Raises:
+            ZohoAPIError: if ``end`` isn't after ``start``, free/busy
+                sharing isn't enabled for ``email``, or the Calendar API
+                rejects or fails the request.
+        """
+        if end <= start:
+            raise ZohoAPIError(
+                f"end must be after start (got start={start.isoformat()}, "
+                f"end={end.isoformat()})"
+            )
+        mailbox_timezone = await self._get_mailbox_timezone()
+        payload = await self._get(
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/freebusy",
+            params={
+                "uemail": email,
+                "sdate": start.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S"),
+                "edate": end.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S"),
+            },
+        )
+        if payload.get("fb_not_enabled"):
+            raise ZohoAPIError(
+                f"Free/busy sharing is not enabled for {email!r}'s calendar"
+            )
+        return [
+            normalize_freebusy_slot(slot, mailbox_timezone)
+            for slot in payload.get("freebusy", [])
+        ]
 
     async def list_branches(self) -> list[dict]:
         """List the office branches configured for Resource Booking,

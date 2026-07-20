@@ -101,3 +101,31 @@ async def list_calendars(client: ZohoClient) -> list[dict]:
         ZohoAPIError: if the Calendar API rejects or fails the request.
     """
     return await client.list_calendars()
+
+
+async def get_freebusy(
+    client: ZohoClient, email: str, start: str, end: str
+) -> list[dict]:
+    """Get busy time slots for a user's calendar in a time range.
+
+    Args:
+        client: injected Zoho client.
+        email: the calendar owner's email address.
+        start: ISO 8601 datetime string with UTC offset, range start.
+        end: ISO 8601 datetime string with UTC offset, range end.
+
+    Returns:
+        Busy slots: start, end (mailbox's own local timezone, not UTC),
+        status. Only available for calendars that person has explicitly
+        enabled "include in my Free/Busy sharing" for.
+
+    Raises:
+        ValueError: if start/end aren't valid ISO 8601 strings with a UTC offset.
+        ZohoAPIError: if free/busy sharing isn't enabled for email, or
+            the Calendar API rejects or fails the request.
+    """
+    return await client.get_freebusy(
+        email=email,
+        start=_parse_iso8601_utc(start, field_name="start"),
+        end=_parse_iso8601_utc(end, field_name="end"),
+    )

@@ -28,6 +28,11 @@ Optional: set `ZOHO_STRIP_INVISIBLE_CHARS=true` in `.env` to have `get_email` st
 ```
 uv sync
 uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy
 ```
+
+CI (`.github/workflows/ci.yml`) runs all of the above on every push/PR. A separate `build-validation.yml` workflow runs on `main`/tags to confirm the package builds and its entry-point modules import cleanly -- it's a release-readiness gate only, not a real deployment; there's no hosting target yet.
 
 See [CLAUDE.md](CLAUDE.md) for the project's development rules (TDD, layered architecture, error handling, documentation).

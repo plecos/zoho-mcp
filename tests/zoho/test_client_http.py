@@ -1509,3 +1509,145 @@ async def test_get_freebusy_wraps_http_errors_as_zoho_api_error(
 
     with pytest.raises(ZohoAPIError):
         await zoho_client.get_freebusy(email="jamie@example.com", start=start, end=end)
+
+
+async def test_create_event_sends_eventdata_and_normalizes_response(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [
+                    {
+                        "uid": "evt-new-1",
+                        "title": "Q3 Sync",
+                        "organizer": "user@example.com",
+                        "attendees": [],
+                    }
+                ]
+            },
+        )
+    )
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+
+    result = await zoho_client.create_event(title="Q3 Sync", start=start, end=end)
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Zoho-oauthtoken fake-access-token"
+    sent_eventdata = json.loads(request.url.params["eventdata"])
+    assert sent_eventdata["title"] == "Q3 Sync"
+    assert sent_eventdata["dateandtime"] == {
+        "start": "20260721T160000Z",
+        "end": "20260721T170000Z",
+        "timezone": "UTC",
+    }
+    assert result["id"] == "evt-new-1"
+    assert result["title"] == "Q3 Sync"
+
+
+async def test_create_event_includes_optional_fields_when_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [
+                    {
+                        "uid": "evt-new-1",
+                        "title": "Q3 Sync",
+                        "organizer": "u@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+
+    await zoho_client.create_event(
+        title="Q3 Sync",
+        start=start,
+        end=end,
+        description="Quarterly roadmap review",
+        location="Room 1",
+        attendees=["jamie@example.com"],
+    )
+
+    sent_eventdata = json.loads(route.calls.last.request.url.params["eventdata"])
+    assert sent_eventdata["description"] == "Quarterly roadmap review"
+    assert sent_eventdata["location"] == "Room 1"
+    assert sent_eventdata["attendees"] == [
+        {"email": "jamie@example.com", "status": "NEEDS-ACTION"}
+    ]
+
+
+async def test_create_event_uses_given_calendar_id_instead_of_default(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [{"uid": "evt-1", "title": "Sync", "organizer": "u@e.com"}]
+            },
+        )
+    )
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+
+    await zoho_client.create_event(
+        title="Sync", start=start, end=end, calendar_id="other-cal"
+    )
+
+    assert route.called
+
+
+async def test_create_event_rejects_end_before_start_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    )
+    start = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError, match="end must be after start"):
+        await zoho_client.create_event(title="Sync", start=start, end=end)
+
+    assert not route.called
+
+
+async def test_create_event_raises_clear_error_when_events_key_absent(
+    respx_mock, zoho_client
+):
+    respx_mock.post(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    ).mock(return_value=httpx.Response(200, json={}))
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_event(title="Sync", start=start, end=end)
+
+
+async def test_create_event_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.post(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_event(title="Sync", start=start, end=end)

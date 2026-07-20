@@ -29,6 +29,14 @@ Response normalization (e.g. epoch-string dates → ISO 8601, HTML email bodies 
 - Don't swallow exceptions silently — either handle them meaningfully or let them propagate with context (e.g. `raise ZohoAPIError(...) from e`).
 - Validate constraints from the real API contract explicitly (e.g. the Calendar `range` param's 31-day cap) rather than letting Zoho's rejection be the first place the limit surfaces.
 
+## Read-only vs. write tools
+
+Phase 1 was entirely read-only (`_READ_ONLY = ToolAnnotations(readOnlyHint=True)` in `server.py`). Write operations (started on `phase2-write-ops`) get their own annotation constant per write semantics -- e.g. `_CREATE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)` for `create_event`, since creating the same event twice produces two separate events, not one. Never reuse `_READ_ONLY` for a tool that mutates anything, and never assume one write annotation fits every write tool -- update/delete have different destructive/idempotent semantics than create and need their own constants when they're added.
+
+`zoho_authenticated_get`/`_post`/`_put`/`_delete` (all thin wrappers over a shared `_zoho_authenticated_request(method, ...)`) provide the same auth-header-and-error-wrapping for every HTTP verb -- add a new verb wrapper here rather than open-coding `http_client.post(...)` somewhere else.
+
+Zoho Calendar's write APIs (confirmed live for create) take their payload as a JSON-encoded `eventdata` *query parameter*, not a request body -- an easy assumption to get wrong since almost every other modern REST API would put it in the body.
+
 ## Test thoroughness
 
 Happy-path tests alone are not done. For every unit of behavior, also test:

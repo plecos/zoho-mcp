@@ -30,6 +30,7 @@ SCOPES = [
     "ZohoMail.accounts.READ",  # needed once, to look up the mail account id
     "ZohoMail.folders.READ",  # used at runtime to filter out Sent/Drafts by folder type
     "ZohoCalendar.event.READ",
+    "ZohoCalendar.event.ALL",  # write access: create_event/update_event/delete_event
     "ZohoCalendar.calendar.READ",  # needed once, to look up the calendar's uid
     "zohocontacts.contactapi.READ",
     "ZohoMail.tasks.READ",

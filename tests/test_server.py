@@ -20,6 +20,18 @@ class FakeZohoClient:
     async def get_freebusy(self, email, start, end):
         return []
 
+    async def create_event(
+        self,
+        title,
+        start,
+        end,
+        description="",
+        location="",
+        attendees=None,
+        calendar_id=None,
+    ):
+        return {}
+
     async def list_attachments(self, message_id, folder_id):
         return []
 
@@ -68,7 +80,7 @@ class FakeContactsClient:
         return {"personal": 0, "organization": 0, "total": 0}
 
 
-async def test_create_server_registers_all_twenty_one_tools():
+async def test_create_server_registers_all_twenty_two_tools():
     server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
@@ -85,6 +97,7 @@ async def test_create_server_registers_all_twenty_one_tools():
         "get_event",
         "list_calendars",
         "get_freebusy",
+        "create_event",
         "list_tasks",
         "get_task",
         "list_notes",
@@ -99,9 +112,19 @@ async def test_create_server_registers_all_twenty_one_tools():
     }
 
 
-async def test_registered_tools_are_annotated_read_only():
+async def test_read_only_tools_are_annotated_correctly():
     server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
+    read_only_tools = [t for t in tools if t.name != "create_event"]
 
-    assert all(tool.annotations.readOnlyHint is True for tool in tools)
+    assert all(tool.annotations.readOnlyHint is True for tool in read_only_tools)
+
+
+async def test_create_event_is_not_annotated_read_only():
+    server = create_server(FakeZohoClient(), FakeContactsClient())
+
+    tools = await server.list_tools()
+    create_event_tool = next(t for t in tools if t.name == "create_event")
+
+    assert create_event_tool.annotations.readOnlyHint is False

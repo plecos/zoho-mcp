@@ -2,7 +2,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from zoho_mcp.tools.calendar import get_event, get_freebusy, list_calendars, list_events
+from zoho_mcp.tools.calendar import (
+    create_event,
+    get_event,
+    get_freebusy,
+    list_calendars,
+    list_events,
+)
 
 
 class FakeZohoClient:
@@ -15,6 +21,8 @@ class FakeZohoClient:
         self.list_calendars_result = [{"id": "cal-1", "name": "ken"}]
         self.get_freebusy_calls = []
         self.get_freebusy_result = [{"start": "...", "end": "...", "status": "busy"}]
+        self.create_event_calls = []
+        self.create_event_result = {"id": "evt-new-1", "title": "Sync"}
 
     async def list_events(self, start, end, calendar_id=None):
         self.list_events_calls.append(
@@ -33,6 +41,29 @@ class FakeZohoClient:
     async def get_freebusy(self, email, start, end):
         self.get_freebusy_calls.append({"email": email, "start": start, "end": end})
         return self.get_freebusy_result
+
+    async def create_event(
+        self,
+        title,
+        start,
+        end,
+        description="",
+        location="",
+        attendees=None,
+        calendar_id=None,
+    ):
+        self.create_event_calls.append(
+            {
+                "title": title,
+                "start": start,
+                "end": end,
+                "description": description,
+                "location": location,
+                "attendees": attendees,
+                "calendar_id": calendar_id,
+            }
+        )
+        return self.create_event_result
 
 
 async def test_list_events_parses_iso8601_utc_strings_and_delegates():
@@ -161,3 +192,62 @@ async def test_get_freebusy_rejects_malformed_date_string():
         )
 
     assert client.get_freebusy_calls == []
+
+
+async def test_create_event_parses_iso8601_and_delegates():
+    client = FakeZohoClient()
+
+    result = await create_event(
+        client,
+        title="Sync",
+        start="2026-07-21T16:00:00+00:00",
+        end="2026-07-21T17:00:00+00:00",
+    )
+
+    assert client.create_event_calls == [
+        {
+            "title": "Sync",
+            "start": datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc),
+            "end": datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc),
+            "description": "",
+            "location": "",
+            "attendees": None,
+            "calendar_id": None,
+        }
+    ]
+    assert result == client.create_event_result
+
+
+async def test_create_event_forwards_optional_fields():
+    client = FakeZohoClient()
+
+    await create_event(
+        client,
+        title="Sync",
+        start="2026-07-21T16:00:00+00:00",
+        end="2026-07-21T17:00:00+00:00",
+        description="Quarterly review",
+        location="Room 1",
+        attendees=["jamie@example.com"],
+        calendar_id="other-cal",
+    )
+
+    call = client.create_event_calls[0]
+    assert call["description"] == "Quarterly review"
+    assert call["location"] == "Room 1"
+    assert call["attendees"] == ["jamie@example.com"]
+    assert call["calendar_id"] == "other-cal"
+
+
+async def test_create_event_rejects_malformed_date_string():
+    client = FakeZohoClient()
+
+    with pytest.raises(ValueError, match="ISO 8601"):
+        await create_event(
+            client,
+            title="Sync",
+            start="not-a-date",
+            end="2026-07-21T17:00:00+00:00",
+        )
+
+    assert client.create_event_calls == []

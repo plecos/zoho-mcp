@@ -539,6 +539,38 @@ def normalize_resource(raw: dict) -> dict:
         raise ZohoAPIError(f"Malformed resource from Zoho: {e}") from e
 
 
+async def _zoho_authenticated_request(
+    method: str,
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    params: dict | None = None,
+) -> dict:
+    """Shared Zoho-auth-header-and-error-wrapping used by every Zoho call,
+    regardless of HTTP method.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    headers = {
+        "Authorization": f"Zoho-oauthtoken {access_token}",
+        "Accept": "application/json",
+    }
+    try:
+        response = await http_client.request(
+            method, url, params=params, headers=headers
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise ZohoAPIError(
+            f"Zoho API request to {url} failed with "
+            f"{e.response.status_code}: {e.response.text}"
+        ) from e
+    except httpx.HTTPError as e:
+        raise ZohoAPIError(f"Zoho API request to {url} failed: {e}") from e
+    return response.json()
+
+
 async def zoho_authenticated_get(
     http_client: httpx.AsyncClient,
     url: str,
@@ -550,21 +582,57 @@ async def zoho_authenticated_get(
     Raises:
         ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
     """
-    headers = {
-        "Authorization": f"Zoho-oauthtoken {access_token}",
-        "Accept": "application/json",
-    }
-    try:
-        response = await http_client.get(url, params=params, headers=headers)
-        response.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        raise ZohoAPIError(
-            f"Zoho API request to {url} failed with "
-            f"{e.response.status_code}: {e.response.text}"
-        ) from e
-    except httpx.HTTPError as e:
-        raise ZohoAPIError(f"Zoho API request to {url} failed: {e}") from e
-    return response.json()
+    return await _zoho_authenticated_request(
+        "GET", http_client, url, access_token, params
+    )
+
+
+async def zoho_authenticated_post(
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    params: dict | None = None,
+) -> dict:
+    """Shared POST-with-Zoho-auth-header-and-error-wrapping used by every Zoho write call.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    return await _zoho_authenticated_request(
+        "POST", http_client, url, access_token, params
+    )
+
+
+async def zoho_authenticated_put(
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    params: dict | None = None,
+) -> dict:
+    """Shared PUT-with-Zoho-auth-header-and-error-wrapping used by every Zoho write call.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    return await _zoho_authenticated_request(
+        "PUT", http_client, url, access_token, params
+    )
+
+
+async def zoho_authenticated_delete(
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    params: dict | None = None,
+) -> dict:
+    """Shared DELETE-with-Zoho-auth-header-and-error-wrapping used by every Zoho write call.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    return await _zoho_authenticated_request(
+        "DELETE", http_client, url, access_token, params
+    )
 
 
 async def _get_default_mail_account(
@@ -702,6 +770,18 @@ class ZohoClient:
     async def _get(self, url: str, params: dict | None = None) -> dict:
         token = await self._token_manager.get_access_token()
         return await zoho_authenticated_get(self._http_client, url, token, params)
+
+    async def _post(self, url: str, params: dict | None = None) -> dict:
+        token = await self._token_manager.get_access_token()
+        return await zoho_authenticated_post(self._http_client, url, token, params)
+
+    async def _put(self, url: str, params: dict | None = None) -> dict:
+        token = await self._token_manager.get_access_token()
+        return await zoho_authenticated_put(self._http_client, url, token, params)
+
+    async def _delete(self, url: str, params: dict | None = None) -> dict:
+        token = await self._token_manager.get_access_token()
+        return await zoho_authenticated_delete(self._http_client, url, token, params)
 
     async def _get_mailbox_timezone(self) -> str:
         """Return the mailbox's timezone, fetched once per client and cached.
@@ -974,6 +1054,72 @@ class ZohoClient:
             normalize_freebusy_slot(slot, mailbox_timezone)
             for slot in payload.get("freebusy", [])
         ]
+
+    async def create_event(
+        self,
+        title: str,
+        start: datetime,
+        end: datetime,
+        description: str = "",
+        location: str = "",
+        attendees: list[str] | None = None,
+        calendar_id: str | None = None,
+    ) -> dict:
+        """Create a new calendar event.
+
+        Args:
+            title: event title.
+            start/end: event start/end (any timezone-aware datetime).
+            description: optional event description.
+            location: optional event location.
+            attendees: optional list of attendee email addresses. To book
+                a Resource Booking resource, include its ``email`` (from
+                ``list_resources``) here.
+            calendar_id: which calendar to create the event in -- defaults
+                to the configured default calendar if omitted.
+
+        Returns:
+            The created event, normalized the same way as ``get_event``
+            (id, title, organizer, attendees, location, description,
+            recurrence -- no start/end, see ``normalize_event_detail``).
+
+        Raises:
+            ZohoAPIError: if ``end`` isn't after ``start``, or the
+                Calendar API rejects or fails the request.
+        """
+        if end <= start:
+            raise ZohoAPIError(
+                f"end must be after start (got start={start.isoformat()}, "
+                f"end={end.isoformat()})"
+            )
+        eventdata: dict = {
+            "title": title,
+            "dateandtime": {
+                "start": start.astimezone(timezone.utc).strftime(
+                    ZOHO_EVENT_RANGE_REQUEST_FORMAT
+                ),
+                "end": end.astimezone(timezone.utc).strftime(
+                    ZOHO_EVENT_RANGE_REQUEST_FORMAT
+                ),
+                "timezone": "UTC",
+            },
+        }
+        if description:
+            eventdata["description"] = description
+        if location:
+            eventdata["location"] = location
+        if attendees:
+            eventdata["attendees"] = [
+                {"email": email, "status": "NEEDS-ACTION"} for email in attendees
+            ]
+        payload = await self._post(
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events",
+            params={"eventdata": json.dumps(eventdata)},
+        )
+        events = payload.get("events", [])
+        if not events:
+            raise ZohoAPIError("Zoho did not return the created event")
+        return normalize_event_detail(events[0])
 
     async def list_branches(self) -> list[dict]:
         """List the office branches configured for Resource Booking,

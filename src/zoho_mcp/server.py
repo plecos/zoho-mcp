@@ -27,6 +27,9 @@ from zoho_mcp.zoho.client import ZohoClient
 from zoho_mcp.zoho.contacts_client import ZohoContactsClient
 
 _READ_ONLY = ToolAnnotations(readOnlyHint=True)
+_CREATE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False
+)
 
 
 def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> FastMCP:
@@ -179,6 +182,42 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         return await calendar_tools.get_freebusy(
             client, email=email, start=start, end=end
+        )
+
+    @mcp.tool(annotations=_CREATE)
+    async def create_event(
+        title: str,
+        start: str,
+        end: str,
+        description: str = "",
+        location: str = "",
+        attendees: list[str] | None = None,
+        calendar_id: str | None = None,
+    ) -> dict:
+        """Create a new Zoho Calendar event.
+
+        title: event title.
+        start/end: ISO 8601 datetime strings with an explicit UTC offset.
+        description/location (optional): plain text.
+        attendees (optional): list of email addresses to invite. To book
+        a Resource Booking resource (from list_resources), include its
+        email address here.
+        calendar_id (optional): which calendar to create the event in --
+        defaults to the user's configured default calendar.
+
+        Returns the created event, normalized the same way as get_event
+        (id, title, organizer, attendees, location, description,
+        recurrence -- no start/end in the response).
+        """
+        return await calendar_tools.create_event(
+            client,
+            title=title,
+            start=start,
+            end=end,
+            description=description,
+            location=location,
+            attendees=attendees,
+            calendar_id=calendar_id,
         )
 
     @mcp.tool(annotations=_READ_ONLY)

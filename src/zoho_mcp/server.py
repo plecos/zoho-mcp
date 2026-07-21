@@ -124,41 +124,61 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         return await mail_tools.list_signatures(client)
 
     @mcp.tool(annotations=_MAIL_UPDATE)
-    async def mark_as_read(message_id: str) -> None:
-        """Mark one email as read, given an id from search_emails."""
-        await mail_tools.mark_as_read(client, message_id=message_id)
+    async def mark_as_read(message_ids: list[str]) -> None:
+        """Mark one or more emails as read, given ids from search_emails.
+
+        Pass every id that needs marking in one call (e.g. all unread
+        results from a single search_emails call) -- this handles the
+        whole batch in one request rather than needing to be called once
+        per email.
+        """
+        await mail_tools.mark_as_read(client, message_ids=message_ids)
 
     @mcp.tool(annotations=_MAIL_UPDATE)
-    async def mark_as_unread(message_id: str) -> None:
-        """Mark one email as unread, given an id from search_emails."""
-        await mail_tools.mark_as_unread(client, message_id=message_id)
+    async def mark_as_unread(message_ids: list[str]) -> None:
+        """Mark one or more emails as unread, given ids from search_emails.
+
+        Pass every id that needs marking in one call rather than calling
+        this once per email -- it handles the whole batch in one request.
+        """
+        await mail_tools.mark_as_unread(client, message_ids=message_ids)
 
     @mcp.tool(annotations=_MAIL_UPDATE)
-    async def move_email(message_id: str, folder_id: str) -> None:
-        """Move one email to a different folder.
+    async def move_email(message_ids: list[str], folder_id: str) -> None:
+        """Move one or more emails to a different folder.
 
-        message_id: an email's id from a prior search_emails result.
+        message_ids: email ids from a prior search_emails result. Pass
+        every id that needs moving in one call rather than calling this
+        once per email -- it handles the whole batch in one request.
         folder_id: the destination folder's id, from list_folders.
         """
-        await mail_tools.move_email(client, message_id=message_id, folder_id=folder_id)
+        await mail_tools.move_email(
+            client, message_ids=message_ids, folder_id=folder_id
+        )
 
     @mcp.tool(annotations=_MAIL_UPDATE)
-    async def add_label(message_id: str, label_id: str) -> None:
-        """Apply one label to one email.
+    async def add_label(message_ids: list[str], label_id: str) -> None:
+        """Apply one label to one or more emails.
 
-        message_id: an email's id from a prior search_emails result.
+        message_ids: email ids from a prior search_emails result. Pass
+        every id that needs labeling in one call rather than calling
+        this once per email -- it handles the whole batch in one request.
         label_id: the label's id, from list_labels.
         """
-        await mail_tools.add_label(client, message_id=message_id, label_id=label_id)
+        await mail_tools.add_label(client, message_ids=message_ids, label_id=label_id)
 
     @mcp.tool(annotations=_MAIL_UPDATE)
-    async def remove_label(message_id: str, label_id: str) -> None:
-        """Remove one label from one email.
+    async def remove_label(message_ids: list[str], label_id: str) -> None:
+        """Remove one label from one or more emails.
 
-        message_id: an email's id from a prior search_emails result.
+        message_ids: email ids from a prior search_emails result. Pass
+        every id that needs unlabeling in one call rather than calling
+        this once per email -- it handles the whole batch in one request.
         label_id: the label's id, from list_labels.
         """
-        await mail_tools.remove_label(client, message_id=message_id, label_id=label_id)
+        await mail_tools.remove_label(
+            client, message_ids=message_ids, label_id=label_id
+        )
 
     @mcp.tool(annotations=_READ_ONLY)
     async def list_events(

@@ -60,19 +60,19 @@ class FakeZohoClient:
     async def list_signatures(self):
         return []
 
-    async def mark_as_read(self, message_id):
+    async def mark_as_read(self, message_ids):
         return None
 
-    async def mark_as_unread(self, message_id):
+    async def mark_as_unread(self, message_ids):
         return None
 
-    async def move_email(self, message_id, folder_id):
+    async def move_email(self, message_ids, folder_id):
         return None
 
-    async def add_label(self, message_id, label_id):
+    async def add_label(self, message_ids, label_id):
         return None
 
-    async def remove_label(self, message_id, label_id):
+    async def remove_label(self, message_ids, label_id):
         return None
 
     async def list_branches(self):

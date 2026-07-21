@@ -61,20 +61,24 @@ class FakeZohoClient:
         self.list_signatures_calls += 1
         return self.list_signatures_result
 
-    async def mark_as_read(self, message_id):
-        self.mark_as_read_calls.append({"message_id": message_id})
+    async def mark_as_read(self, message_ids):
+        self.mark_as_read_calls.append({"message_ids": message_ids})
 
-    async def mark_as_unread(self, message_id):
-        self.mark_as_unread_calls.append({"message_id": message_id})
+    async def mark_as_unread(self, message_ids):
+        self.mark_as_unread_calls.append({"message_ids": message_ids})
 
-    async def move_email(self, message_id, folder_id):
-        self.move_email_calls.append({"message_id": message_id, "folder_id": folder_id})
+    async def move_email(self, message_ids, folder_id):
+        self.move_email_calls.append(
+            {"message_ids": message_ids, "folder_id": folder_id}
+        )
 
-    async def add_label(self, message_id, label_id):
-        self.add_label_calls.append({"message_id": message_id, "label_id": label_id})
+    async def add_label(self, message_ids, label_id):
+        self.add_label_calls.append({"message_ids": message_ids, "label_id": label_id})
 
-    async def remove_label(self, message_id, label_id):
-        self.remove_label_calls.append({"message_id": message_id, "label_id": label_id})
+    async def remove_label(self, message_ids, label_id):
+        self.remove_label_calls.append(
+            {"message_ids": message_ids, "label_id": label_id}
+        )
 
 
 async def test_search_emails_delegates_to_client_and_returns_result():
@@ -152,43 +156,53 @@ async def test_list_signatures_delegates_to_client():
 async def test_mark_as_read_delegates_to_client():
     client = FakeZohoClient()
 
-    result = await mark_as_read(client, message_id="msg-1")
+    result = await mark_as_read(client, message_ids=["msg-1", "msg-2"])
 
-    assert client.mark_as_read_calls == [{"message_id": "msg-1"}]
+    assert client.mark_as_read_calls == [{"message_ids": ["msg-1", "msg-2"]}]
     assert result is None
 
 
 async def test_mark_as_unread_delegates_to_client():
     client = FakeZohoClient()
 
-    result = await mark_as_unread(client, message_id="msg-1")
+    result = await mark_as_unread(client, message_ids=["msg-1", "msg-2"])
 
-    assert client.mark_as_unread_calls == [{"message_id": "msg-1"}]
+    assert client.mark_as_unread_calls == [{"message_ids": ["msg-1", "msg-2"]}]
     assert result is None
 
 
 async def test_move_email_delegates_to_client():
     client = FakeZohoClient()
 
-    result = await move_email(client, message_id="msg-1", folder_id="folder-2")
+    result = await move_email(
+        client, message_ids=["msg-1", "msg-2"], folder_id="folder-2"
+    )
 
-    assert client.move_email_calls == [{"message_id": "msg-1", "folder_id": "folder-2"}]
+    assert client.move_email_calls == [
+        {"message_ids": ["msg-1", "msg-2"], "folder_id": "folder-2"}
+    ]
     assert result is None
 
 
 async def test_add_label_delegates_to_client():
     client = FakeZohoClient()
 
-    result = await add_label(client, message_id="msg-1", label_id="label-2")
+    result = await add_label(client, message_ids=["msg-1", "msg-2"], label_id="label-2")
 
-    assert client.add_label_calls == [{"message_id": "msg-1", "label_id": "label-2"}]
+    assert client.add_label_calls == [
+        {"message_ids": ["msg-1", "msg-2"], "label_id": "label-2"}
+    ]
     assert result is None
 
 
 async def test_remove_label_delegates_to_client():
     client = FakeZohoClient()
 
-    result = await remove_label(client, message_id="msg-1", label_id="label-2")
+    result = await remove_label(
+        client, message_ids=["msg-1", "msg-2"], label_id="label-2"
+    )
 
-    assert client.remove_label_calls == [{"message_id": "msg-1", "label_id": "label-2"}]
+    assert client.remove_label_calls == [
+        {"message_ids": ["msg-1", "msg-2"], "label_id": "label-2"}
+    ]
     assert result is None

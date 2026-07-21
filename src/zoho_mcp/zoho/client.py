@@ -954,7 +954,7 @@ class ZohoClient:
         return [normalize_attachment(a) for a in attachments]
 
     async def _update_message(
-        self, mode: str, message_id: str, **extra: object
+        self, mode: str, message_ids: list[str], **extra: object
     ) -> None:
         """Shared PUT to Zoho Mail's ``updatemessage`` endpoint underlying
         every message-state write (mark read/unread, move, label add/
@@ -962,63 +962,77 @@ class ZohoClient:
 
         Unlike Zoho Calendar's write APIs (payload as an ``eventdata``
         query param), Zoho Mail's write API takes a JSON request body.
+        Zoho's own endpoint accepts a batch of ``messageId``s per call --
+        this is not looped one-at-a-time, since a caller asking to mark
+        35 emails read should cost one request, not 35.
+
+        Raises:
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
         """
+        if not message_ids:
+            raise ZohoAPIError("message_ids must contain at least one message id")
         await self._put(
             f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/updatemessage",
-            json_body={"mode": mode, "messageId": [message_id], **extra},
+            json_body={"mode": mode, "messageId": message_ids, **extra},
         )
 
-    async def mark_as_read(self, message_id: str) -> None:
-        """Mark one email as read.
+    async def mark_as_read(self, message_ids: list[str]) -> None:
+        """Mark one or more emails as read in a single request.
 
         Raises:
-            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
         """
-        await self._update_message("markAsRead", message_id)
+        await self._update_message("markAsRead", message_ids)
 
-    async def mark_as_unread(self, message_id: str) -> None:
-        """Mark one email as unread.
+    async def mark_as_unread(self, message_ids: list[str]) -> None:
+        """Mark one or more emails as unread in a single request.
 
         Raises:
-            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
         """
-        await self._update_message("markAsUnread", message_id)
+        await self._update_message("markAsUnread", message_ids)
 
-    async def move_email(self, message_id: str, folder_id: str) -> None:
-        """Move one email to a different folder.
+    async def move_email(self, message_ids: list[str], folder_id: str) -> None:
+        """Move one or more emails to a different folder in a single request.
 
         Args:
-            message_id: an email's ``id`` from a prior ``search_emails`` result.
+            message_ids: email ``id``s from a prior ``search_emails`` result.
             folder_id: the destination folder's ``id``, from ``list_folders``.
 
         Raises:
-            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
         """
-        await self._update_message("moveMessage", message_id, destfolderId=folder_id)
+        await self._update_message("moveMessage", message_ids, destfolderId=folder_id)
 
-    async def add_label(self, message_id: str, label_id: str) -> None:
-        """Apply one label to one email.
+    async def add_label(self, message_ids: list[str], label_id: str) -> None:
+        """Apply one label to one or more emails in a single request.
 
         Args:
-            message_id: an email's ``id`` from a prior ``search_emails`` result.
+            message_ids: email ``id``s from a prior ``search_emails`` result.
             label_id: the label's ``id``, from ``list_labels``.
 
         Raises:
-            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
         """
-        await self._update_message("applyLabel", message_id, labelId=[label_id])
+        await self._update_message("applyLabel", message_ids, labelId=[label_id])
 
-    async def remove_label(self, message_id: str, label_id: str) -> None:
-        """Remove one label from one email.
+    async def remove_label(self, message_ids: list[str], label_id: str) -> None:
+        """Remove one label from one or more emails in a single request.
 
         Args:
-            message_id: an email's ``id`` from a prior ``search_emails`` result.
+            message_ids: email ``id``s from a prior ``search_emails`` result.
             label_id: the label's ``id``, from ``list_labels``.
 
         Raises:
-            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
         """
-        await self._update_message("removeLabel", message_id, labelId=[label_id])
+        await self._update_message("removeLabel", message_ids, labelId=[label_id])
 
     async def list_folders(self) -> list[dict]:
         """List all folders in the mailbox, including custom subfolders.

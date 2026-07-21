@@ -1357,16 +1357,25 @@ async def test_list_attachments_wraps_http_errors_as_zoho_api_error(
         )
 
 
-async def test_mark_as_read_sends_correct_mode_and_message_id(respx_mock, zoho_client):
+async def test_mark_as_read_sends_correct_mode_and_message_ids(respx_mock, zoho_client):
     route = respx_mock.put(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
     ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
 
-    await zoho_client.mark_as_read(message_id="1730217600123456789")
+    await zoho_client.mark_as_read(message_ids=["111", "222", "333"])
 
     assert route.called
     sent_body = json.loads(route.calls.last.request.content)
-    assert sent_body == {"mode": "markAsRead", "messageId": ["1730217600123456789"]}
+    assert sent_body == {"mode": "markAsRead", "messageId": ["111", "222", "333"]}
+
+
+async def test_mark_as_read_rejects_empty_message_ids_without_a_request(
+    respx_mock, zoho_client
+):
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.mark_as_read(message_ids=[])
+
+    assert not respx_mock.calls
 
 
 async def test_mark_as_read_wraps_http_errors_as_zoho_api_error(
@@ -1377,21 +1386,30 @@ async def test_mark_as_read_wraps_http_errors_as_zoho_api_error(
     ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
 
     with pytest.raises(ZohoAPIError):
-        await zoho_client.mark_as_read(message_id="1730217600123456789")
+        await zoho_client.mark_as_read(message_ids=["111"])
 
 
-async def test_mark_as_unread_sends_correct_mode_and_message_id(
+async def test_mark_as_unread_sends_correct_mode_and_message_ids(
     respx_mock, zoho_client
 ):
     route = respx_mock.put(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
     ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
 
-    await zoho_client.mark_as_unread(message_id="1730217600123456789")
+    await zoho_client.mark_as_unread(message_ids=["111", "222"])
 
     assert route.called
     sent_body = json.loads(route.calls.last.request.content)
-    assert sent_body == {"mode": "markAsUnread", "messageId": ["1730217600123456789"]}
+    assert sent_body == {"mode": "markAsUnread", "messageId": ["111", "222"]}
+
+
+async def test_mark_as_unread_rejects_empty_message_ids_without_a_request(
+    respx_mock, zoho_client
+):
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.mark_as_unread(message_ids=[])
+
+    assert not respx_mock.calls
 
 
 async def test_move_email_sends_correct_mode_and_dest_folder(respx_mock, zoho_client):
@@ -1399,17 +1417,24 @@ async def test_move_email_sends_correct_mode_and_dest_folder(respx_mock, zoho_cl
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
     ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
 
-    await zoho_client.move_email(
-        message_id="1730217600123456789", folder_id="1122334455"
-    )
+    await zoho_client.move_email(message_ids=["111", "222"], folder_id="1122334455")
 
     assert route.called
     sent_body = json.loads(route.calls.last.request.content)
     assert sent_body == {
         "mode": "moveMessage",
-        "messageId": ["1730217600123456789"],
+        "messageId": ["111", "222"],
         "destfolderId": "1122334455",
     }
+
+
+async def test_move_email_rejects_empty_message_ids_without_a_request(
+    respx_mock, zoho_client
+):
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.move_email(message_ids=[], folder_id="1122334455")
+
+    assert not respx_mock.calls
 
 
 async def test_move_email_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
@@ -1418,9 +1443,7 @@ async def test_move_email_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_c
     ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
 
     with pytest.raises(ZohoAPIError):
-        await zoho_client.move_email(
-            message_id="1730217600123456789", folder_id="1122334455"
-        )
+        await zoho_client.move_email(message_ids=["111"], folder_id="1122334455")
 
 
 async def test_add_label_sends_correct_mode_and_label_id(respx_mock, zoho_client):
@@ -1428,15 +1451,24 @@ async def test_add_label_sends_correct_mode_and_label_id(respx_mock, zoho_client
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
     ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
 
-    await zoho_client.add_label(message_id="1730217600123456789", label_id="lbl-1")
+    await zoho_client.add_label(message_ids=["111", "222"], label_id="lbl-1")
 
     assert route.called
     sent_body = json.loads(route.calls.last.request.content)
     assert sent_body == {
         "mode": "applyLabel",
-        "messageId": ["1730217600123456789"],
+        "messageId": ["111", "222"],
         "labelId": ["lbl-1"],
     }
+
+
+async def test_add_label_rejects_empty_message_ids_without_a_request(
+    respx_mock, zoho_client
+):
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.add_label(message_ids=[], label_id="lbl-1")
+
+    assert not respx_mock.calls
 
 
 async def test_add_label_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
@@ -1445,7 +1477,7 @@ async def test_add_label_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_cl
     ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
 
     with pytest.raises(ZohoAPIError):
-        await zoho_client.add_label(message_id="1730217600123456789", label_id="lbl-1")
+        await zoho_client.add_label(message_ids=["111"], label_id="lbl-1")
 
 
 async def test_remove_label_sends_correct_mode_and_label_id(respx_mock, zoho_client):
@@ -1453,15 +1485,24 @@ async def test_remove_label_sends_correct_mode_and_label_id(respx_mock, zoho_cli
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
     ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
 
-    await zoho_client.remove_label(message_id="1730217600123456789", label_id="lbl-1")
+    await zoho_client.remove_label(message_ids=["111", "222"], label_id="lbl-1")
 
     assert route.called
     sent_body = json.loads(route.calls.last.request.content)
     assert sent_body == {
         "mode": "removeLabel",
-        "messageId": ["1730217600123456789"],
+        "messageId": ["111", "222"],
         "labelId": ["lbl-1"],
     }
+
+
+async def test_remove_label_rejects_empty_message_ids_without_a_request(
+    respx_mock, zoho_client
+):
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.remove_label(message_ids=[], label_id="lbl-1")
+
+    assert not respx_mock.calls
 
 
 async def test_remove_label_wraps_http_errors_as_zoho_api_error(
@@ -1472,9 +1513,7 @@ async def test_remove_label_wraps_http_errors_as_zoho_api_error(
     ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
 
     with pytest.raises(ZohoAPIError):
-        await zoho_client.remove_label(
-            message_id="1730217600123456789", label_id="lbl-1"
-        )
+        await zoho_client.remove_label(message_ids=["111"], label_id="lbl-1")
 
 
 async def test_list_calendars_fetches_and_normalizes(respx_mock, zoho_client):

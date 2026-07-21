@@ -579,6 +579,7 @@ async def _zoho_authenticated_request(
     url: str,
     access_token: str,
     params: dict | None = None,
+    json_body: dict | None = None,
 ) -> dict:
     """Shared Zoho-auth-header-and-error-wrapping used by every Zoho call,
     regardless of HTTP method.
@@ -592,7 +593,7 @@ async def _zoho_authenticated_request(
     }
     try:
         response = await http_client.request(
-            method, url, params=params, headers=headers
+            method, url, params=params, json=json_body, headers=headers
         )
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
@@ -642,6 +643,7 @@ async def zoho_authenticated_put(
     url: str,
     access_token: str,
     params: dict | None = None,
+    json_body: dict | None = None,
 ) -> dict:
     """Shared PUT-with-Zoho-auth-header-and-error-wrapping used by every Zoho write call.
 
@@ -649,7 +651,7 @@ async def zoho_authenticated_put(
         ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
     """
     return await _zoho_authenticated_request(
-        "PUT", http_client, url, access_token, params
+        "PUT", http_client, url, access_token, params, json_body
     )
 
 
@@ -809,9 +811,16 @@ class ZohoClient:
         token = await self._token_manager.get_access_token()
         return await zoho_authenticated_post(self._http_client, url, token, params)
 
-    async def _put(self, url: str, params: dict | None = None) -> dict:
+    async def _put(
+        self,
+        url: str,
+        params: dict | None = None,
+        json_body: dict | None = None,
+    ) -> dict:
         token = await self._token_manager.get_access_token()
-        return await zoho_authenticated_put(self._http_client, url, token, params)
+        return await zoho_authenticated_put(
+            self._http_client, url, token, params, json_body
+        )
 
     async def _delete(self, url: str, params: dict | None = None) -> dict:
         token = await self._token_manager.get_access_token()
@@ -943,6 +952,73 @@ class ZohoClient:
         )
         attachments = payload.get("data", {}).get("attachments", [])
         return [normalize_attachment(a) for a in attachments]
+
+    async def _update_message(
+        self, mode: str, message_id: str, **extra: object
+    ) -> None:
+        """Shared PUT to Zoho Mail's ``updatemessage`` endpoint underlying
+        every message-state write (mark read/unread, move, label add/
+        remove) -- they differ only in ``mode`` and mode-specific fields.
+
+        Unlike Zoho Calendar's write APIs (payload as an ``eventdata``
+        query param), Zoho Mail's write API takes a JSON request body.
+        """
+        await self._put(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/updatemessage",
+            json_body={"mode": mode, "messageId": [message_id], **extra},
+        )
+
+    async def mark_as_read(self, message_id: str) -> None:
+        """Mark one email as read.
+
+        Raises:
+            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        """
+        await self._update_message("markAsRead", message_id)
+
+    async def mark_as_unread(self, message_id: str) -> None:
+        """Mark one email as unread.
+
+        Raises:
+            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        """
+        await self._update_message("markAsUnread", message_id)
+
+    async def move_email(self, message_id: str, folder_id: str) -> None:
+        """Move one email to a different folder.
+
+        Args:
+            message_id: an email's ``id`` from a prior ``search_emails`` result.
+            folder_id: the destination folder's ``id``, from ``list_folders``.
+
+        Raises:
+            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        """
+        await self._update_message("moveMessage", message_id, destfolderId=folder_id)
+
+    async def add_label(self, message_id: str, label_id: str) -> None:
+        """Apply one label to one email.
+
+        Args:
+            message_id: an email's ``id`` from a prior ``search_emails`` result.
+            label_id: the label's ``id``, from ``list_labels``.
+
+        Raises:
+            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        """
+        await self._update_message("applyLabel", message_id, labelId=[label_id])
+
+    async def remove_label(self, message_id: str, label_id: str) -> None:
+        """Remove one label from one email.
+
+        Args:
+            message_id: an email's ``id`` from a prior ``search_emails`` result.
+            label_id: the label's ``id``, from ``list_labels``.
+
+        Raises:
+            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        """
+        await self._update_message("removeLabel", message_id, labelId=[label_id])
 
     async def list_folders(self) -> list[dict]:
         """List all folders in the mailbox, including custom subfolders.

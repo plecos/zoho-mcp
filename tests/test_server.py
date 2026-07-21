@@ -60,6 +60,21 @@ class FakeZohoClient:
     async def list_signatures(self):
         return []
 
+    async def mark_as_read(self, message_id):
+        return None
+
+    async def mark_as_unread(self, message_id):
+        return None
+
+    async def move_email(self, message_id, folder_id):
+        return None
+
+    async def add_label(self, message_id, label_id):
+        return None
+
+    async def remove_label(self, message_id, label_id):
+        return None
+
     async def list_branches(self):
         return []
 
@@ -96,7 +111,7 @@ class FakeContactsClient:
         return {"personal": 0, "organization": 0, "total": 0}
 
 
-async def test_create_server_registers_all_twenty_four_tools():
+async def test_create_server_registers_all_twenty_nine_tools():
     server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
@@ -109,6 +124,11 @@ async def test_create_server_registers_all_twenty_four_tools():
         "list_folders",
         "list_labels",
         "list_signatures",
+        "mark_as_read",
+        "mark_as_unread",
+        "move_email",
+        "add_label",
+        "remove_label",
         "list_events",
         "get_event",
         "list_calendars",
@@ -130,7 +150,16 @@ async def test_create_server_registers_all_twenty_four_tools():
     }
 
 
-_WRITE_TOOL_NAMES = {"create_event", "update_event", "delete_event"}
+_WRITE_TOOL_NAMES = {
+    "create_event",
+    "update_event",
+    "delete_event",
+    "mark_as_read",
+    "mark_as_unread",
+    "move_email",
+    "add_label",
+    "remove_label",
+}
 
 
 async def test_read_only_tools_are_annotated_correctly():

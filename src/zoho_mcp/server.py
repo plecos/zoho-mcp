@@ -32,6 +32,12 @@ _CREATE = ToolAnnotations(
 )
 _UPDATE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True)
 _DELETE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True)
+# Mail's read/unread/move/label writes are all trivially reversible (mark
+# the other way, move back, remove/re-add the label), unlike update_event's
+# destructive full-replace semantics -- hence destructiveHint=False here.
+_MAIL_UPDATE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=True
+)
 
 
 def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> FastMCP:
@@ -116,6 +122,43 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         Each has id, name, content (plain text).
         """
         return await mail_tools.list_signatures(client)
+
+    @mcp.tool(annotations=_MAIL_UPDATE)
+    async def mark_as_read(message_id: str) -> None:
+        """Mark one email as read, given an id from search_emails."""
+        await mail_tools.mark_as_read(client, message_id=message_id)
+
+    @mcp.tool(annotations=_MAIL_UPDATE)
+    async def mark_as_unread(message_id: str) -> None:
+        """Mark one email as unread, given an id from search_emails."""
+        await mail_tools.mark_as_unread(client, message_id=message_id)
+
+    @mcp.tool(annotations=_MAIL_UPDATE)
+    async def move_email(message_id: str, folder_id: str) -> None:
+        """Move one email to a different folder.
+
+        message_id: an email's id from a prior search_emails result.
+        folder_id: the destination folder's id, from list_folders.
+        """
+        await mail_tools.move_email(client, message_id=message_id, folder_id=folder_id)
+
+    @mcp.tool(annotations=_MAIL_UPDATE)
+    async def add_label(message_id: str, label_id: str) -> None:
+        """Apply one label to one email.
+
+        message_id: an email's id from a prior search_emails result.
+        label_id: the label's id, from list_labels.
+        """
+        await mail_tools.add_label(client, message_id=message_id, label_id=label_id)
+
+    @mcp.tool(annotations=_MAIL_UPDATE)
+    async def remove_label(message_id: str, label_id: str) -> None:
+        """Remove one label from one email.
+
+        message_id: an email's id from a prior search_emails result.
+        label_id: the label's id, from list_labels.
+        """
+        await mail_tools.remove_label(client, message_id=message_id, label_id=label_id)
 
     @mcp.tool(annotations=_READ_ONLY)
     async def list_events(

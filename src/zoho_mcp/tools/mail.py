@@ -111,6 +111,74 @@ async def list_labels(client: ZohoClient) -> list[dict]:
     return await client.list_labels()
 
 
+async def mark_as_read(client: ZohoClient, message_id: str) -> None:
+    """Mark one email as read.
+
+    Args:
+        client: injected Zoho client.
+        message_id: an email's id from a prior search_emails result.
+
+    Raises:
+        ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+    """
+    await client.mark_as_read(message_id=message_id)
+
+
+async def mark_as_unread(client: ZohoClient, message_id: str) -> None:
+    """Mark one email as unread.
+
+    Args:
+        client: injected Zoho client.
+        message_id: an email's id from a prior search_emails result.
+
+    Raises:
+        ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+    """
+    await client.mark_as_unread(message_id=message_id)
+
+
+async def move_email(client: ZohoClient, message_id: str, folder_id: str) -> None:
+    """Move one email to a different folder.
+
+    Args:
+        client: injected Zoho client.
+        message_id: an email's id from a prior search_emails result.
+        folder_id: the destination folder's id, from list_folders.
+
+    Raises:
+        ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+    """
+    await client.move_email(message_id=message_id, folder_id=folder_id)
+
+
+async def add_label(client: ZohoClient, message_id: str, label_id: str) -> None:
+    """Apply one label to one email.
+
+    Args:
+        client: injected Zoho client.
+        message_id: an email's id from a prior search_emails result.
+        label_id: the label's id, from list_labels.
+
+    Raises:
+        ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+    """
+    await client.add_label(message_id=message_id, label_id=label_id)
+
+
+async def remove_label(client: ZohoClient, message_id: str, label_id: str) -> None:
+    """Remove one label from one email.
+
+    Args:
+        client: injected Zoho client.
+        message_id: an email's id from a prior search_emails result.
+        label_id: the label's id, from list_labels.
+
+    Raises:
+        ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+    """
+    await client.remove_label(message_id=message_id, label_id=label_id)
+
+
 async def list_signatures(client: ZohoClient) -> list[dict]:
     """List all configured email signatures.
 

@@ -1,0 +1,13 @@
+{
+  "status": {"code": 200, "description": "success"},
+  "data": [
+    {
+      "contactId": "44205000000003001",
+      "name": "default",
+      "signatureType": "USER_SIGNATURE",
+      "id": "sig-1",
+      "position": 1,
+      "content": "<div>Regards,<br/></div><div>Jamie Rivera<br/></div>"
+    }
+  ]
+}

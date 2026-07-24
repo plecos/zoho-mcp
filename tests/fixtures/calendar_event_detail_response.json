@@ -1,0 +1,16 @@
+{
+  "events": [
+    {
+      "uid": "evt-recurring-1",
+      "title": "Team Sync",
+      "organizer": "user@example.com",
+      "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO",
+      "location": "https://meet.example.com/abc",
+      "description": null,
+      "attendees": [
+        {"email": "jamie.rivera@example.com", "status": "accepted"},
+        {"email": "morgan.lee@example.com", "status": "needsaction"}
+      ]
+    }
+  ]
+}

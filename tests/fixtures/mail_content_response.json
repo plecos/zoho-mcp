@@ -1,0 +1,10 @@
+{
+  "status": {
+    "code": 200,
+    "description": "success"
+  },
+  "data": {
+    "messageId": "1730217600123456789",
+    "content": "<div><p>Hi Ken,</p><p>Let's sync on the <b>Q3 roadmap</b> tomorrow morning.</p><p>Thanks,<br/>Jamie</p></div>"
+  }
+}

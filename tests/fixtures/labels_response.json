@@ -1,0 +1,12 @@
+{
+  "status": {"code": 200, "description": "success"},
+  "data": [
+    {
+      "sequence": 1,
+      "labelId": "label-1",
+      "color": "#FFD700",
+      "tagId": "label-1",
+      "displayName": "Notification"
+    }
+  ]
+}

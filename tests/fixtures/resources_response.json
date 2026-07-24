@@ -1,0 +1,19 @@
+[
+  {
+    "building_id": "building-1",
+    "category_name": "Meeting Room",
+    "resource_type": 0,
+    "is_hidden": false,
+    "res_email_id": "resource-1@example.com",
+    "resource_approval": false,
+    "capacity": 10,
+    "has_image": false,
+    "branch_id": "branch-1",
+    "resource_id": "resource-1",
+    "location": "Floor Number 1, Example Building A, Example Branch",
+    "floor_id": "floor-1",
+    "resource_name": "Meeting Room",
+    "category": 0,
+    "res_location": "Example Branch/Example Building A/Floor Number 1"
+  }
+]

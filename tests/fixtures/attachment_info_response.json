@@ -1,0 +1,13 @@
+{
+  "status": {"code": 200, "description": "success"},
+  "data": {
+    "messageId": "1730217600123456789",
+    "attachments": [
+      {
+        "attachmentId": "attach-1",
+        "attachmentName": "roadmap.pdf",
+        "attachmentSize": 666755
+      }
+    ]
+  }
+}

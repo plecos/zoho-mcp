@@ -1,0 +1,51 @@
+[project]
+name = "zoho-mcp"
+version = "0.1.0"
+description = "A vendor-agnostic MCP server exposing Zoho Mail and Calendar as LLM tools"
+readme = "README.md"
+authors = [
+    { name = "Ken", email = "info@salterdiazsolutions.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "httpx>=0.28.1",
+    "keyring>=25.7.0",
+    "mcp>=1.28.1",
+    "python-dotenv>=1.2.2",
+    "tzdata>=2026.3",
+]
+
+[project.scripts]
+zoho-mcp = "zoho_mcp.server:main"
+zoho-mcp-setup = "zoho_mcp.setup_auth:main"
+
+[build-system]
+requires = ["uv_build>=0.11.29,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+    "ruff>=0.15.22",
+    "time-machine>=3.2.0",
+]
+
+[tool.uv]
+required-version = ">=0.11.29,<0.12.0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+disallow_untyped_defs = true
+check_untyped_defs = true

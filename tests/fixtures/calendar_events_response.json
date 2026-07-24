@@ -1,0 +1,53 @@
+{
+  "events": [
+    {
+      "isprivate": false,
+      "enable_eventmanagement": true,
+      "role": "owner",
+      "attendees": [
+        {"email": "jamie.rivera@example.com", "status": "accepted"},
+        {"email": "morgan.lee@example.com", "status": "needsaction"}
+      ],
+      "dateandtime": {
+        "timezone": "America/Los_Angeles",
+        "start": "20241029T090000-0700",
+        "end": "20241029T100000-0700"
+      },
+      "calid": "1122334455",
+      "title": "Q3 Roadmap Sync",
+      "createdtime": "20241020T120000-0700",
+      "calendar_alarm": true,
+      "duration": "0100",
+      "uid": "evt-998877",
+      "createdby": "user@example.com",
+      "organizer": "user@example.com",
+      "isallday": false,
+      "modifiedby": "user@example.com",
+      "etag": 3,
+      "multiday": false,
+      "caluid": "cal-556677"
+    },
+    {
+      "isprivate": false,
+      "enable_eventmanagement": true,
+      "role": "owner",
+      "attendees": [],
+      "dateandtime": {
+        "start": "20241102",
+        "end": "20241103"
+      },
+      "calid": "1122334455",
+      "title": "Company Holiday",
+      "createdtime": "20241020T120000-0700",
+      "calendar_alarm": false,
+      "uid": "evt-allday-1",
+      "createdby": "user@example.com",
+      "organizer": "user@example.com",
+      "isallday": true,
+      "modifiedby": "user@example.com",
+      "etag": 1,
+      "multiday": false,
+      "caluid": "cal-556677"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "status": {"code": 200, "description": "success"},
+  "data": [
+    {
+      "path": "/Inbox",
+      "folderName": "Inbox",
+      "folderType": "Inbox",
+      "folderId": "folder-1"
+    },
+    {
+      "path": "/Inbox/Work",
+      "folderName": "Work",
+      "folderType": "Inbox",
+      "folderId": "folder-2",
+      "previousFolderId": "folder-1"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "status": {"code": 200, "description": "success"},
+  "data": {
+    "summary": "Bring wine and cheese board",
+    "modifiedTime": "1730217600000",
+    "color": "-1",
+    "entityId": "1730217600000154800",
+    "title": "Dinner party ideas",
+    "bookName": "General",
+    "content": "Bring wine and cheese board",
+    "bookId": "book-1",
+    "namespaceId": "709548548",
+    "ownerDisplayName": "Jamie Rivera",
+    "ownerZuid": "709548548",
+    "createdTime": "1730217600000",
+    "colorHex": "#B3D9E6",
+    "isFavorite": true
+  }
+}

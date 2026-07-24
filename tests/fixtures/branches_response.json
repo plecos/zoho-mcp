@@ -1,0 +1,35 @@
+[
+  {
+    "work_end_hour": "07:00 pm",
+    "work_start_day": 1,
+    "time_zone": "America/Los_Angeles",
+    "has_resource": true,
+    "branch_id": "branch-1",
+    "branch_name": "Example Branch",
+    "buildings": [
+      {
+        "building_name": "Example Building A",
+        "building_id": "building-1",
+        "has_resource": true,
+        "floors": [
+          {
+            "floor_name": "Floor Number 1",
+            "has_resource": true,
+            "floor_order": 2,
+            "floor_id": "floor-1"
+          },
+          {
+            "floor_name": "Ground Floor",
+            "has_resource": false,
+            "floor_order": 1,
+            "floor_id": "floor-2"
+          }
+        ],
+        "branch_id": "branch-1",
+        "floor_count": 2
+      }
+    ],
+    "work_start_hour": "10:00 am",
+    "work_end_day": 5
+  }
+]

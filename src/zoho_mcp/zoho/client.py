@@ -60,6 +60,7 @@ _EVENT_WRITABLE_FIELDS = frozenset(
 )
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
+_VALID_EMAIL_STATUSES = frozenset({"read", "unread", "all"})
 MIN_TASKS_LIMIT = 1
 MAX_TASKS_LIMIT = 499  # per Zoho's own documented range for this endpoint
 MIN_NOTES_LIMIT = 1
@@ -918,6 +919,73 @@ class ZohoClient:
         # folder themselves (e.g. "in:Sent") -- excluding by type would
         # otherwise silently strip out the exact folder they asked for.
         if raw_items and "in:" not in query.lower():
+            excluded_folder_ids = await self._get_excluded_folder_ids()
+            results = [r for r in results if r["folder_id"] not in excluded_folder_ids]
+
+        return results
+
+    async def list_emails(
+        self,
+        status: str = "all",
+        folder_id: str | None = None,
+        limit: int = 20,
+        start: int = 1,
+    ) -> list[dict]:
+        """List emails by read/unread status, with real pagination.
+
+        Unlike ``search_emails`` (Zoho's Search API, which has no status
+        filter and -- until this was added -- no way to page past the
+        first result window), this uses Zoho's separate List Emails API
+        (``GET .../messages/view``), which supports a documented
+        ``status`` filter and ``start``/``limit`` pagination. Use this
+        when you need to reliably enumerate *every* unread (or read)
+        email, not just the top N by recency.
+
+        Args:
+            status: "unread", "read", or "all" (default).
+            folder_id: restrict to one folder's id, from ``list_folders``.
+                If omitted, searches the whole mailbox and excludes
+                Sent/Drafts/Templates by default (same as
+                ``search_emails``) -- pass a folder_id explicitly to
+                include one of those.
+            limit: maximum number of results per page (1-200).
+            start: 1-based starting sequence number, for paging past the
+                first ``limit`` results (e.g. ``start=21`` with
+                ``limit=20`` fetches the second page).
+
+        Raises:
+            ZohoAPIError: if ``status`` isn't one of "read"/"unread"/
+                "all", ``limit``/``start`` are out of range, or the Zoho
+                Mail API rejects or fails the request.
+        """
+        if status not in _VALID_EMAIL_STATUSES:
+            raise ZohoAPIError(
+                f"status must be one of {sorted(_VALID_EMAIL_STATUSES)} (got {status!r})"
+            )
+        if not (MIN_SEARCH_LIMIT <= limit <= MAX_SEARCH_LIMIT):
+            raise ZohoAPIError(
+                f"limit must be between {MIN_SEARCH_LIMIT} and "
+                f"{MAX_SEARCH_LIMIT} (got {limit})"
+            )
+        if start < 1:
+            raise ZohoAPIError(f"start must be >= 1 (got {start})")
+
+        mailbox_timezone = await self._get_mailbox_timezone()
+
+        params: dict = {"status": status, "start": start, "limit": limit}
+        if folder_id is not None:
+            params["folderId"] = folder_id
+
+        payload = await self._get(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/view",
+            params=params,
+        )
+        raw_items = payload.get("data", [])
+        results = [
+            normalize_email_summary(item, mailbox_timezone) for item in raw_items
+        ]
+
+        if raw_items and folder_id is None:
             excluded_folder_ids = await self._get_excluded_folder_ids()
             results = [r for r in results if r["folder_id"] not in excluded_folder_ids]
 

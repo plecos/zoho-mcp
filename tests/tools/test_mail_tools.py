@@ -2,6 +2,7 @@ from zoho_mcp.tools.mail import (
     add_label,
     get_email,
     list_attachments,
+    list_emails,
     list_folders,
     list_labels,
     list_signatures,
@@ -18,6 +19,8 @@ class FakeZohoClient:
         self.search_calls = []
         self.get_email_calls = []
         self.search_result = [{"id": "1", "subject": "hi"}]
+        self.list_emails_calls = []
+        self.list_emails_result = [{"id": "1", "subject": "hi", "read": False}]
         self.get_email_result = {"id": "1", "text": "hello"}
         self.list_attachments_calls = []
         self.list_attachments_result = [{"id": "attach-1", "name": "roadmap.pdf"}]
@@ -38,6 +41,17 @@ class FakeZohoClient:
             {"query": query, "limit": limit, "days_back": days_back}
         )
         return self.search_result
+
+    async def list_emails(self, status="all", folder_id=None, limit=20, start=1):
+        self.list_emails_calls.append(
+            {
+                "status": status,
+                "folder_id": folder_id,
+                "limit": limit,
+                "start": start,
+            }
+        )
+        return self.list_emails_result
 
     async def get_email(self, message_id, folder_id):
         self.get_email_calls.append({"message_id": message_id, "folder_id": folder_id})
@@ -104,6 +118,27 @@ async def test_search_emails_passes_days_back_through():
     await search_emails(client, query="", days_back=0)
 
     assert client.search_calls == [{"query": "", "limit": 20, "days_back": 0}]
+
+
+async def test_list_emails_delegates_to_client_with_defaults():
+    client = FakeZohoClient()
+
+    result = await list_emails(client)
+
+    assert client.list_emails_calls == [
+        {"status": "all", "folder_id": None, "limit": 20, "start": 1}
+    ]
+    assert result == client.list_emails_result
+
+
+async def test_list_emails_forwards_status_folder_id_limit_and_start():
+    client = FakeZohoClient()
+
+    await list_emails(client, status="unread", folder_id="folder-9", limit=50, start=21)
+
+    assert client.list_emails_calls == [
+        {"status": "unread", "folder_id": "folder-9", "limit": 50, "start": 21}
+    ]
 
 
 async def test_get_email_delegates_to_client_with_message_and_folder_id():

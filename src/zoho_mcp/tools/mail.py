@@ -40,6 +40,45 @@ async def search_emails(
     return await client.search_emails(query=query, limit=limit, days_back=days_back)
 
 
+async def list_emails(
+    client: ZohoClient,
+    status: str = "all",
+    folder_id: str | None = None,
+    limit: int = 20,
+    start: int = 1,
+) -> list[dict]:
+    """List emails by read/unread status, with real pagination.
+
+    Use this instead of search_emails when you need to reliably
+    enumerate *every* unread (or read) email -- e.g. "mark all my
+    unread email as read" -- rather than a keyword/recency search that
+    can miss messages sitting past the first page of results.
+
+    Args:
+        client: injected Zoho client.
+        status: "unread", "read", or "all" (default).
+        folder_id: restrict to one folder's id, from list_folders. If
+            omitted, searches the whole mailbox and excludes Sent/
+            Drafts/Templates by default (same as search_emails).
+        limit: maximum results per page (1-200).
+        start: 1-based starting sequence number -- call again with
+            start += limit to fetch the next page, repeating until a
+            page comes back with fewer than limit results.
+
+    Returns:
+        Compact email summaries: id, from, subject, date, snippet,
+        folder_id, read (bool). Same shape as search_emails.
+
+    Raises:
+        ZohoAPIError: if status isn't one of "read"/"unread"/"all",
+            limit/start are out of range, or the Zoho Mail API rejects
+            or fails the request.
+    """
+    return await client.list_emails(
+        status=status, folder_id=folder_id, limit=limit, start=start
+    )
+
+
 async def get_email(client: ZohoClient, message_id: str, folder_id: str) -> dict:
     """Fetch the full plain-text body of one email.
 

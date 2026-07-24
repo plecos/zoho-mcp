@@ -521,6 +521,166 @@ async def test_search_emails_rejects_empty_query_and_no_days_back_without_a_requ
     assert not route.called
 
 
+async def test_list_emails_calls_view_endpoint_with_correct_params(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [_raw_email(message_id="1", folder_id="1122334455")]},
+        )
+    )
+
+    results = await zoho_client.list_emails()
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Zoho-oauthtoken fake-access-token"
+    assert request.url.params["status"] == "all"
+    assert request.url.params["start"] == "1"
+    assert request.url.params["limit"] == "20"
+    assert "folderId" not in request.url.params
+    assert results == [
+        {
+            "id": "1",
+            "from": "someone@example.com",
+            "subject": "Subject",
+            "date": "2024-10-29T09:00:00-07:00",
+            "snippet": "Snippet",
+            "folder_id": "1122334455",
+            "read": True,
+        }
+    ]
+
+
+async def test_list_emails_passes_status_start_and_limit_through(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(return_value=httpx.Response(200, json={"data": []}))
+
+    await zoho_client.list_emails(status="unread", limit=50, start=21)
+
+    assert route.calls.last.request.url.params["status"] == "unread"
+    assert route.calls.last.request.url.params["limit"] == "50"
+    assert route.calls.last.request.url.params["start"] == "21"
+
+
+async def test_list_emails_passes_folder_id_when_given(respx_mock, zoho_client):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [_raw_email(message_id="1", folder_id="folder-9")]},
+        )
+    )
+
+    # No mock_folder_types_endpoint -- an explicit folder_id must skip the
+    # exclusion-filter fetch entirely, same as search_emails' "in:" case.
+    results = await zoho_client.list_emails(folder_id="folder-9")
+
+    assert route.calls.last.request.url.params["folderId"] == "folder-9"
+    assert {r["id"] for r in results} == {"1"}
+
+
+@pytest.mark.parametrize("bad_status", ["", "READ", "unseen", "all "])
+async def test_list_emails_rejects_invalid_status_without_a_request(
+    respx_mock, zoho_client, bad_status
+):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    )
+
+    with pytest.raises(ZohoAPIError, match="status"):
+        await zoho_client.list_emails(status=bad_status)
+
+    assert not route.called
+
+
+@pytest.mark.parametrize("bad_limit", [0, -5, 201, 10_000])
+async def test_list_emails_rejects_out_of_range_limit_without_a_request(
+    respx_mock, zoho_client, bad_limit
+):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    )
+
+    with pytest.raises(ZohoAPIError, match="limit"):
+        await zoho_client.list_emails(limit=bad_limit)
+
+    assert not route.called
+
+
+@pytest.mark.parametrize("bad_start", [0, -1, -100])
+async def test_list_emails_rejects_non_positive_start_without_a_request(
+    respx_mock, zoho_client, bad_start
+):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    )
+
+    with pytest.raises(ZohoAPIError, match="start"):
+        await zoho_client.list_emails(start=bad_start)
+
+    assert not route.called
+
+
+async def test_list_emails_returns_empty_list_when_data_key_absent(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    results = await zoho_client.list_emails()
+
+    assert results == []
+
+
+async def test_list_emails_filters_out_sent_drafts_and_templates_by_default(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    _raw_email(message_id="1", folder_id="1122334455"),
+                    _raw_email(message_id="2", folder_id="sent-folder-id"),
+                ]
+            },
+        )
+    )
+
+    results = await zoho_client.list_emails()
+
+    assert {r["id"] for r in results} == {"1"}
+
+
+async def test_list_emails_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_emails()
+
+
 async def test_get_event_fetches_by_uid_and_normalizes(respx_mock, zoho_client):
     route = respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-recurring-1"

@@ -5,6 +5,9 @@ class FakeZohoClient:
     async def search_emails(self, query, limit=20):
         return []
 
+    async def list_emails(self, status="all", folder_id=None, limit=20, start=1):
+        return []
+
     async def get_email(self, message_id, folder_id):
         return {}
 
@@ -111,7 +114,7 @@ class FakeContactsClient:
         return {"personal": 0, "organization": 0, "total": 0}
 
 
-async def test_create_server_registers_all_twenty_nine_tools():
+async def test_create_server_registers_all_thirty_tools():
     server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
@@ -119,6 +122,7 @@ async def test_create_server_registers_all_twenty_nine_tools():
 
     assert tool_names == {
         "search_emails",
+        "list_emails",
         "get_email",
         "list_attachments",
         "list_folders",

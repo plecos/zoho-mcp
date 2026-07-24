@@ -64,9 +64,12 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         explicit date yourself, since you don't know the mailbox's
         timezone and getting it wrong silently returns the wrong day.
 
-        Each result includes a read (bool) field. There is no separate
-        "unread" query filter -- fetch results and filter on read=false
-        yourself if asked for unread emails.
+        Each result includes a read (bool) field, but this search has no
+        way to filter by it and only returns the top `limit` results by
+        recency -- older unread mail can be missed if a lot of other mail
+        arrived the same day. To reliably find or act on *every* unread
+        (or read) email, use list_emails instead, which supports a real
+        status filter and pagination.
 
         Results exclude Sent, Drafts, and Templates by default (mail
         moved into other folders by your own rules is still included --
@@ -76,6 +79,34 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         return await mail_tools.search_emails(
             client, query=query, limit=limit, days_back=days_back
+        )
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_emails(
+        status: str = "all",
+        folder_id: str | None = None,
+        limit: int = 20,
+        start: int = 1,
+    ) -> list[dict]:
+        """List emails by read/unread status, with real pagination.
+
+        Use this instead of search_emails when you need to reliably
+        enumerate *every* unread (or read) email -- e.g. "mark all my
+        unread email as read" -- rather than a keyword/recency search
+        that can silently miss messages sitting past the first page.
+
+        status (optional): "unread", "read", or "all" (default).
+        folder_id (optional): restrict to one folder's id, from
+        list_folders. If omitted, searches the whole mailbox and
+        excludes Sent/Drafts/Templates by default (same as
+        search_emails).
+        limit (optional): maximum results per page (1-200).
+        start (optional): 1-based starting sequence number -- call again
+        with start += limit to fetch the next page, and stop once a page
+        comes back with fewer than limit results.
+        """
+        return await mail_tools.list_emails(
+            client, status=status, folder_id=folder_id, limit=limit, start=start
         )
 
     @mcp.tool(annotations=_READ_ONLY)

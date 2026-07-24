@@ -1751,7 +1751,11 @@ class ZohoClient:
         return normalize_note(note, mailbox_timezone)
 
     async def list_bookmarks(
-        self, limit: int = 20, after: int = 0, group_id: str | None = None
+        self,
+        limit: int = 20,
+        after: int = 0,
+        group_id: str | None = None,
+        oldest_first: bool = False,
     ) -> list[dict]:
         """List Zoho Mail bookmarks -- the caller's personal ones, or a group's.
 
@@ -1759,6 +1763,14 @@ class ZohoClient:
             limit: maximum number of bookmarks to return (1-399).
             group_id: list a shared group's bookmarks instead of the
                 caller's personal ones. Ids come from ``list_groups``.
+            oldest_first: return oldest-created first instead of the
+                default newest-first, via Zoho's ``isPrev`` param.
+                Verified against real bookmarks independently of
+                ``list_notes`` rather than assumed from it -- these two
+                endpoints already disagree on ``isFavorite``'s type, so
+                matching docs prove nothing. Behavior turned out to
+                match Notes: absent is identical to ``isPrev=false``
+                (newest first) and ``true`` is the exact reverse.
             after: how many bookmarks to skip before returning results
                 (behaves as a plain integer offset -- see ``list_notes``).
 
@@ -1778,9 +1790,11 @@ class ZohoClient:
             )
         if after < 0:
             raise ZohoAPIError(f"after must be >= 0 (got {after})")
+        params: dict = {"limit": limit, "after": after}
+        if oldest_first:
+            params["isPrev"] = "true"
         payload = await self._get(
-            _scoped_url(ZOHO_BOOKMARKS_ROOT_URL, group_id),
-            params={"limit": limit, "after": after},
+            _scoped_url(ZOHO_BOOKMARKS_ROOT_URL, group_id), params=params
         )
         bookmarks = payload.get("data", {}).get("list", [])
         return [normalize_bookmark(b) for b in bookmarks]

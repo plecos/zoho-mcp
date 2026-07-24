@@ -96,7 +96,9 @@ class FakeZohoClient:
     async def get_note(self, note_id):
         return {}
 
-    async def list_bookmarks(self, limit=20, after=0, group_id=None):
+    async def list_bookmarks(
+        self, limit=20, after=0, group_id=None, oldest_first=False
+    ):
         return []
 
     async def get_bookmark(self, bookmark_id):

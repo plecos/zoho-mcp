@@ -473,7 +473,10 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
 
     @mcp.tool(annotations=_READ_ONLY)
     async def list_bookmarks(
-        limit: int = 20, after: int = 0, group_id: str | None = None
+        limit: int = 20,
+        after: int = 0,
+        group_id: str | None = None,
+        oldest_first: bool = False,
     ) -> list[dict]:
         """List Zoho Mail bookmarks -- the user's personal ones, or a group's.
 
@@ -481,14 +484,22 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         after (optional): how many bookmarks to skip -- use for pagination.
         group_id (optional): list a shared group's bookmarks instead of
         the user's personal ones. Get ids from list_groups.
+        oldest_first (optional): return oldest-created bookmarks first.
+        Defaults to newest first.
 
         Each bookmark has id, title, url, summary, collection, owner,
-        is_favorite, tags. There is no has_more signal for this endpoint
-        -- getting back fewer than limit results is the only reliable
-        sign you've reached the end.
+        is_favorite, tags. Bookmarks carry no created/modified timestamps
+        at all, so ordering is the only way to reason about their age.
+        There is no has_more signal for this endpoint -- getting back
+        fewer than limit results is the only reliable sign you've
+        reached the end.
         """
         return await bookmarks_tools.list_bookmarks(
-            client, limit=limit, after=after, group_id=group_id
+            client,
+            limit=limit,
+            after=after,
+            group_id=group_id,
+            oldest_first=oldest_first,
         )
 
     @mcp.tool(annotations=_READ_ONLY)

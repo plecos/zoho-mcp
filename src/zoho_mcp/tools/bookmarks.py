@@ -13,6 +13,7 @@ async def list_bookmarks(
     limit: int = 20,
     after: int = 0,
     group_id: str | None = None,
+    oldest_first: bool = False,
 ) -> list[dict]:
     """List Zoho Mail bookmarks -- the user's personal ones, or a group's.
 
@@ -22,6 +23,8 @@ async def list_bookmarks(
         after: how many bookmarks to skip before returning results.
         group_id: list a shared group's bookmarks instead of personal
             ones. Ids come from list_groups.
+        oldest_first: return oldest-created bookmarks first instead of
+            the default newest-first.
 
     Returns:
         Normalized bookmarks: id, title, url, summary, collection, owner,
@@ -33,7 +36,9 @@ async def list_bookmarks(
         ZohoAPIError: if limit/after are out of range, or the Bookmarks
             API rejects or fails the request.
     """
-    return await client.list_bookmarks(limit=limit, after=after, group_id=group_id)
+    return await client.list_bookmarks(
+        limit=limit, after=after, group_id=group_id, oldest_first=oldest_first
+    )
 
 
 async def get_bookmark(client: ZohoClient, bookmark_id: str) -> dict:

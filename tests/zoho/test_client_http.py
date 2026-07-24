@@ -1073,6 +1073,36 @@ async def test_list_bookmarks_sends_limit_and_after_params(respx_mock, zoho_clie
     assert [b["id"] for b in results] == ["1"]
 
 
+# Verified independently against real bookmarks rather than inferred from
+# Notes: these two sibling endpoints already disagree on isFavorite's type
+# (bool on Notes, string here), so identical docs prove nothing. Bookmarks
+# carry no createdTime at all, so ordering was checked via their
+# epoch-ms-prefixed entityIds -- absent == "false" (newest first) and
+# "true" is the exact reverse, matching Notes.
+async def test_list_bookmarks_requests_ascending_order_when_oldest_first(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_bookmarks(oldest_first=True)
+
+    assert route.calls.last.request.url.params["isPrev"] == "true"
+
+
+async def test_list_bookmarks_omits_isprev_when_defaulting_to_newest_first(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_bookmarks()
+
+    assert "isPrev" not in route.calls.last.request.url.params
+
+
 async def test_list_bookmarks_returns_empty_list_when_list_key_absent(
     respx_mock, zoho_client
 ):

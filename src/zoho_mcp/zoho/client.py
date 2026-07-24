@@ -18,9 +18,15 @@ from zoho_mcp.zoho.auth import ZohoTokenManager
 ZOHO_EVENT_RANGE_REQUEST_FORMAT = "%Y%m%dT%H%M%SZ"
 ZOHO_MAIL_BASE_URL = "https://mail.zoho.com/api"
 ZOHO_CALENDAR_BASE_URL = "https://calendar.zoho.com/api/v1"
-ZOHO_TASKS_BASE_URL = "https://mail.zoho.com/api/tasks/me"
-ZOHO_NOTES_BASE_URL = "https://mail.zoho.com/api/notes/me"
-ZOHO_BOOKMARKS_BASE_URL = "https://mail.zoho.com/api/links/me"
+# Each of these three services scopes its data the same way: "/me" for the
+# user's own personal items, "/groups/{id}" for a shared group's. The roots
+# exist so both forms are built in one place (see _scoped_url).
+ZOHO_TASKS_ROOT_URL = "https://mail.zoho.com/api/tasks"
+ZOHO_NOTES_ROOT_URL = "https://mail.zoho.com/api/notes"
+ZOHO_BOOKMARKS_ROOT_URL = "https://mail.zoho.com/api/links"
+ZOHO_TASKS_BASE_URL = f"{ZOHO_TASKS_ROOT_URL}/me"
+ZOHO_NOTES_BASE_URL = f"{ZOHO_NOTES_ROOT_URL}/me"
+ZOHO_BOOKMARKS_BASE_URL = f"{ZOHO_BOOKMARKS_ROOT_URL}/me"
 ZOHO_BRANCHES_URL = "https://calendar.zoho.com/api/v1/branches"
 ZOHO_RESOURCES_URL = "https://calendar.zoho.com/api/v1/resources"
 MAX_EVENT_RANGE_DAYS = 31
@@ -64,7 +70,19 @@ _VALID_EMAIL_STATUSES = frozenset({"read", "unread", "all"})
 MIN_TASKS_LIMIT = 1
 MAX_TASKS_LIMIT = 499  # per Zoho's own documented range for this endpoint
 MIN_NOTES_LIMIT = 1
+# Zoho documents 1-399 for both Notes and Bookmarks, but confirmed live it
+# silently *accepts* an over-max limit (HTTP 200 for limit=10000) instead of
+# rejecting it. Silent capping is the worse failure mode -- a caller asking
+# for 1000 can't distinguish "that's everything" from "you were truncated"
+# -- so both bounds are enforced here rather than deferred to Zoho.
+MAX_NOTES_LIMIT = 399
 MIN_BOOKMARKS_LIMIT = 1
+MAX_BOOKMARKS_LIMIT = 399
+
+# Zoho's own view names for the two cross-group task queries, mapped from
+# readable argument values. Confirmed live that only these two exist --
+# "assignedbyme" 400s with PATTERN_NOT_MATCHED.
+_TASK_VIEWS = {"assigned_to_me": "assignedtome", "created_by_me": "createdbyme"}
 
 # search_emails excludes these by default -- not "received" mail by nature.
 # Every user-created/rule-filed folder reports folderType "Inbox" (confirmed
@@ -495,6 +513,52 @@ def normalize_bookmark(raw: dict) -> dict:
         }
     except (KeyError, TypeError) as e:
         raise ZohoAPIError(f"Malformed bookmark from Zoho: {e}") from e
+
+
+def normalize_group(raw: dict, service: str) -> dict:
+    """Normalize one group from a Zoho Mail Tasks/Notes/Bookmarks group list.
+
+    The three services genuinely disagree on shape (confirmed live for
+    the containers, and against Zoho's own response samples for the
+    fields): Tasks nests its array under ``data.groups`` and keys the id
+    as an **int** ``id``, while Notes and Bookmarks return ``data`` as
+    the array directly and key the id as a **string** ``groupId``. Ids
+    are coerced to ``str`` here so callers get one consistent type
+    regardless of which service a group came from.
+
+    Only ``id``/``name``/``service`` are surfaced. Tasks additionally
+    returns ``owner``/``numberOfMembers``/``moderators``, but Notes and
+    Bookmarks return no equivalent, so including them would mean
+    half-populated fields whose emptiness said nothing about the group
+    -- the common shape is the honest one here.
+
+    Note: this field mapping is the one part of group support that could
+    not be verified against live data -- the account it was built on has
+    no groups in any of the three services, so every real response was
+    an empty array. The container shapes *were* confirmed live; the
+    per-group keys come from Zoho's documented samples only.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing its id or ``name``.
+    """
+    try:
+        return {
+            "id": str(raw["id"] if "id" in raw else raw["groupId"]),
+            "name": raw["name"],
+            "service": service,
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed group from Zoho: {e}") from e
+
+
+def _scoped_url(root: str, group_id: str | None) -> str:
+    """Build a Tasks/Notes/Bookmarks URL for either personal or group scope.
+
+    Zoho splits these three services' data by scope in the path rather
+    than by a query param: ``/me`` for the caller's own items,
+    ``/groups/{id}`` for a shared group's.
+    """
+    return f"{root}/groups/{group_id}" if group_id is not None else f"{root}/me"
 
 
 def normalize_floor(raw: dict) -> dict:
@@ -1487,16 +1551,70 @@ class ZohoClient:
             )
         return [normalize_resource(r) for r in payload]
 
+    async def list_groups(self) -> list[dict]:
+        """List every shared group the user belongs to, across all three
+        services that have them (Tasks, Notes, Bookmarks).
+
+        Zoho has no single "my groups" endpoint -- each service exposes
+        its own (``/tasks/groups``, ``/notes/groups``, ``/links/groups``),
+        and a group in one is not necessarily a group in another, so all
+        three are queried and the results merged with a ``service`` tag.
+        Confirmed live that all three work under the scopes already
+        requested for reading tasks/notes/bookmarks, and that each
+        returns a 200 with an empty collection (not an error) for an
+        account with no groups.
+
+        Returns:
+            ``[{"id", "name", "service"}, ...]``. An empty list is a
+            normal, common result -- groups are a shared-mailbox feature
+            most personal accounts never set up. Pass an ``id`` to the
+            matching service's ``group_id`` argument to read its items.
+
+        Raises:
+            ZohoAPIError: if any of the three requests fails, or a group
+                in the response is malformed.
+        """
+        tasks_payload = await self._get(f"{ZOHO_TASKS_ROOT_URL}/groups")
+        notes_payload = await self._get(f"{ZOHO_NOTES_ROOT_URL}/groups")
+        bookmarks_payload = await self._get(f"{ZOHO_BOOKMARKS_ROOT_URL}/groups")
+
+        # Tasks nests its array under data.groups; Notes and Bookmarks
+        # return data as the array itself. Confirmed live.
+        raw_by_service = [
+            ("tasks", tasks_payload.get("data", {}).get("groups", [])),
+            ("notes", notes_payload.get("data", [])),
+            ("bookmarks", bookmarks_payload.get("data", [])),
+        ]
+        return [
+            normalize_group(raw, service)
+            for service, raws in raw_by_service
+            for raw in raws
+        ]
+
     async def list_tasks(
-        self, limit: int = 20, offset: int = 0
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        group_id: str | None = None,
+        view: str | None = None,
     ) -> tuple[list[dict], bool]:
-        """List the user's personal Zoho Mail tasks.
+        """List Zoho Mail tasks -- personal, a group's, or a cross-group view.
 
         Args:
             limit: maximum number of tasks to return (1-499).
             offset: how many tasks to skip before returning results (Zoho's
                 own ``from`` param -- renamed here since ``from`` is a
                 Python keyword).
+            group_id: list a shared group's tasks instead of the caller's
+                personal ones. Ids come from ``list_groups``.
+            view: ``"assigned_to_me"`` or ``"created_by_me"`` -- Zoho's
+                two cross-group task views, which span every group the
+                user belongs to rather than one scope. Confirmed live
+                that on an account with no groups these return exactly
+                the same tasks as the personal list, so they're only
+                meaningfully different once group tasks exist. Mutually
+                exclusive with ``group_id``, since the two select scope
+                in incompatible ways (a path segment vs. a query param).
 
         Returns:
             ``(tasks, has_more)`` -- ``has_more`` reflects whether Zoho's
@@ -1504,8 +1622,10 @@ class ZohoClient:
             result count.
 
         Raises:
-            ZohoAPIError: if ``limit``/``offset`` are out of range, or the
-                Tasks API rejects or fails the request.
+            ZohoAPIError: if ``limit``/``offset`` are out of range,
+                ``view`` isn't a recognized value, both ``group_id`` and
+                ``view`` are given, or the Tasks API rejects or fails the
+                request.
         """
         if not (MIN_TASKS_LIMIT <= limit <= MAX_TASKS_LIMIT):
             raise ZohoAPIError(
@@ -1514,9 +1634,23 @@ class ZohoClient:
             )
         if offset < 0:
             raise ZohoAPIError(f"offset must be >= 0 (got {offset})")
-        payload = await self._get(
-            ZOHO_TASKS_BASE_URL, params={"limit": limit, "from": offset}
-        )
+        if group_id is not None and view is not None:
+            raise ZohoAPIError("group_id and view cannot be given together")
+        if view is not None and view not in _TASK_VIEWS:
+            raise ZohoAPIError(
+                f"view must be one of {sorted(_TASK_VIEWS)} (got {view!r})"
+            )
+
+        params: dict = {"limit": limit, "from": offset}
+        if view is not None:
+            # The cross-group views live at the service root (trailing
+            # slash required) and need action=view alongside the view name.
+            url = f"{ZOHO_TASKS_ROOT_URL}/"
+            params |= {"action": "view", "view": _TASK_VIEWS[view]}
+        else:
+            url = _scoped_url(ZOHO_TASKS_ROOT_URL, group_id)
+
+        payload = await self._get(url, params=params)
         data = payload.get("data", {})
         tasks = [normalize_task(t) for t in data.get("tasks", [])]
         has_more = bool(data.get("paging", {}).get("nextPage"))
@@ -1535,11 +1669,15 @@ class ZohoClient:
             raise ZohoAPIError(f"No task found for task_id={task_id!r}")
         return normalize_task(tasks[0])
 
-    async def list_notes(self, limit: int = 20, after: int = 0) -> list[dict]:
-        """List the user's personal Zoho Mail notes.
+    async def list_notes(
+        self, limit: int = 20, after: int = 0, group_id: str | None = None
+    ) -> list[dict]:
+        """List Zoho Mail notes -- the caller's personal ones, or a group's.
 
         Args:
-            limit: maximum number of notes to return.
+            limit: maximum number of notes to return (1-399).
+            group_id: list a shared group's notes instead of the caller's
+                personal ones. Ids come from ``list_groups``.
             after: how many notes to skip before returning results. Zoho's
                 own docs describe this vaguely as "specifies from which
                 retrieval has to be done" -- confirmed live it behaves as
@@ -1558,13 +1696,17 @@ class ZohoClient:
             ZohoAPIError: if ``limit``/``after`` are out of range, or the
                 Notes API rejects or fails the request.
         """
-        if limit < MIN_NOTES_LIMIT:
-            raise ZohoAPIError(f"limit must be >= {MIN_NOTES_LIMIT} (got {limit})")
+        if not (MIN_NOTES_LIMIT <= limit <= MAX_NOTES_LIMIT):
+            raise ZohoAPIError(
+                f"limit must be between {MIN_NOTES_LIMIT} and "
+                f"{MAX_NOTES_LIMIT} (got {limit})"
+            )
         if after < 0:
             raise ZohoAPIError(f"after must be >= 0 (got {after})")
         mailbox_timezone = await self._get_mailbox_timezone()
         payload = await self._get(
-            ZOHO_NOTES_BASE_URL, params={"limit": limit, "after": after}
+            _scoped_url(ZOHO_NOTES_ROOT_URL, group_id),
+            params={"limit": limit, "after": after},
         )
         notes = payload.get("data", {}).get("list", [])
         return [normalize_note(n, mailbox_timezone) for n in notes]
@@ -1584,11 +1726,15 @@ class ZohoClient:
             raise ZohoAPIError(f"Malformed note response from Zoho: {e}") from e
         return normalize_note(note, mailbox_timezone)
 
-    async def list_bookmarks(self, limit: int = 20, after: int = 0) -> list[dict]:
-        """List the user's personal Zoho Mail bookmarks.
+    async def list_bookmarks(
+        self, limit: int = 20, after: int = 0, group_id: str | None = None
+    ) -> list[dict]:
+        """List Zoho Mail bookmarks -- the caller's personal ones, or a group's.
 
         Args:
-            limit: maximum number of bookmarks to return.
+            limit: maximum number of bookmarks to return (1-399).
+            group_id: list a shared group's bookmarks instead of the
+                caller's personal ones. Ids come from ``list_groups``.
             after: how many bookmarks to skip before returning results
                 (behaves as a plain integer offset -- see ``list_notes``).
 
@@ -1601,12 +1747,16 @@ class ZohoClient:
             ZohoAPIError: if ``limit``/``after`` are out of range, or the
                 Bookmarks API rejects or fails the request.
         """
-        if limit < MIN_BOOKMARKS_LIMIT:
-            raise ZohoAPIError(f"limit must be >= {MIN_BOOKMARKS_LIMIT} (got {limit})")
+        if not (MIN_BOOKMARKS_LIMIT <= limit <= MAX_BOOKMARKS_LIMIT):
+            raise ZohoAPIError(
+                f"limit must be between {MIN_BOOKMARKS_LIMIT} and "
+                f"{MAX_BOOKMARKS_LIMIT} (got {limit})"
+            )
         if after < 0:
             raise ZohoAPIError(f"after must be >= 0 (got {after})")
         payload = await self._get(
-            ZOHO_BOOKMARKS_BASE_URL, params={"limit": limit, "after": after}
+            _scoped_url(ZOHO_BOOKMARKS_ROOT_URL, group_id),
+            params={"limit": limit, "after": after},
         )
         bookmarks = payload.get("data", {}).get("list", [])
         return [normalize_bookmark(b) for b in bookmarks]

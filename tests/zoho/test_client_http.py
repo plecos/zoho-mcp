@@ -1085,6 +1085,233 @@ async def test_list_bookmarks_wraps_http_errors_as_zoho_api_error(
         await zoho_client.list_bookmarks()
 
 
+# Zoho documents 1-399 for both, but confirmed live it silently ACCEPTS an
+# over-max limit (HTTP 200 for limit=10000) rather than rejecting it -- so a
+# caller asking for 1000 can't tell whether they got everything or were
+# quietly capped. Validate explicitly so that ambiguity never reaches them.
+@pytest.mark.parametrize("bad_limit", [400, 500, 10_000])
+async def test_list_notes_rejects_limit_above_max_without_a_request(
+    respx_mock, zoho_client, bad_limit
+):
+    route = respx_mock.get("https://mail.zoho.com/api/notes/me")
+
+    with pytest.raises(ZohoAPIError, match="limit"):
+        await zoho_client.list_notes(limit=bad_limit)
+
+    assert not route.called
+
+
+@pytest.mark.parametrize("bad_limit", [400, 500, 10_000])
+async def test_list_bookmarks_rejects_limit_above_max_without_a_request(
+    respx_mock, zoho_client, bad_limit
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me")
+
+    with pytest.raises(ZohoAPIError, match="limit"):
+        await zoho_client.list_bookmarks(limit=bad_limit)
+
+    assert not route.called
+
+
+@pytest.mark.parametrize("edge_limit", [1, 399])
+async def test_list_notes_accepts_boundary_limit_values(
+    respx_mock, zoho_client, edge_limit
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_notes(limit=edge_limit)
+
+    assert route.called
+
+
+@pytest.mark.parametrize("edge_limit", [1, 399])
+async def test_list_bookmarks_accepts_boundary_limit_values(
+    respx_mock, zoho_client, edge_limit
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_bookmarks(limit=edge_limit)
+
+    assert route.called
+
+
+async def test_list_tasks_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/groups/zg-1").mock(
+        return_value=httpx.Response(200, json={"data": {"tasks": []}})
+    )
+
+    await zoho_client.list_tasks(group_id="zg-1")
+
+    assert route.called
+
+
+async def test_list_notes_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get("https://mail.zoho.com/api/notes/groups/g-1").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_notes(group_id="g-1")
+
+    assert route.called
+
+
+async def test_list_bookmarks_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/groups/g-1").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_bookmarks(group_id="g-1")
+
+    assert route.called
+
+
+# Confirmed live: these two views are real (assignedbyme is not -- it 400s
+# with PATTERN_NOT_MATCHED), and both require action=view alongside them.
+@pytest.mark.parametrize(
+    ("view", "zoho_view"),
+    [("assigned_to_me", "assignedtome"), ("created_by_me", "createdbyme")],
+)
+async def test_list_tasks_uses_view_endpoint_when_view_given(
+    respx_mock, zoho_client, view, zoho_view
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/").mock(
+        return_value=httpx.Response(200, json={"data": {"tasks": []}})
+    )
+
+    await zoho_client.list_tasks(view=view)
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.url.params["view"] == zoho_view
+    assert request.url.params["action"] == "view"
+
+
+async def test_list_tasks_rejects_unknown_view_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/")
+
+    with pytest.raises(ZohoAPIError, match="view"):
+        await zoho_client.list_tasks(view="assigned_by_me")
+
+    assert not route.called
+
+
+async def test_list_tasks_rejects_group_id_and_view_together_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/")
+
+    with pytest.raises(ZohoAPIError, match="together"):
+        await zoho_client.list_tasks(group_id="zg-1", view="assigned_to_me")
+
+    assert not route.called
+
+
+async def test_list_groups_merges_all_three_services_and_tags_them(
+    respx_mock, zoho_client
+):
+    # Confirmed live that the container shapes genuinely differ: Tasks
+    # nests under data.groups with an int "id", while Notes/Bookmarks
+    # return data as the array directly with a string "groupId".
+    respx_mock.get("https://mail.zoho.com/api/tasks/groups").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "groups": [
+                        {
+                            "id": 53658048,
+                            "name": "Marketing",
+                            "owner": "Rebecca",
+                            "numberOfMembers": 3,
+                        }
+                    ]
+                }
+            },
+        )
+    )
+    respx_mock.get("https://mail.zoho.com/api/notes/groups").mock(
+        return_value=httpx.Response(
+            200, json={"data": [{"groupId": "84626808", "name": "note-team"}]}
+        )
+    )
+    respx_mock.get("https://mail.zoho.com/api/links/groups").mock(
+        return_value=httpx.Response(
+            200, json={"data": [{"groupId": "78762952", "name": "link-team"}]}
+        )
+    )
+
+    results = await zoho_client.list_groups()
+
+    assert results == [
+        {"id": "53658048", "name": "Marketing", "service": "tasks"},
+        {"id": "84626808", "name": "note-team", "service": "notes"},
+        {"id": "78762952", "name": "link-team", "service": "bookmarks"},
+    ]
+
+
+async def test_list_groups_returns_empty_list_when_no_groups_exist(
+    respx_mock, zoho_client
+):
+    # The real shape on an account with no groups -- confirmed live.
+    respx_mock.get("https://mail.zoho.com/api/tasks/groups").mock(
+        return_value=httpx.Response(200, json={"data": {"groups": []}})
+    )
+    respx_mock.get("https://mail.zoho.com/api/notes/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    respx_mock.get("https://mail.zoho.com/api/links/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+
+    assert await zoho_client.list_groups() == []
+
+
+async def test_list_groups_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.get("https://mail.zoho.com/api/tasks/groups").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+    respx_mock.get("https://mail.zoho.com/api/notes/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    respx_mock.get("https://mail.zoho.com/api/links/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_groups()
+
+
+async def test_list_groups_raises_clear_error_on_malformed_group(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/tasks/groups").mock(
+        return_value=httpx.Response(200, json={"data": {"groups": [{"name": "no-id"}]}})
+    )
+    respx_mock.get("https://mail.zoho.com/api/notes/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    respx_mock.get("https://mail.zoho.com/api/links/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+
+    with pytest.raises(ZohoAPIError, match="group"):
+        await zoho_client.list_groups()
+
+
 async def test_get_bookmark_fetches_by_id_and_normalizes(respx_mock, zoho_client):
     route = respx_mock.get("https://mail.zoho.com/api/links/me/1").mock(
         return_value=httpx.Response(

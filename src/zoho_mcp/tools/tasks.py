@@ -8,13 +8,25 @@ here.
 from zoho_mcp.zoho.client import ZohoClient
 
 
-async def list_tasks(client: ZohoClient, limit: int = 20, offset: int = 0) -> dict:
-    """List the user's personal Zoho Mail tasks.
+async def list_tasks(
+    client: ZohoClient,
+    limit: int = 20,
+    offset: int = 0,
+    group_id: str | None = None,
+    view: str | None = None,
+) -> dict:
+    """List Zoho Mail tasks -- personal, a group's, or a cross-group view.
 
     Args:
         client: injected Zoho client.
         limit: maximum number of tasks to return (1-499).
         offset: how many tasks to skip before returning results.
+        group_id: list a shared group's tasks instead of personal ones.
+            Ids come from list_groups.
+        view: "assigned_to_me" or "created_by_me" -- Zoho's two views
+            that span every group the user belongs to. On an account
+            with no groups these return the same tasks as the personal
+            list. Cannot be combined with group_id.
 
     Returns:
         ``{"tasks": [...], "has_more": bool}``. Each task has id, title,
@@ -25,10 +37,13 @@ async def list_tasks(client: ZohoClient, limit: int = 20, offset: int = 0) -> di
         the full total.
 
     Raises:
-        ZohoAPIError: if limit/offset are out of range, or the Tasks API
-            rejects or fails the request.
+        ZohoAPIError: if limit/offset are out of range, view isn't a
+            recognized value, group_id and view are both given, or the
+            Tasks API rejects or fails the request.
     """
-    tasks, has_more = await client.list_tasks(limit=limit, offset=offset)
+    tasks, has_more = await client.list_tasks(
+        limit=limit, offset=offset, group_id=group_id, view=view
+    )
     return {"tasks": tasks, "has_more": has_more}
 
 

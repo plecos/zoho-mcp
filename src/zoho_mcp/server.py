@@ -18,6 +18,7 @@ from zoho_mcp.config import load_env
 from zoho_mcp.tools import bookmarks as bookmarks_tools
 from zoho_mcp.tools import calendar as calendar_tools
 from zoho_mcp.tools import contacts as contacts_tools
+from zoho_mcp.tools import groups as groups_tools
 from zoho_mcp.tools import mail as mail_tools
 from zoho_mcp.tools import notes as notes_tools
 from zoho_mcp.tools import resources as resources_tools
@@ -394,13 +395,26 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         )
 
     @mcp.tool(annotations=_READ_ONLY)
-    async def list_tasks(limit: int = 20, offset: int = 0) -> dict:
-        """List the user's personal Zoho Mail tasks (Zoho Mail's Tasks
-        feature, not a project-management tool).
+    async def list_tasks(
+        limit: int = 20,
+        offset: int = 0,
+        group_id: str | None = None,
+        view: str | None = None,
+    ) -> dict:
+        """List Zoho Mail tasks (Zoho Mail's Tasks feature, not a
+        project-management tool) -- personal, a group's, or across groups.
 
         limit (optional): maximum number of tasks to return (1-499).
         offset (optional): how many tasks to skip -- use for pagination
         together with has_more.
+        group_id (optional): list a shared group's tasks instead of the
+        user's personal ones. Get ids from list_groups.
+        view (optional): "assigned_to_me" or "created_by_me" -- Zoho's
+        two views spanning every group the user belongs to. On an
+        account with no groups these return the same tasks as the
+        personal list, so prefer the default unless the user explicitly
+        asks about assignment or authorship. Cannot be combined with
+        group_id.
 
         Returns {"tasks": [...], "has_more": bool}. Each task has id,
         title, description, status, priority, due_date, project,
@@ -409,8 +423,14 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         populated) -- treat it as an opaque string, don't assume a
         format. If has_more is true, raise limit or increase offset,
         don't assume the count you got back is the full total.
+
+        There is no server-side filter for task status, priority, or due
+        date -- Zoho's API offers none. Fetch and filter on the returned
+        fields yourself.
         """
-        return await tasks_tools.list_tasks(client, limit=limit, offset=offset)
+        return await tasks_tools.list_tasks(
+            client, limit=limit, offset=offset, group_id=group_id, view=view
+        )
 
     @mcp.tool(annotations=_READ_ONLY)
     async def get_task(task_id: str) -> dict:
@@ -418,18 +438,24 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         return await tasks_tools.get_task(client, task_id=task_id)
 
     @mcp.tool(annotations=_READ_ONLY)
-    async def list_notes(limit: int = 20, after: int = 0) -> list[dict]:
-        """List the user's personal Zoho Mail notes.
+    async def list_notes(
+        limit: int = 20, after: int = 0, group_id: str | None = None
+    ) -> list[dict]:
+        """List Zoho Mail notes -- the user's personal ones, or a group's.
 
-        limit (optional): maximum number of notes to return.
+        limit (optional): maximum number of notes to return (1-399).
         after (optional): how many notes to skip -- use for pagination.
+        group_id (optional): list a shared group's notes instead of the
+        user's personal ones. Get ids from list_groups.
 
         Each note has id, title, content, book, owner, is_favorite,
         color, created_at, modified_at. There is no has_more signal for
         this endpoint -- getting back fewer than limit results is the
         only reliable sign you've reached the end.
         """
-        return await notes_tools.list_notes(client, limit=limit, after=after)
+        return await notes_tools.list_notes(
+            client, limit=limit, after=after, group_id=group_id
+        )
 
     @mcp.tool(annotations=_READ_ONLY)
     async def get_note(note_id: str) -> dict:
@@ -437,23 +463,45 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         return await notes_tools.get_note(client, note_id=note_id)
 
     @mcp.tool(annotations=_READ_ONLY)
-    async def list_bookmarks(limit: int = 20, after: int = 0) -> list[dict]:
-        """List the user's personal Zoho Mail bookmarks.
+    async def list_bookmarks(
+        limit: int = 20, after: int = 0, group_id: str | None = None
+    ) -> list[dict]:
+        """List Zoho Mail bookmarks -- the user's personal ones, or a group's.
 
-        limit (optional): maximum number of bookmarks to return.
+        limit (optional): maximum number of bookmarks to return (1-399).
         after (optional): how many bookmarks to skip -- use for pagination.
+        group_id (optional): list a shared group's bookmarks instead of
+        the user's personal ones. Get ids from list_groups.
 
         Each bookmark has id, title, url, summary, collection, owner,
         is_favorite, tags. There is no has_more signal for this endpoint
         -- getting back fewer than limit results is the only reliable
         sign you've reached the end.
         """
-        return await bookmarks_tools.list_bookmarks(client, limit=limit, after=after)
+        return await bookmarks_tools.list_bookmarks(
+            client, limit=limit, after=after, group_id=group_id
+        )
 
     @mcp.tool(annotations=_READ_ONLY)
     async def get_bookmark(bookmark_id: str) -> dict:
         """Fetch one bookmark's full details, given an id from list_bookmarks."""
         return await bookmarks_tools.get_bookmark(client, bookmark_id=bookmark_id)
+
+    @mcp.tool(annotations=_READ_ONLY)
+    async def list_groups() -> list[dict]:
+        """List every shared Zoho Mail group the user belongs to, across
+        Tasks, Notes, and Bookmarks.
+
+        Returns [{"id", "name", "service"}, ...] where service is
+        "tasks", "notes", or "bookmarks". Pass an id to the matching
+        tool's group_id argument (list_tasks / list_notes /
+        list_bookmarks) to read that group's items.
+
+        An empty list is a normal, common result -- groups are a
+        shared-mailbox feature most personal accounts never set up. Do
+        not treat it as an error or retry it.
+        """
+        return await groups_tools.list_groups(client)
 
     @mcp.tool(annotations=_READ_ONLY)
     async def search_contacts(

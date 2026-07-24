@@ -8,13 +8,20 @@ here.
 from zoho_mcp.zoho.client import ZohoClient
 
 
-async def list_notes(client: ZohoClient, limit: int = 20, after: int = 0) -> list[dict]:
-    """List the user's personal Zoho Mail notes.
+async def list_notes(
+    client: ZohoClient,
+    limit: int = 20,
+    after: int = 0,
+    group_id: str | None = None,
+) -> list[dict]:
+    """List Zoho Mail notes -- the user's personal ones, or a group's.
 
     Args:
         client: injected Zoho client.
-        limit: maximum number of notes to return.
+        limit: maximum number of notes to return (1-399).
         after: how many notes to skip before returning results.
+        group_id: list a shared group's notes instead of personal ones.
+            Ids come from list_groups.
 
     Returns:
         Normalized notes: id, title, content, book, owner, is_favorite,
@@ -26,7 +33,7 @@ async def list_notes(client: ZohoClient, limit: int = 20, after: int = 0) -> lis
         ZohoAPIError: if limit/after are out of range, or the Notes API
             rejects or fails the request.
     """
-    return await client.list_notes(limit=limit, after=after)
+    return await client.list_notes(limit=limit, after=after, group_id=group_id)
 
 
 async def get_note(client: ZohoClient, note_id: str) -> dict:

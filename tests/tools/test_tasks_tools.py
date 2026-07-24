@@ -1,4 +1,4 @@
-from zoho_mcp.tools.tasks import get_task, list_tasks
+from zoho_mcp.tools.tasks import create_task, get_task, list_tasks
 
 
 class FakeZohoClient:
@@ -6,6 +6,8 @@ class FakeZohoClient:
         self.list_tasks_calls = []
         self.list_tasks_result = ([{"id": "1", "title": "Renew passport"}], False)
         self.get_task_calls = []
+        self.create_task_calls = []
+        self.create_task_result = {"id": "t-1", "title": "New"}
         self.get_task_result = {"id": "1", "title": "Renew passport"}
 
     async def list_tasks(self, limit=20, offset=0, group_id=None, view=None):
@@ -13,6 +15,17 @@ class FakeZohoClient:
             {"limit": limit, "offset": offset, "group_id": group_id, "view": view}
         )
         return self.list_tasks_result
+
+    async def create_task(self, title, description="", priority="", group_id=None):
+        self.create_task_calls.append(
+            {
+                "title": title,
+                "description": description,
+                "priority": priority,
+                "group_id": group_id,
+            }
+        )
+        return self.create_task_result
 
     async def get_task(self, task_id):
         self.get_task_calls.append(task_id)
@@ -72,3 +85,22 @@ async def test_list_tasks_forwards_view():
     await list_tasks(client, view="assigned_to_me")
 
     assert client.list_tasks_calls[0]["view"] == "assigned_to_me"
+
+
+async def test_create_task_delegates_to_client():
+    client = FakeZohoClient()
+
+    result = await create_task(client, title="New", description="d", priority="high")
+
+    assert client.create_task_calls == [
+        {"title": "New", "description": "d", "priority": "high", "group_id": None}
+    ]
+    assert result == client.create_task_result
+
+
+async def test_create_task_forwards_group_id():
+    client = FakeZohoClient()
+
+    await create_task(client, title="New", group_id="zg-1")
+
+    assert client.create_task_calls[0]["group_id"] == "zg-1"

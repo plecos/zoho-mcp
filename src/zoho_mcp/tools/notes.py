@@ -41,6 +41,32 @@ async def list_notes(
     )
 
 
+async def create_note(
+    client: ZohoClient,
+    content: str,
+    title: str = "",
+    group_id: str | None = None,
+) -> dict:
+    """Create a personal or group note.
+
+    Args:
+        client: injected Zoho client.
+        content: the note body -- the only field Zoho requires.
+        title: optional note title.
+        group_id: create in a shared group instead of personal notes.
+            Ids come from list_groups.
+
+    Returns:
+        ``{"id": ...}``. Zoho's create response carries only the new id,
+        not the stored note -- call get_note with it for full details.
+
+    Raises:
+        ZohoAPIError: if content is blank, or the Notes API rejects or
+            fails the request.
+    """
+    return await client.create_note(content=content, title=title, group_id=group_id)
+
+
 async def get_note(client: ZohoClient, note_id: str) -> dict:
     """Fetch one note's full details by id.
 

@@ -87,11 +87,17 @@ class FakeZohoClient:
     async def list_tasks(self, limit=20, offset=0, group_id=None, view=None):
         return [], False
 
+    async def create_task(self, title, description="", priority="", group_id=None):
+        return {}
+
     async def get_task(self, task_id):
         return {}
 
     async def list_notes(self, limit=20, after=0, group_id=None, oldest_first=False):
         return []
+
+    async def create_note(self, content, title="", group_id=None):
+        return {}
 
     async def get_note(self, note_id):
         return {}
@@ -100,6 +106,9 @@ class FakeZohoClient:
         self, limit=20, after=0, group_id=None, oldest_first=False
     ):
         return []
+
+    async def create_bookmark(self, url, title, summary="", group_id=None):
+        return {}
 
     async def get_bookmark(self, bookmark_id):
         return {}
@@ -119,7 +128,7 @@ class FakeContactsClient:
         return {"personal": 0, "organization": 0, "total": 0}
 
 
-async def test_create_server_registers_all_thirty_one_tools():
+async def test_create_server_registers_all_thirty_four_tools():
     server = create_server(FakeZohoClient(), FakeContactsClient())
 
     tools = await server.list_tools()
@@ -146,11 +155,14 @@ async def test_create_server_registers_all_thirty_one_tools():
         "update_event",
         "delete_event",
         "list_tasks",
+        "create_task",
         "get_task",
         "list_notes",
+        "create_note",
         "get_note",
         "list_bookmarks",
         "list_groups",
+        "create_bookmark",
         "get_bookmark",
         "list_branches",
         "list_resources",
@@ -161,6 +173,9 @@ async def test_create_server_registers_all_thirty_one_tools():
 
 
 _WRITE_TOOL_NAMES = {
+    "create_task",
+    "create_note",
+    "create_bookmark",
     "create_event",
     "update_event",
     "delete_event",

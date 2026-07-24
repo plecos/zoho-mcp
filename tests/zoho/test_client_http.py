@@ -2535,3 +2535,273 @@ async def test_delete_event_wraps_http_errors_as_zoho_api_error(
 
     with pytest.raises(ZohoAPIError):
         await zoho_client.delete_event(uid="evt-1")
+
+
+def _created_task_payload() -> dict:
+    """Zoho's real create-task response: unlike Notes/Bookmarks, it returns
+    the whole task object, so it can be normalized like a listed one."""
+    return {
+        "status": {"code": 200, "description": "success"},
+        "data": {
+            "id": "7000000089009",
+            "title": "Blog Updates",
+            "description": "Announcement blog for recent revamp",
+            "status": "In Progress",
+            "priority": "low",
+            "owner": {"name": "Ken", "id": 4650081},
+            "assignee": {"name": "Ken", "id": 4650081},
+            "tags": [],
+            "subtasks": [],
+            "createdAt": "2017-07-07T01:20:39+05:30",
+            "modifiedTime": "2017-07-07T01:20:39+05:30",
+        },
+    }
+
+
+async def test_create_task_posts_title_and_returns_normalized_task(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(200, json=_created_task_payload())
+    )
+
+    result = await zoho_client.create_task(title="Blog Updates")
+
+    assert route.called
+    assert json.loads(route.calls.last.request.content) == {"title": "Blog Updates"}
+    assert result["id"] == "7000000089009"
+    assert result["title"] == "Blog Updates"
+    assert result["status"] == "In Progress"
+
+
+async def test_create_task_sends_only_optional_fields_that_were_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(200, json=_created_task_payload())
+    )
+
+    await zoho_client.create_task(
+        title="Blog Updates", description="desc", priority="high"
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "title": "Blog Updates",
+        "description": "desc",
+        "priority": "high",
+    }
+
+
+async def test_create_task_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/tasks/groups/zg-1").mock(
+        return_value=httpx.Response(200, json=_created_task_payload())
+    )
+
+    await zoho_client.create_task(title="Blog Updates", group_id="zg-1")
+
+    assert route.called
+
+
+@pytest.mark.parametrize("bad_title", ["", "   "])
+async def test_create_task_rejects_blank_title_without_a_request(
+    respx_mock, zoho_client, bad_title
+):
+    route = respx_mock.post("https://mail.zoho.com/api/tasks/me")
+
+    with pytest.raises(ZohoAPIError, match="title"):
+        await zoho_client.create_task(title=bad_title)
+
+    assert not route.called
+
+
+async def test_create_task_raises_when_response_has_no_task(respx_mock, zoho_client):
+    respx_mock.post("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(200, json={"status": {"code": 200}})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_task(title="Blog Updates")
+
+
+async def test_create_task_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.post("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_task(title="Blog Updates")
+
+
+# Notes and Bookmarks, unlike Tasks, return only the new id and a URI --
+# no created object -- so these return the id rather than inventing a
+# full record the API never sent back.
+async def test_create_note_posts_content_and_returns_new_id(respx_mock, zoho_client):
+    route = respx_mock.post("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "status": {"code": 201, "description": "Created"},
+                "data": {
+                    "entityId": "1711974988431110001",
+                    "URI": "https://mail.zoho.com/api/notes/me/1711974988431110001",
+                },
+            },
+        )
+    )
+
+    result = await zoho_client.create_note(content="note body")
+
+    assert route.called
+    # color is required despite being documented optional -- confirmed live
+    # that content alone 404s. Int, though the read side returns a string.
+    assert json.loads(route.calls.last.request.content) == {
+        "content": "note body",
+        "color": -1,
+    }
+    assert result == {"id": "1711974988431110001"}
+
+
+async def test_create_note_sends_title_when_given(respx_mock, zoho_client):
+    route = respx_mock.post("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(201, json={"data": {"entityId": "1"}})
+    )
+
+    await zoho_client.create_note(content="body", title="My note")
+
+    assert json.loads(route.calls.last.request.content) == {
+        "content": "body",
+        "color": -1,
+        "title": "My note",
+    }
+
+
+async def test_create_note_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/notes/groups/g-1").mock(
+        return_value=httpx.Response(201, json={"data": {"entityId": "1"}})
+    )
+
+    await zoho_client.create_note(content="body", group_id="g-1")
+
+    assert route.called
+
+
+@pytest.mark.parametrize("bad_content", ["", "   "])
+async def test_create_note_rejects_blank_content_without_a_request(
+    respx_mock, zoho_client, bad_content
+):
+    route = respx_mock.post("https://mail.zoho.com/api/notes/me")
+
+    with pytest.raises(ZohoAPIError, match="content"):
+        await zoho_client.create_note(content=bad_content)
+
+    assert not route.called
+
+
+async def test_create_note_raises_when_entity_id_absent(respx_mock, zoho_client):
+    respx_mock.post("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(201, json={"data": {}})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_note(content="body")
+
+
+async def test_create_note_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.post("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_note(content="body")
+
+
+async def test_create_bookmark_posts_link_and_title_and_returns_new_id(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"entityId": "1712055358708110001"}}
+        )
+    )
+
+    result = await zoho_client.create_bookmark(
+        url="https://www.zoho.com", title="zoho link"
+    )
+
+    assert route.called
+    # Zoho's field is "link"; the read side normalizes it to "url", so the
+    # write side takes "url" too and translates at the boundary.
+    assert json.loads(route.calls.last.request.content) == {
+        "link": "https://www.zoho.com",
+        "title": "zoho link",
+    }
+    assert result == {"id": "1712055358708110001"}
+
+
+async def test_create_bookmark_sends_summary_when_given(respx_mock, zoho_client):
+    route = respx_mock.post("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {"entityId": "1"}})
+    )
+
+    await zoho_client.create_bookmark(
+        url="https://www.zoho.com", title="zoho link", summary="desc"
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "link": "https://www.zoho.com",
+        "title": "zoho link",
+        "summary": "desc",
+    }
+
+
+async def test_create_bookmark_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/links/groups/g-1").mock(
+        return_value=httpx.Response(200, json={"data": {"entityId": "1"}})
+    )
+
+    await zoho_client.create_bookmark(
+        url="https://www.zoho.com", title="zoho link", group_id="g-1"
+    )
+
+    assert route.called
+
+
+@pytest.mark.parametrize(
+    ("url", "title", "expected"),
+    [("", "t", "url"), ("   ", "t", "url"), ("https://x.com", "", "title")],
+)
+async def test_create_bookmark_rejects_blank_required_fields_without_a_request(
+    respx_mock, zoho_client, url, title, expected
+):
+    route = respx_mock.post("https://mail.zoho.com/api/links/me")
+
+    with pytest.raises(ZohoAPIError, match=expected):
+        await zoho_client.create_bookmark(url=url, title=title)
+
+    assert not route.called
+
+
+async def test_create_bookmark_raises_when_entity_id_absent(respx_mock, zoho_client):
+    respx_mock.post("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {}})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_bookmark(url="https://x.com", title="t")
+
+
+async def test_create_bookmark_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.post("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_bookmark(url="https://x.com", title="t")

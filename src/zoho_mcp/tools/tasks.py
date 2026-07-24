@@ -47,6 +47,37 @@ async def list_tasks(
     return {"tasks": tasks, "has_more": has_more}
 
 
+async def create_task(
+    client: ZohoClient,
+    title: str,
+    description: str = "",
+    priority: str = "",
+    group_id: str | None = None,
+) -> dict:
+    """Create a personal or group task.
+
+    Args:
+        client: injected Zoho client.
+        title: the task title -- the only field Zoho requires.
+        description: optional free-text body.
+        priority: optional; Zoho's samples show "low"/"high". Passed
+            through unvalidated since the accepted set isn't documented.
+        group_id: create in a shared group instead of personal tasks.
+            Ids come from list_groups.
+
+    Returns:
+        The created task, normalized the same way as list_tasks entries
+        (Zoho returns the whole task on create, unlike notes/bookmarks).
+
+    Raises:
+        ZohoAPIError: if title is blank, or the Tasks API rejects or
+            fails the request.
+    """
+    return await client.create_task(
+        title=title, description=description, priority=priority, group_id=group_id
+    )
+
+
 async def get_task(client: ZohoClient, task_id: str) -> dict:
     """Fetch one task's full details by id.
 

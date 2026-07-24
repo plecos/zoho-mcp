@@ -35,8 +35,11 @@ SCOPES = [
     "ZohoCalendar.calendar.READ",  # needed once, to look up the calendar's uid
     "zohocontacts.contactapi.READ",
     "ZohoMail.tasks.READ",
+    "ZohoMail.tasks.CREATE",  # write access: create_task
     "ZohoMail.notes.READ",
+    "ZohoMail.notes.CREATE",  # write access: create_note
     "ZohoMail.links.READ",
+    "ZohoMail.links.CREATE",  # write access: create_bookmark
     "ZohoCalendar.resources.READ",
     "ZohoCalendar.branches.READ",
     "ZohoMail.tags.READ",

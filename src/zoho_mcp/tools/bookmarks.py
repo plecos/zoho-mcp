@@ -41,6 +41,36 @@ async def list_bookmarks(
     )
 
 
+async def create_bookmark(
+    client: ZohoClient,
+    url: str,
+    title: str,
+    summary: str = "",
+    group_id: str | None = None,
+) -> dict:
+    """Create a personal or group bookmark.
+
+    Args:
+        client: injected Zoho client.
+        url: the link to bookmark.
+        title: the bookmark title -- Zoho requires it alongside the link.
+        summary: optional description.
+        group_id: create in a shared group instead of personal
+            bookmarks. Ids come from list_groups.
+
+    Returns:
+        ``{"id": ...}``. Zoho's create response carries only the new id,
+        not the stored bookmark -- call get_bookmark for full details.
+
+    Raises:
+        ZohoAPIError: if url or title is blank, or the Bookmarks API
+            rejects or fails the request.
+    """
+    return await client.create_bookmark(
+        url=url, title=title, summary=summary, group_id=group_id
+    )
+
+
 async def get_bookmark(client: ZohoClient, bookmark_id: str) -> dict:
     """Fetch one bookmark's full details by id.
 

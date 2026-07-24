@@ -432,6 +432,34 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, limit=limit, offset=offset, group_id=group_id, view=view
         )
 
+    @mcp.tool(annotations=_CREATE)
+    async def create_task(
+        title: str,
+        description: str = "",
+        priority: str = "",
+        group_id: str | None = None,
+    ) -> dict:
+        """Create a Zoho Mail task, personal or in a shared group.
+
+        title: required.
+        description (optional): free-text body.
+        priority (optional): Zoho's own samples show "low" and "high".
+        Other values are passed through untouched rather than rejected,
+        since Zoho doesn't publish the full accepted set.
+        group_id (optional): create in a shared group. Get ids from
+        list_groups.
+
+        Returns the created task in the same shape list_tasks returns --
+        Zoho sends the whole task back on create.
+        """
+        return await tasks_tools.create_task(
+            client,
+            title=title,
+            description=description,
+            priority=priority,
+            group_id=group_id,
+        )
+
     @mcp.tool(annotations=_READ_ONLY)
     async def get_task(task_id: str) -> dict:
         """Fetch one task's full details, given an id from list_tasks."""
@@ -464,6 +492,25 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             after=after,
             group_id=group_id,
             oldest_first=oldest_first,
+        )
+
+    @mcp.tool(annotations=_CREATE)
+    async def create_note(
+        content: str, title: str = "", group_id: str | None = None
+    ) -> dict:
+        """Create a Zoho Mail note, personal or in a shared group.
+
+        content: required -- the note body.
+        title (optional): note title.
+        group_id (optional): create in a shared group. Get ids from
+        list_groups.
+
+        Returns {"id": ...} only. Zoho's create response carries just the
+        new id, not the stored note, so nothing more is invented here --
+        call get_note with the id if you need the full record back.
+        """
+        return await notes_tools.create_note(
+            client, content=content, title=title, group_id=group_id
         )
 
     @mcp.tool(annotations=_READ_ONLY)
@@ -500,6 +547,28 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             after=after,
             group_id=group_id,
             oldest_first=oldest_first,
+        )
+
+    @mcp.tool(annotations=_CREATE)
+    async def create_bookmark(
+        url: str,
+        title: str,
+        summary: str = "",
+        group_id: str | None = None,
+    ) -> dict:
+        """Create a Zoho Mail bookmark, personal or in a shared group.
+
+        url: required -- the link to bookmark.
+        title: required -- Zoho rejects a bookmark without one.
+        summary (optional): description.
+        group_id (optional): create in a shared group. Get ids from
+        list_groups.
+
+        Returns {"id": ...} only, same as create_note -- Zoho's response
+        carries just the new id. Call get_bookmark for the full record.
+        """
+        return await bookmarks_tools.create_bookmark(
+            client, url=url, title=title, summary=summary, group_id=group_id
         )
 
     @mcp.tool(annotations=_READ_ONLY)

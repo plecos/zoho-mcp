@@ -67,6 +67,10 @@ _EVENT_WRITABLE_FIELDS = frozenset(
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
 _VALID_EMAIL_STATUSES = frozenset({"read", "unread", "all"})
+# Zoho's "no colour" value for a note, as carried by notes created in the
+# web UI. Sent on every create because the Notes API rejects a note
+# without a colour, despite documenting the field as optional.
+_NOTE_DEFAULT_COLOR = -1
 MIN_TASKS_LIMIT = 1
 MAX_TASKS_LIMIT = 499  # per Zoho's own documented range for this endpoint
 MIN_NOTES_LIMIT = 1
@@ -546,6 +550,21 @@ def normalize_group(raw: dict) -> dict:
         raise ZohoAPIError(f"Malformed group from Zoho: {e}") from e
 
 
+def _created_entity_id(payload: dict, kind: str) -> str:
+    """Pull the new id out of a Notes/Bookmarks create response.
+
+    Both return only ``data.entityId`` plus a URI rather than the stored
+    record, so this is the whole of what those creates can report back.
+
+    Raises:
+        ZohoAPIError: if the response carries no ``entityId``.
+    """
+    entity_id = (payload.get("data") or {}).get("entityId")
+    if not entity_id:
+        raise ZohoAPIError(f"Zoho did not return an id for the created {kind}")
+    return str(entity_id)
+
+
 def _scoped_url(root: str, group_id: str | None) -> str:
     """Build a Tasks/Notes/Bookmarks URL for either personal or group scope.
 
@@ -687,6 +706,7 @@ async def zoho_authenticated_post(
     url: str,
     access_token: str,
     params: dict | None = None,
+    json_body: dict | None = None,
 ) -> dict:
     """Shared POST-with-Zoho-auth-header-and-error-wrapping used by every Zoho write call.
 
@@ -694,7 +714,7 @@ async def zoho_authenticated_post(
         ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
     """
     return await _zoho_authenticated_request(
-        "POST", http_client, url, access_token, params
+        "POST", http_client, url, access_token, params, json_body
     )
 
 
@@ -867,9 +887,16 @@ class ZohoClient:
         token = await self._token_manager.get_access_token()
         return await zoho_authenticated_get(self._http_client, url, token, params)
 
-    async def _post(self, url: str, params: dict | None = None) -> dict:
+    async def _post(
+        self,
+        url: str,
+        params: dict | None = None,
+        json_body: dict | None = None,
+    ) -> dict:
         token = await self._token_manager.get_access_token()
-        return await zoho_authenticated_post(self._http_client, url, token, params)
+        return await zoho_authenticated_post(
+            self._http_client, url, token, params, json_body
+        )
 
     async def _put(
         self,
@@ -1662,6 +1689,125 @@ class ZohoClient:
         tasks = [normalize_task(t) for t in data.get("tasks", [])]
         has_more = bool(data.get("paging", {}).get("nextPage"))
         return tasks, has_more
+
+    async def create_task(
+        self,
+        title: str,
+        description: str = "",
+        priority: str = "",
+        group_id: str | None = None,
+    ) -> dict:
+        """Create a personal or group task.
+
+        Unlike ``create_note``/``create_bookmark``, Zoho returns the whole
+        created task here, so it comes back normalized exactly like a
+        listed one rather than as a bare id.
+
+        Args:
+            title: the task title (the only field Zoho requires).
+            description: optional free-text body.
+            priority: optional; Zoho's own samples show "low"/"high".
+                Passed through unvalidated -- the full set of accepted
+                values isn't documented, so rejecting values here risks
+                blocking ones Zoho actually accepts.
+            group_id: create in a shared group instead of the caller's
+                personal tasks. Ids come from ``list_groups``.
+
+        Raises:
+            ZohoAPIError: if ``title`` is blank, Zoho's response contains
+                no task, or the Tasks API rejects or fails the request.
+        """
+        if not title.strip():
+            raise ZohoAPIError("title must not be blank")
+        body: dict = {"title": title}
+        if description:
+            body["description"] = description
+        if priority:
+            body["priority"] = priority
+        payload = await self._post(
+            _scoped_url(ZOHO_TASKS_ROOT_URL, group_id), json_body=body
+        )
+        task = payload.get("data")
+        if not task:
+            raise ZohoAPIError("Zoho did not return the created task")
+        return normalize_task(task)
+
+    async def create_note(
+        self, content: str, title: str = "", group_id: str | None = None
+    ) -> dict:
+        """Create a personal or group note.
+
+        Args:
+            content: the note body (the only field Zoho requires).
+            title: optional note title.
+            group_id: create in a shared group instead of the caller's
+                personal notes. Ids come from ``list_groups``.
+
+        Returns:
+            ``{"id": ...}``. Zoho's create response carries only the new
+            ``entityId`` and a URI -- not the stored note -- so this
+            returns the id rather than assembling a record the API never
+            sent back. Call ``get_note`` with it for the full note.
+
+        Raises:
+            ZohoAPIError: if ``content`` is blank, the response carries
+                no id, or the Notes API rejects or fails the request.
+        """
+        if not content.strip():
+            raise ZohoAPIError("content must not be blank")
+        # color is REQUIRED despite Zoho documenting it as optional --
+        # confirmed live that {"content": ...} alone returns 404 "Invalid
+        # Input" while adding an integer color creates the note. It must
+        # be an int here even though the read side returns it as a string
+        # ("-1"), the same read/write type asymmetry as the Calendar
+        # notifyType case. -1 is Zoho's own "no colour" value, as carried
+        # by notes created through the web UI.
+        body: dict = {"content": content, "color": _NOTE_DEFAULT_COLOR}
+        if title:
+            body["title"] = title
+        payload = await self._post(
+            _scoped_url(ZOHO_NOTES_ROOT_URL, group_id), json_body=body
+        )
+        return {"id": _created_entity_id(payload, "note")}
+
+    async def create_bookmark(
+        self,
+        url: str,
+        title: str,
+        summary: str = "",
+        group_id: str | None = None,
+    ) -> dict:
+        """Create a personal or group bookmark.
+
+        Args:
+            url: the bookmarked link. Named ``url`` to match what
+                ``normalize_bookmark`` returns; translated to Zoho's own
+                ``link`` field at the request boundary.
+            title: the bookmark title (Zoho requires it alongside the link).
+            summary: optional description.
+            group_id: create in a shared group instead of the caller's
+                personal bookmarks. Ids come from ``list_groups``.
+
+        Returns:
+            ``{"id": ...}`` -- same reasoning as ``create_note``: Zoho
+            returns only the new ``entityId`` and a URI.
+
+        Raises:
+            ZohoAPIError: if ``url`` or ``title`` is blank, the response
+                carries no id, or the Bookmarks API rejects or fails the
+                request.
+        """
+        if not url.strip():
+            raise ZohoAPIError("url must not be blank")
+        if not title.strip():
+            raise ZohoAPIError("title must not be blank")
+        body: dict = {"link": url, "title": title}
+        if summary:
+            body["summary"] = summary
+        payload = await self._post(
+            _scoped_url(ZOHO_BOOKMARKS_ROOT_URL, group_id), json_body=body
+        )
+        return {"id": _created_entity_id(payload, "bookmark")}
 
     async def get_task(self, task_id: str) -> dict:
         """Fetch one personal task by id.

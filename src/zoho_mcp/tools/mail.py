@@ -150,6 +150,80 @@ async def list_labels(client: ZohoClient) -> list[dict]:
     return await client.list_labels()
 
 
+async def create_draft(
+    client: ZohoClient,
+    to: list[str],
+    subject: str,
+    content: str,
+    cc: list[str] | None = None,
+    bcc: list[str] | None = None,
+) -> dict:
+    """Save an email as a draft. Never sends.
+
+    Args:
+        client: injected Zoho client.
+        to: recipient addresses (at least one required).
+        subject: the subject line.
+        content: the message body.
+        cc/bcc: optional additional recipients.
+
+    Returns:
+        ``{"id": ...}`` -- the new draft's message id.
+
+    Raises:
+        ZohoAPIError: if no recipient is given, or the Zoho Mail API
+            rejects or fails the request.
+    """
+    return await client.create_draft(
+        to=to, subject=subject, content=content, cc=cc, bcc=bcc
+    )
+
+
+async def reply_draft(
+    client: ZohoClient, message_id: str, content: str, reply_all: bool = False
+) -> dict:
+    """Save a reply to an existing email as a draft. Never sends.
+
+    Args:
+        client: injected Zoho client.
+        message_id: the email being replied to.
+        content: the reply body.
+        reply_all: reply to all recipients rather than just the sender.
+
+    Returns:
+        ``{"id": ...}`` -- the new draft's message id.
+
+    Raises:
+        ZohoAPIError: if content is blank, or the Zoho Mail API rejects
+            or fails the request.
+    """
+    return await client.reply_draft(
+        message_id=message_id, content=content, reply_all=reply_all
+    )
+
+
+async def send_email(
+    client: ZohoClient,
+    to: list[str],
+    subject: str,
+    content: str,
+    cc: list[str] | None = None,
+    bcc: list[str] | None = None,
+) -> dict:
+    """Send an email immediately. Disabled unless the server is configured
+    to allow it (``ZOHO_ALLOW_AUTO_SEND=true``).
+
+    Args/Returns: same as ``create_draft``.
+
+    Raises:
+        ZohoAPIError: if auto-send isn't enabled, no recipient is given,
+            or the Zoho Mail API rejects or fails the request.
+    """
+    return await client.send_email(
+        to=to, subject=subject, content=content, cc=cc, bcc=bcc
+    )
+
+
 async def mark_as_read(client: ZohoClient, message_ids: list[str]) -> None:
     """Mark one or more emails as read in a single request.
 

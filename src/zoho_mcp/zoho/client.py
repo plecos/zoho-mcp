@@ -814,6 +814,27 @@ async def get_mailbox_timezone(
         raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
 
 
+async def get_primary_email_address(
+    token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
+) -> str:
+    """Look up the address outgoing mail is sent from.
+
+    Zoho requires ``fromAddress`` on every send/draft. It's read live
+    rather than stored in config for the same reason as the timezone: the
+    account's primary address is a mutable setting, and a stale one would
+    mean composing as an address the user no longer owns.
+
+    Raises:
+        ZohoAPIError: if the request fails, the response is malformed, or
+            no account is flagged as the default.
+    """
+    account = await _get_default_mail_account(token_manager, http_client)
+    try:
+        return account["primaryEmailAddress"]
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
+
+
 async def get_folder_types(
     token_manager: ZohoTokenManager, http_client: httpx.AsyncClient, account_id: str
 ) -> dict[str, str]:
@@ -874,13 +895,20 @@ class ZohoClient:
         account_id: str,
         calendar_uid: str,
         strip_invisible_chars: bool = False,
+        allow_auto_send: bool = False,
     ) -> None:
         self._token_manager = token_manager
         self._http_client = http_client
         self._account_id = account_id
         self._calendar_uid = calendar_uid
         self._strip_invisible_chars = strip_invisible_chars
+        # Gates send_email only. Drafting is never gated. Enforced here, in
+        # the layer that actually issues the HTTP call, so no higher-level
+        # code path (or injected instruction reaching a tool) can route
+        # around it.
+        self._allow_auto_send = allow_auto_send
         self._mailbox_timezone_cache: str | None = None
+        self._from_address_cache: str | None = None
         self._excluded_folder_ids_cache: frozenset[str] | None = None
 
     async def _get(self, url: str, params: dict | None = None) -> dict:
@@ -1076,6 +1104,161 @@ class ZohoClient:
             results = [r for r in results if r["folder_id"] not in excluded_folder_ids]
 
         return results
+
+    async def _get_from_address(self) -> str:
+        """The account's outgoing address, fetched once per client and cached.
+
+        Same reasoning as ``_get_mailbox_timezone`` -- a mutable account
+        setting, so looked up live with staleness bounded to this process
+        rather than persisted to config.
+        """
+        if self._from_address_cache is None:
+            self._from_address_cache = await get_primary_email_address(
+                self._token_manager, self._http_client
+            )
+        return self._from_address_cache
+
+    async def _compose(
+        self,
+        *,
+        to: list[str],
+        subject: str,
+        content: str,
+        cc: list[str] | None,
+        bcc: list[str] | None,
+        as_draft: bool,
+    ) -> dict:
+        """Shared body-builder for ``create_draft`` and ``send_email``.
+
+        Zoho uses one endpoint for both, distinguished *only* by
+        ``mode: "draft"`` -- omitting it sends the message for real. That
+        makes the flag the single most safety-critical field in this
+        client, so it's set from an explicit ``as_draft`` argument here
+        rather than defaulted or inferred anywhere downstream.
+
+        Raises:
+            ZohoAPIError: if ``to`` has no usable address, or the Zoho
+                Mail API rejects or fails the request.
+        """
+        recipients = [address.strip() for address in to if address.strip()]
+        if not recipients:
+            raise ZohoAPIError("at least one recipient address is required")
+
+        body: dict = {
+            "fromAddress": await self._get_from_address(),
+            "toAddress": ",".join(recipients),
+            "subject": subject,
+            "content": content,
+        }
+        if as_draft:
+            body["mode"] = "draft"
+        if cc:
+            body["ccAddress"] = ",".join(a.strip() for a in cc if a.strip())
+        if bcc:
+            body["bccAddress"] = ",".join(a.strip() for a in bcc if a.strip())
+
+        payload = await self._post(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages",
+            json_body=body,
+        )
+        return {"id": (payload.get("data") or {}).get("messageId", "")}
+
+    async def create_draft(
+        self,
+        to: list[str],
+        subject: str,
+        content: str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+    ) -> dict:
+        """Save an email as a draft. Never sends, and is never gated.
+
+        Args:
+            to: recipient addresses (at least one required).
+            subject: the subject line.
+            content: the message body.
+            cc/bcc: optional additional recipients.
+
+        Returns:
+            ``{"id": ...}`` -- the new draft's message id.
+
+        Raises:
+            ZohoAPIError: if no recipient is given, or the Zoho Mail API
+                rejects or fails the request.
+        """
+        return await self._compose(
+            to=to, subject=subject, content=content, cc=cc, bcc=bcc, as_draft=True
+        )
+
+    async def send_email(
+        self,
+        to: list[str],
+        subject: str,
+        content: str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+    ) -> dict:
+        """Send an email immediately. Disabled unless explicitly configured.
+
+        Sending is irreversible and outward-facing, so it's off by
+        default: the client must be constructed with
+        ``allow_auto_send=True`` (driven by ``ZOHO_ALLOW_AUTO_SEND`` in
+        the environment). When disabled this raises *before* issuing any
+        request, so nothing can leave the account.
+
+        Args/Returns: same as ``create_draft``.
+
+        Raises:
+            ZohoAPIError: if auto-send isn't enabled, no recipient is
+                given, or the Zoho Mail API rejects or fails the request.
+        """
+        if not self._allow_auto_send:
+            raise ZohoAPIError(
+                "Sending email is disabled. This server only saves drafts "
+                "unless auto-send is explicitly turned on by setting "
+                "ZOHO_ALLOW_AUTO_SEND=true in the server's environment. "
+                "Use create_draft instead, and send from Zoho Mail."
+            )
+        return await self._compose(
+            to=to, subject=subject, content=content, cc=cc, bcc=bcc, as_draft=False
+        )
+
+    async def reply_draft(
+        self, message_id: str, content: str, reply_all: bool = False
+    ) -> dict:
+        """Save a reply to an existing email as a draft. Never sends.
+
+        There is deliberately no send-a-reply counterpart: replies quote
+        an incoming message, which is exactly the content most likely to
+        carry an injected instruction, so they always land in Drafts for
+        a human to review.
+
+        Args:
+            message_id: the email being replied to, from ``search_emails``
+                or ``list_emails``.
+            content: the reply body.
+            reply_all: reply to every recipient rather than just the sender.
+
+        Returns:
+            ``{"id": ...}`` -- the new draft's message id.
+
+        Raises:
+            ZohoAPIError: if ``content`` is blank, or the Zoho Mail API
+                rejects or fails the request.
+        """
+        if not content.strip():
+            raise ZohoAPIError("content must not be blank")
+        body = {
+            "fromAddress": await self._get_from_address(),
+            "content": content,
+            "action": "replyall" if reply_all else "reply",
+            "mode": "draft",  # never remove: without it Zoho sends the reply
+        }
+        payload = await self._post(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/{message_id}",
+            json_body=body,
+        )
+        return {"id": (payload.get("data") or {}).get("messageId", "")}
 
     async def get_email(self, message_id: str, folder_id: str) -> dict:
         """Fetch the full plain-text content of one email.

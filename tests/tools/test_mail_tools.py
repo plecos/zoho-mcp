@@ -1,5 +1,8 @@
 from zoho_mcp.tools.mail import (
     add_label,
+    create_draft,
+    reply_draft,
+    send_email,
     get_email,
     list_attachments,
     list_emails,
@@ -30,6 +33,10 @@ class FakeZohoClient:
         self.list_labels_result = [{"id": "label-1", "name": "Notification"}]
         self.list_signatures_calls = 0
         self.list_signatures_result = [{"id": "sig-1", "name": "default"}]
+        self.create_draft_calls = []
+        self.reply_draft_calls = []
+        self.send_email_calls = []
+        self.compose_result = {"id": "msg-1"}
         self.mark_as_read_calls = []
         self.mark_as_unread_calls = []
         self.move_email_calls = []
@@ -74,6 +81,24 @@ class FakeZohoClient:
     async def list_signatures(self):
         self.list_signatures_calls += 1
         return self.list_signatures_result
+
+    async def create_draft(self, to, subject, content, cc=None, bcc=None):
+        self.create_draft_calls.append(
+            {"to": to, "subject": subject, "content": content, "cc": cc, "bcc": bcc}
+        )
+        return self.compose_result
+
+    async def reply_draft(self, message_id, content, reply_all=False):
+        self.reply_draft_calls.append(
+            {"message_id": message_id, "content": content, "reply_all": reply_all}
+        )
+        return self.compose_result
+
+    async def send_email(self, to, subject, content, cc=None, bcc=None):
+        self.send_email_calls.append(
+            {"to": to, "subject": subject, "content": content, "cc": cc, "bcc": bcc}
+        )
+        return self.compose_result
 
     async def mark_as_read(self, message_ids):
         self.mark_as_read_calls.append({"message_ids": message_ids})
@@ -241,3 +266,40 @@ async def test_remove_label_delegates_to_client():
         {"message_ids": ["msg-1", "msg-2"], "label_id": "label-2"}
     ]
     assert result is None
+
+
+async def test_create_draft_delegates_to_client():
+    client = FakeZohoClient()
+
+    result = await create_draft(
+        client, to=["a@x.com"], subject="S", content="B", cc=["c@x.com"]
+    )
+
+    assert client.create_draft_calls == [
+        {
+            "to": ["a@x.com"],
+            "subject": "S",
+            "content": "B",
+            "cc": ["c@x.com"],
+            "bcc": None,
+        }
+    ]
+    assert result == client.compose_result
+
+
+async def test_reply_draft_delegates_to_client():
+    client = FakeZohoClient()
+
+    await reply_draft(client, message_id="m-1", content="B", reply_all=True)
+
+    assert client.reply_draft_calls == [
+        {"message_id": "m-1", "content": "B", "reply_all": True}
+    ]
+
+
+async def test_send_email_delegates_to_client():
+    client = FakeZohoClient()
+
+    await send_email(client, to=["a@x.com"], subject="S", content="B")
+
+    assert client.send_email_calls[0]["to"] == ["a@x.com"]

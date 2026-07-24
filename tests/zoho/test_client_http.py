@@ -32,6 +32,44 @@ def zoho_client(http_client):
     )
 
 
+@pytest.fixture
+def sending_client(http_client):
+    """A client with auto-send explicitly enabled, as ZOHO_ALLOW_AUTO_SEND does."""
+    return ZohoClient(
+        token_manager=FakeTokenManager(),
+        http_client=http_client,
+        account_id=ACCOUNT_ID,
+        calendar_uid=CALENDAR_UID,
+        allow_auto_send=True,
+    )
+
+
+def mock_compose_endpoints(respx_mock):
+    """Accounts lookup (for the mandatory fromAddress) plus the compose POST."""
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    return respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages"
+    ).mock(
+        return_value=httpx.Response(
+            200, json={"status": {"code": 200}, "data": {"messageId": "msg-new-1"}}
+        )
+    )
+
+
 def mock_pacific_accounts_endpoint(respx_mock):
     return respx_mock.get("https://mail.zoho.com/api/accounts").mock(
         return_value=httpx.Response(
@@ -2805,3 +2843,207 @@ async def test_create_bookmark_wraps_http_errors_as_zoho_api_error(
 
     with pytest.raises(ZohoAPIError):
         await zoho_client.create_bookmark(url="https://x.com", title="t")
+
+
+# ---------------------------------------------------------------------------
+# Mail composition. Zoho sends and saves-a-draft through the SAME endpoint,
+# distinguished only by "mode": "draft" -- omitting that one field mails a
+# real person. The tests below pin that field deliberately: they are the
+# regression guard against a refactor silently turning drafts into sends.
+# ---------------------------------------------------------------------------
+
+
+async def test_create_draft_always_sets_mode_draft(respx_mock, zoho_client):
+    route = mock_compose_endpoints(respx_mock)
+
+    await zoho_client.create_draft(to=["a@example.com"], subject="Hi", content="Body")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS
+
+
+async def test_create_draft_builds_the_expected_payload(respx_mock, zoho_client):
+    route = mock_compose_endpoints(respx_mock)
+
+    result = await zoho_client.create_draft(
+        to=["a@example.com", "b@example.com"],
+        subject="Hi",
+        content="Body",
+        cc=["c@example.com"],
+        bcc=["d@example.com"],
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "mode": "draft",
+        "fromAddress": "me@example.com",
+        "toAddress": "a@example.com,b@example.com",
+        "subject": "Hi",
+        "content": "Body",
+        "ccAddress": "c@example.com",
+        "bccAddress": "d@example.com",
+    }
+    assert result == {"id": "msg-new-1"}
+
+
+async def test_create_draft_omits_cc_and_bcc_when_not_given(respx_mock, zoho_client):
+    route = mock_compose_endpoints(respx_mock)
+
+    await zoho_client.create_draft(to=["a@example.com"], subject="Hi", content="B")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert "ccAddress" not in sent
+    assert "bccAddress" not in sent
+
+
+@pytest.mark.parametrize("bad_to", [[], [""], ["   "]])
+async def test_create_draft_rejects_missing_recipients_without_a_request(
+    respx_mock, zoho_client, bad_to
+):
+    route = respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages")
+
+    with pytest.raises(ZohoAPIError, match="recipient"):
+        await zoho_client.create_draft(to=bad_to, subject="Hi", content="B")
+
+    assert not route.called
+
+
+async def test_create_draft_works_without_auto_send_enabled(respx_mock, zoho_client):
+    # Drafting must never be gated -- only sending is.
+    route = mock_compose_endpoints(respx_mock)
+
+    await zoho_client.create_draft(to=["a@example.com"], subject="Hi", content="B")
+
+    assert route.called
+
+
+async def test_send_email_refuses_and_makes_no_request_when_not_enabled(
+    respx_mock, zoho_client
+):
+    # The critical safety test: a disabled client must not reach Zoho at all,
+    # so no email can escape even if every other layer is bypassed.
+    route = respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages")
+
+    with pytest.raises(ZohoAPIError, match="ZOHO_ALLOW_AUTO_SEND"):
+        await zoho_client.send_email(to=["a@example.com"], subject="Hi", content="B")
+
+    assert not route.called
+
+
+async def test_send_email_omits_mode_so_zoho_actually_sends(respx_mock, sending_client):
+    route = mock_compose_endpoints(respx_mock)
+
+    result = await sending_client.send_email(
+        to=["a@example.com"], subject="Hi", content="Body"
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert "mode" not in sent
+    assert sent["toAddress"] == "a@example.com"
+    assert result == {"id": "msg-new-1"}
+
+
+async def test_send_email_rejects_missing_recipients_without_a_request(
+    respx_mock, sending_client
+):
+    route = respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages")
+
+    with pytest.raises(ZohoAPIError, match="recipient"):
+        await sending_client.send_email(to=[], subject="Hi", content="B")
+
+    assert not route.called
+
+
+async def test_compose_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_draft(to=["a@example.com"], subject="Hi", content="B")
+
+
+async def test_reply_draft_sets_both_action_reply_and_mode_draft(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    route = respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
+    ).mock(
+        return_value=httpx.Response(200, json={"data": {"messageId": "msg-reply-1"}})
+    )
+
+    result = await zoho_client.reply_draft(message_id="m-1", content="Sure thing")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["action"] == "reply"
+    assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS
+    assert sent["content"] == "Sure thing"
+    assert result == {"id": "msg-reply-1"}
+
+
+async def test_reply_draft_uses_reply_all_action_when_asked(respx_mock, zoho_client):
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    route = respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
+    ).mock(return_value=httpx.Response(200, json={"data": {"messageId": "r-1"}}))
+
+    await zoho_client.reply_draft(message_id="m-1", content="Sure", reply_all=True)
+
+    assert json.loads(route.calls.last.request.content)["action"] == "replyall"
+
+
+@pytest.mark.parametrize("bad_content", ["", "   "])
+async def test_reply_draft_rejects_blank_content_without_a_request(
+    respx_mock, zoho_client, bad_content
+):
+    route = respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
+    )
+
+    with pytest.raises(ZohoAPIError, match="content"):
+        await zoho_client.reply_draft(message_id="m-1", content=bad_content)
+
+    assert not route.called

@@ -498,13 +498,17 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
 
     @mcp.tool(annotations=_READ_ONLY)
     async def list_groups() -> list[dict]:
-        """List every shared Zoho Mail group the user belongs to, across
-        Tasks, Notes, and Bookmarks.
+        """List every shared Zoho Mail group the user belongs to.
 
-        Returns [{"id", "name", "service"}, ...] where service is
-        "tasks", "notes", or "bookmarks". Pass an id to the matching
-        tool's group_id argument (list_tasks / list_notes /
-        list_bookmarks) to read that group's items.
+        Returns [{"id", "name", "owner", "member_count"}, ...], one row
+        per group. A group is shared across Tasks, Notes, and Bookmarks
+        rather than belonging to any one of them, so the same id works
+        for all three -- pass it to list_tasks / list_notes /
+        list_bookmarks's group_id argument. A group can legitimately
+        hold items in one service and none in the others.
+
+        member_count may be null and owner may be empty if Zoho didn't
+        report them for that group.
 
         An empty list is a normal, common result -- groups are a
         shared-mailbox feature most personal accounts never set up. Do

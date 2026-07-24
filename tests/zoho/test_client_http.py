@@ -1253,46 +1253,65 @@ async def test_list_tasks_rejects_group_id_and_view_together_without_a_request(
     assert not route.called
 
 
-async def test_list_groups_merges_all_three_services_and_tags_them(
-    respx_mock, zoho_client
-):
-    # Confirmed live that the container shapes genuinely differ: Tasks
-    # nests under data.groups with an int "id", while Notes/Bookmarks
-    # return data as the array directly with a string "groupId".
+def mock_group_endpoints(respx_mock, *, tasks, notes, bookmarks):
     respx_mock.get("https://mail.zoho.com/api/tasks/groups").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": {
-                    "groups": [
-                        {
-                            "id": 53658048,
-                            "name": "Marketing",
-                            "owner": "Rebecca",
-                            "numberOfMembers": 3,
-                        }
-                    ]
-                }
-            },
-        )
+        return_value=httpx.Response(200, json={"data": {"groups": tasks}})
     )
     respx_mock.get("https://mail.zoho.com/api/notes/groups").mock(
-        return_value=httpx.Response(
-            200, json={"data": [{"groupId": "84626808", "name": "note-team"}]}
-        )
+        return_value=httpx.Response(200, json={"data": notes})
     )
     respx_mock.get("https://mail.zoho.com/api/links/groups").mock(
-        return_value=httpx.Response(
-            200, json={"data": [{"groupId": "78762952", "name": "link-team"}]}
-        )
+        return_value=httpx.Response(200, json={"data": bookmarks})
+    )
+
+
+# Confirmed live: a Zoho Mail group is ONE entity that every service
+# lists, not a per-service thing. The real "test" group came back from
+# all three endpoints -- including tasks and bookmarks, where it holds
+# zero items -- keyed as an int "id" by Tasks and a string "groupId" by
+# Notes/Bookmarks. So the same group must collapse to a single row, or
+# a caller would report three groups where the user has one.
+async def test_list_groups_deduplicates_one_group_reported_by_every_service(
+    respx_mock, zoho_client
+):
+    mock_group_endpoints(
+        respx_mock,
+        tasks=[
+            {
+                "id": 932723008,
+                "name": "test",
+                "owner": "Ken Salter",
+                "numberOfMembers": 1,
+            }
+        ],
+        notes=[{"groupId": "932723008", "name": "test"}],
+        bookmarks=[{"groupId": "932723008", "name": "test"}],
     )
 
     results = await zoho_client.list_groups()
 
     assert results == [
-        {"id": "53658048", "name": "Marketing", "service": "tasks"},
-        {"id": "84626808", "name": "note-team", "service": "notes"},
-        {"id": "78762952", "name": "link-team", "service": "bookmarks"},
+        {"id": "932723008", "name": "test", "owner": "Ken Salter", "member_count": 1}
+    ]
+
+
+async def test_list_groups_includes_a_group_only_one_service_reports(
+    respx_mock, zoho_client
+):
+    # Don't assume the three listings always agree just because they did
+    # for the one real group available -- a group missing from Tasks
+    # still has to surface, just without the Tasks-only metadata.
+    mock_group_endpoints(
+        respx_mock,
+        tasks=[],
+        notes=[{"groupId": "84626808", "name": "note-only"}],
+        bookmarks=[],
+    )
+
+    results = await zoho_client.list_groups()
+
+    assert results == [
+        {"id": "84626808", "name": "note-only", "owner": "", "member_count": None}
     ]
 
 

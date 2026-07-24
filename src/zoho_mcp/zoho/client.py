@@ -515,28 +515,22 @@ def normalize_bookmark(raw: dict) -> dict:
         raise ZohoAPIError(f"Malformed bookmark from Zoho: {e}") from e
 
 
-def normalize_group(raw: dict, service: str) -> dict:
+def normalize_group(raw: dict) -> dict:
     """Normalize one group from a Zoho Mail Tasks/Notes/Bookmarks group list.
 
-    The three services genuinely disagree on shape (confirmed live for
-    the containers, and against Zoho's own response samples for the
-    fields): Tasks nests its array under ``data.groups`` and keys the id
+    The three services disagree on shape, confirmed live against a real
+    group: Tasks nests its array under ``data.groups`` and keys the id
     as an **int** ``id``, while Notes and Bookmarks return ``data`` as
-    the array directly and key the id as a **string** ``groupId``. Ids
-    are coerced to ``str`` here so callers get one consistent type
-    regardless of which service a group came from.
+    the array directly and key the id as a **string** ``groupId`` --
+    same group, different key *and* different type. Ids are coerced to
+    ``str`` so callers get one consistent type either way.
 
-    Only ``id``/``name``/``service`` are surfaced. Tasks additionally
-    returns ``owner``/``numberOfMembers``/``moderators``, but Notes and
-    Bookmarks return no equivalent, so including them would mean
-    half-populated fields whose emptiness said nothing about the group
-    -- the common shape is the honest one here.
-
-    Note: this field mapping is the one part of group support that could
-    not be verified against live data -- the account it was built on has
-    no groups in any of the three services, so every real response was
-    an empty array. The container shapes *were* confirmed live; the
-    per-group keys come from Zoho's documented samples only.
+    ``owner``/``member_count`` come from Tasks' richer payload
+    (``owner``/``numberOfMembers``); Notes and Bookmarks report neither,
+    so they fall back to ``""``/``None``. In practice Tasks lists every
+    group the user belongs to -- see ``list_groups`` -- so these are
+    normally populated, but the fallbacks keep a group that only one
+    service reports from being dropped or faked.
 
     Raises:
         ZohoAPIError: if ``raw`` is missing its id or ``name``.
@@ -545,7 +539,8 @@ def normalize_group(raw: dict, service: str) -> dict:
         return {
             "id": str(raw["id"] if "id" in raw else raw["groupId"]),
             "name": raw["name"],
-            "service": service,
+            "owner": raw.get("owner") or "",
+            "member_count": raw.get("numberOfMembers"),
         }
     except (KeyError, TypeError) as e:
         raise ZohoAPIError(f"Malformed group from Zoho: {e}") from e
@@ -1552,23 +1547,32 @@ class ZohoClient:
         return [normalize_resource(r) for r in payload]
 
     async def list_groups(self) -> list[dict]:
-        """List every shared group the user belongs to, across all three
-        services that have them (Tasks, Notes, Bookmarks).
+        """List every shared Zoho Mail group the user belongs to.
 
-        Zoho has no single "my groups" endpoint -- each service exposes
-        its own (``/tasks/groups``, ``/notes/groups``, ``/links/groups``),
-        and a group in one is not necessarily a group in another, so all
-        three are queried and the results merged with a ``service`` tag.
-        Confirmed live that all three work under the scopes already
-        requested for reading tasks/notes/bookmarks, and that each
-        returns a 200 with an empty collection (not an error) for an
-        account with no groups.
+        A group is a single entity shared by Tasks, Notes, and Bookmarks
+        -- not a per-service thing. Confirmed live: one real group came
+        back from all three endpoints, keyed by the same id, *including*
+        the services where it holds zero items. So these endpoints list
+        "groups you belong to", not "groups with items in this service",
+        and the same group must collapse to one row here rather than
+        appearing once per service (which would read as three groups).
+
+        Zoho has no single "my groups" endpoint, so all three are still
+        queried and merged by id, rather than trusting one to be
+        complete on the strength of a single observed group. Tasks is
+        merged first because only its payload carries ``owner`` and
+        ``numberOfMembers``. All three work under the scopes already
+        requested for reading those services, and each returns a 200
+        with an empty collection (not an error) when there are no groups.
 
         Returns:
-            ``[{"id", "name", "service"}, ...]``. An empty list is a
-            normal, common result -- groups are a shared-mailbox feature
-            most personal accounts never set up. Pass an ``id`` to the
-            matching service's ``group_id`` argument to read its items.
+            ``[{"id", "name", "owner", "member_count"}, ...]``, one row
+            per distinct group. ``owner``/``member_count`` fall back to
+            ``""``/``None`` for a group Tasks didn't report. An empty
+            list is a normal result -- groups are a shared-mailbox
+            feature most personal accounts never set up. Pass an ``id``
+            to any of ``list_tasks``/``list_notes``/``list_bookmarks``'s
+            ``group_id`` argument; the same id works for all three.
 
         Raises:
             ZohoAPIError: if any of the three requests fails, or a group
@@ -1580,16 +1584,19 @@ class ZohoClient:
 
         # Tasks nests its array under data.groups; Notes and Bookmarks
         # return data as the array itself. Confirmed live.
-        raw_by_service = [
-            ("tasks", tasks_payload.get("data", {}).get("groups", [])),
-            ("notes", notes_payload.get("data", [])),
-            ("bookmarks", bookmarks_payload.get("data", [])),
+        raw_groups = [
+            *tasks_payload.get("data", {}).get("groups", []),
+            *notes_payload.get("data", []),
+            *bookmarks_payload.get("data", []),
         ]
-        return [
-            normalize_group(raw, service)
-            for service, raws in raw_by_service
-            for raw in raws
-        ]
+
+        # dict preserves insertion order, so Tasks' richer entry wins and
+        # the later bare Notes/Bookmarks duplicates are dropped.
+        merged: dict[str, dict] = {}
+        for raw in raw_groups:
+            group = normalize_group(raw)
+            merged.setdefault(group["id"], group)
+        return list(merged.values())
 
     async def list_tasks(
         self,

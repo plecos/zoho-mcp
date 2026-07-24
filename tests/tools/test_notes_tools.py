@@ -8,9 +8,14 @@ class FakeZohoClient:
         self.get_note_calls = []
         self.get_note_result = {"id": "1", "title": "Dinner party ideas"}
 
-    async def list_notes(self, limit=20, after=0, group_id=None):
+    async def list_notes(self, limit=20, after=0, group_id=None, oldest_first=False):
         self.list_notes_calls.append(
-            {"limit": limit, "after": after, "group_id": group_id}
+            {
+                "limit": limit,
+                "after": after,
+                "group_id": group_id,
+                "oldest_first": oldest_first,
+            }
         )
         return self.list_notes_result
 
@@ -24,7 +29,9 @@ async def test_list_notes_delegates_to_client():
 
     result = await list_notes(client, limit=5, after=10)
 
-    assert client.list_notes_calls == [{"limit": 5, "after": 10, "group_id": None}]
+    assert client.list_notes_calls == [
+        {"limit": 5, "after": 10, "group_id": None, "oldest_first": False}
+    ]
     assert result == client.list_notes_result
 
 
@@ -33,7 +40,9 @@ async def test_list_notes_defaults_limit_and_after():
 
     await list_notes(client)
 
-    assert client.list_notes_calls == [{"limit": 20, "after": 0, "group_id": None}]
+    assert client.list_notes_calls == [
+        {"limit": 20, "after": 0, "group_id": None, "oldest_first": False}
+    ]
 
 
 async def test_get_note_delegates_to_client_with_note_id():
@@ -51,3 +60,11 @@ async def test_list_notes_forwards_group_id():
     await list_notes(client, group_id="g-1")
 
     assert client.list_notes_calls[0]["group_id"] == "g-1"
+
+
+async def test_list_notes_forwards_oldest_first():
+    client = FakeZohoClient()
+
+    await list_notes(client, oldest_first=True)
+
+    assert client.list_notes_calls[0]["oldest_first"] is True

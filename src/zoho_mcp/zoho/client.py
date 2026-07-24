@@ -1670,7 +1670,11 @@ class ZohoClient:
         return normalize_task(tasks[0])
 
     async def list_notes(
-        self, limit: int = 20, after: int = 0, group_id: str | None = None
+        self,
+        limit: int = 20,
+        after: int = 0,
+        group_id: str | None = None,
+        oldest_first: bool = False,
     ) -> list[dict]:
         """List Zoho Mail notes -- the caller's personal ones, or a group's.
 
@@ -1678,6 +1682,15 @@ class ZohoClient:
             limit: maximum number of notes to return (1-399).
             group_id: list a shared group's notes instead of the caller's
                 personal ones. Ids come from ``list_groups``.
+            oldest_first: return oldest-created first instead of the
+                default newest-first. Sent as Zoho's ``isPrev`` param,
+                whose docs describe only "ascending or descending order
+                based on created time" without saying which value is
+                which -- confirmed live against real notes that
+                ``isPrev=true`` is ascending (oldest first), and that an
+                absent ``isPrev`` is identical to ``isPrev=false``. It's
+                a sort-order flag despite the paging-sounding name;
+                ``after`` offsets within whichever order is selected.
             after: how many notes to skip before returning results. Zoho's
                 own docs describe this vaguely as "specifies from which
                 retrieval has to be done" -- confirmed live it behaves as
@@ -1704,9 +1717,13 @@ class ZohoClient:
         if after < 0:
             raise ZohoAPIError(f"after must be >= 0 (got {after})")
         mailbox_timezone = await self._get_mailbox_timezone()
+        params: dict = {"limit": limit, "after": after}
+        if oldest_first:
+            # Only sent when switching order -- absent and "false" are
+            # confirmed equivalent, so the default request is unchanged.
+            params["isPrev"] = "true"
         payload = await self._get(
-            _scoped_url(ZOHO_NOTES_ROOT_URL, group_id),
-            params={"limit": limit, "after": after},
+            _scoped_url(ZOHO_NOTES_ROOT_URL, group_id), params=params
         )
         notes = payload.get("data", {}).get("list", [])
         return [normalize_note(n, mailbox_timezone) for n in notes]

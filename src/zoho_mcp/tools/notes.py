@@ -13,6 +13,7 @@ async def list_notes(
     limit: int = 20,
     after: int = 0,
     group_id: str | None = None,
+    oldest_first: bool = False,
 ) -> list[dict]:
     """List Zoho Mail notes -- the user's personal ones, or a group's.
 
@@ -22,6 +23,8 @@ async def list_notes(
         after: how many notes to skip before returning results.
         group_id: list a shared group's notes instead of personal ones.
             Ids come from list_groups.
+        oldest_first: return oldest-created notes first instead of the
+            default newest-first.
 
     Returns:
         Normalized notes: id, title, content, book, owner, is_favorite,
@@ -33,7 +36,9 @@ async def list_notes(
         ZohoAPIError: if limit/after are out of range, or the Notes API
             rejects or fails the request.
     """
-    return await client.list_notes(limit=limit, after=after, group_id=group_id)
+    return await client.list_notes(
+        limit=limit, after=after, group_id=group_id, oldest_first=oldest_first
+    )
 
 
 async def get_note(client: ZohoClient, note_id: str) -> dict:

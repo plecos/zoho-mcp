@@ -918,6 +918,39 @@ async def test_list_notes_sends_limit_and_after_params(respx_mock, zoho_client):
     assert [n["id"] for n in results] == ["1"]
 
 
+# Confirmed live against three real notes: isPrev=true returns oldest ->
+# newest, while absent and isPrev=false are both newest -> oldest and
+# byte-identical. It is a sort-order flag, not the paging-direction flag
+# its name suggests. `after` composes with it, offsetting within whichever
+# order is selected.
+async def test_list_notes_requests_ascending_order_when_oldest_first(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_notes(oldest_first=True)
+
+    assert route.calls.last.request.url.params["isPrev"] == "true"
+
+
+async def test_list_notes_omits_isprev_when_defaulting_to_newest_first(
+    respx_mock, zoho_client
+):
+    # Absent and "false" are confirmed equivalent live, so the default
+    # request stays byte-identical to what shipped before this flag.
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_notes()
+
+    assert "isPrev" not in route.calls.last.request.url.params
+
+
 async def test_list_notes_returns_empty_list_when_list_key_absent(
     respx_mock, zoho_client
 ):

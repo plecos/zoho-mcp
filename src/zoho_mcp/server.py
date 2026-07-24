@@ -439,7 +439,10 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
 
     @mcp.tool(annotations=_READ_ONLY)
     async def list_notes(
-        limit: int = 20, after: int = 0, group_id: str | None = None
+        limit: int = 20,
+        after: int = 0,
+        group_id: str | None = None,
+        oldest_first: bool = False,
     ) -> list[dict]:
         """List Zoho Mail notes -- the user's personal ones, or a group's.
 
@@ -447,6 +450,8 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         after (optional): how many notes to skip -- use for pagination.
         group_id (optional): list a shared group's notes instead of the
         user's personal ones. Get ids from list_groups.
+        oldest_first (optional): return oldest-created notes first.
+        Defaults to newest first.
 
         Each note has id, title, content, book, owner, is_favorite,
         color, created_at, modified_at. There is no has_more signal for
@@ -454,7 +459,11 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         only reliable sign you've reached the end.
         """
         return await notes_tools.list_notes(
-            client, limit=limit, after=after, group_id=group_id
+            client,
+            limit=limit,
+            after=after,
+            group_id=group_id,
+            oldest_first=oldest_first,
         )
 
     @mcp.tool(annotations=_READ_ONLY)

@@ -189,4 +189,6 @@ This is *source available* rather than OSI-approved open source, since restricti
 
 ### Contributing
 
-Contributions are welcome, but note that a contributor licensing agreement will be required before any pull request can be merged, since the project is dual-licensed commercially. Please open an issue to discuss a change before writing it.
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Because the project is also licensed commercially, merging a pull request requires signing the [Contributor License Agreement](CLA.md); you keep your copyright, and the agreement grants the sublicensing right that lets your work ship in both builds.
+
+The CLA is currently a draft pending legal review and has no signing mechanism yet, so **pull requests can't be merged for the moment** — please open an issue instead.

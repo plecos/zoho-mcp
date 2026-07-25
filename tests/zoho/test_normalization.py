@@ -664,8 +664,13 @@ def test_normalize_bookmark_raises_clear_error_on_missing_field():
 # has already been observed sending strings where numbers are documented
 # (status "1", isFavorite "false", color "-1"), so a nonsense timestamp is
 # well within the range of things it might do.
+#
+# Only far-future values are used. A negative epoch is deliberately NOT tested:
+# it raises OSError on Windows but resolves to a valid pre-1970 date on Linux,
+# so asserting either outcome would encode one platform's behavior. CI caught
+# exactly that when this test first ran on Linux.
 @pytest.mark.parametrize(
-    "bad_epoch", ["9999999999999999999", "-9999999999999", "999999999999999999999999"]
+    "bad_epoch", ["9999999999999999999", "999999999999999999999999"]
 )
 def test_normalize_email_summary_raises_clear_error_on_out_of_range_date(bad_epoch):
     raw = load_fixture("mail_list_response.json")["data"][0]
@@ -675,7 +680,9 @@ def test_normalize_email_summary_raises_clear_error_on_out_of_range_date(bad_epo
         normalize_email_summary(raw, MAILBOX_TZ)
 
 
-@pytest.mark.parametrize("bad_epoch", ["9999999999999999999", "-9999999999999"])
+@pytest.mark.parametrize(
+    "bad_epoch", ["9999999999999999999", "999999999999999999999999"]
+)
 def test_normalize_note_raises_clear_error_on_out_of_range_date(bad_epoch):
     raw = load_fixture("notes_list_response.json")["data"]["list"][0]
     raw["createdTime"] = bad_epoch

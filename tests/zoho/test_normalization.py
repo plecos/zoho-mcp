@@ -657,3 +657,28 @@ def test_normalize_bookmark_raises_clear_error_on_missing_field():
 
     with pytest.raises(ZohoAPIError, match="bookmark"):
         normalize_bookmark(raw)
+
+
+# datetime.fromtimestamp raises OSError/OverflowError -- not ValueError -- for
+# out-of-range epochs, so these leaked past the original except clause. Zoho
+# has already been observed sending strings where numbers are documented
+# (status "1", isFavorite "false", color "-1"), so a nonsense timestamp is
+# well within the range of things it might do.
+@pytest.mark.parametrize(
+    "bad_epoch", ["9999999999999999999", "-9999999999999", "999999999999999999999999"]
+)
+def test_normalize_email_summary_raises_clear_error_on_out_of_range_date(bad_epoch):
+    raw = load_fixture("mail_list_response.json")["data"][0]
+    raw["receivedTime"] = bad_epoch
+
+    with pytest.raises(ZohoAPIError, match="email summary"):
+        normalize_email_summary(raw, MAILBOX_TZ)
+
+
+@pytest.mark.parametrize("bad_epoch", ["9999999999999999999", "-9999999999999"])
+def test_normalize_note_raises_clear_error_on_out_of_range_date(bad_epoch):
+    raw = load_fixture("notes_list_response.json")["data"]["list"][0]
+    raw["createdTime"] = bad_epoch
+
+    with pytest.raises(ZohoAPIError, match="note"):
+        normalize_note(raw, MAILBOX_TZ)

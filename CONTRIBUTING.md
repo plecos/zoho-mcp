@@ -28,8 +28,13 @@ short version:
 - **Respect the layering.** HTTP and normalization in `zoho/`, LLM-facing
   shaping in `tools/`, registration only in `server.py`. No HTTP calls in a
   tool wrapper; no MCP concepts in a client.
-- **Errors reach the model as `ZohoAPIError`,** never as a raw HTTP failure or
-  traceback.
+- **Errors reach the model wrapped,** never as a raw HTTP failure or
+  traceback. Zoho API problems become `ZohoAPIError`, token problems
+  `ZohoAuthError`, and malformed tool arguments (a bad ISO 8601 string, say)
+  a `ValueError` from the tool wrapper. If you add a `payload["key"]` access
+  or parse a vendor value, make sure it can't escape as a bare
+  `KeyError`/`ValueError` — `MALFORMED_DATA_ERRORS` in `zoho/client.py`
+  exists for exactly that.
 - **Test the unhappy paths too** — boundaries, malformed upstream data,
   transport failures, empty results. Zoho's API is a third party we don't
   control, and it is genuinely strange (see below).

@@ -110,3 +110,22 @@ def test_normalize_contact_raises_clear_error_on_malformed_email_entry():
 
     with pytest.raises(ZohoAPIError, match="contact"):
         normalize_contact(raw, "personal")
+
+
+# _format_birthday calls int() on these, so a non-numeric value raised a bare
+# ValueError. That would break an entire search_contacts result -- every other
+# contact included -- because of one odd record.
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("birth_month", "Jan"),
+        ("birth_day", "third"),
+        ("birth_year", "unknown"),
+    ],
+)
+def test_normalize_contact_raises_clear_error_on_non_numeric_birthday(field, value):
+    raw = {"contact_id": "1", "first_name": "A", "birth_month": "3", "birth_day": "4"}
+    raw[field] = value
+
+    with pytest.raises(ZohoAPIError, match="contact"):
+        normalize_contact(raw, "personal")

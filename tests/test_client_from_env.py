@@ -1,0 +1,95 @@
+"""Tests for `_build_zoho_clients_from_env`.
+
+This is the only place `ZOHO_ALLOW_AUTO_SEND` is turned into the
+`allow_auto_send` flag, and it had no coverage at all. Every other send-gate
+test constructs `ZohoClient` with an explicit Python boolean, which verifies
+where the gate lives but never how it gets set.
+
+That gap matters because the failure is silent and severe: replacing the parse
+with something that looks equivalent -- `bool(os.environ.get(...))` -- would
+make `ZOHO_ALLOW_AUTO_SEND=false` sitting in a .env file *enable live sending*,
+and no other test in the suite would notice.
+"""
+
+import pytest
+
+from zoho_mcp import server
+
+
+@pytest.fixture
+def env(monkeypatch):
+    """Minimal viable environment, with the auth flow stubbed out.
+
+    `load_env` is neutered so a developer's real .env can't leak into the
+    assertions, and the keyring lookup is stubbed so no OS credential store
+    is touched.
+    """
+    monkeypatch.setattr(server, "load_env", lambda: None)
+    monkeypatch.setattr(server, "load_refresh_token", lambda: "fake-refresh-token")
+    monkeypatch.setenv("ZOHO_CLIENT_ID", "id")
+    monkeypatch.setenv("ZOHO_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("ZOHO_ACCOUNT_ID", "acct")
+    monkeypatch.setenv("ZOHO_CALENDAR_UID", "cal")
+    monkeypatch.delenv("ZOHO_ALLOW_AUTO_SEND", raising=False)
+    monkeypatch.delenv("ZOHO_STRIP_INVISIBLE_CHARS", raising=False)
+    return monkeypatch
+
+
+# Case-insensitive with surrounding whitespace ignored -- matching what the
+# README, .env.example, and SECURITY.md all promise.
+@pytest.mark.parametrize("value", ["true", "TRUE", "True", " true ", "\ttrue\n"])
+async def test_auto_send_enabled_only_for_true(env, value):
+    env.setenv("ZOHO_ALLOW_AUTO_SEND", value)
+
+    client, _ = server._build_zoho_clients_from_env()
+
+    assert client._allow_auto_send is True
+
+
+# Anything else must leave sending off. "1" and "yes" are included because
+# they're the values someone would plausibly *assume* work -- silently
+# enabling outbound mail on a truthiness check would be the worst outcome here.
+@pytest.mark.parametrize(
+    "value", ["false", "FALSE", "0", "1", "yes", "no", "", "  ", "maybe", "True!"]
+)
+async def test_auto_send_disabled_for_everything_else(env, value):
+    env.setenv("ZOHO_ALLOW_AUTO_SEND", value)
+
+    client, _ = server._build_zoho_clients_from_env()
+
+    assert client._allow_auto_send is False
+
+
+async def test_auto_send_disabled_when_unset(env):
+    client, _ = server._build_zoho_clients_from_env()
+
+    assert client._allow_auto_send is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("true", True), ("TRUE", True), ("false", False), ("1", False), ("", False)],
+)
+async def test_strip_invisible_chars_parses_the_same_way(env, value, expected):
+    env.setenv("ZOHO_STRIP_INVISIBLE_CHARS", value)
+
+    client, _ = server._build_zoho_clients_from_env()
+
+    assert client._strip_invisible_chars is expected
+
+
+async def test_raises_a_clear_error_when_no_refresh_token_is_stored(env):
+    env.setattr(server, "load_refresh_token", lambda: None)
+
+    with pytest.raises(RuntimeError, match="refresh token"):
+        server._build_zoho_clients_from_env()
+
+
+async def test_account_and_calendar_ids_are_passed_through(env):
+    env.setenv("ZOHO_ACCOUNT_ID", "acct-123")
+    env.setenv("ZOHO_CALENDAR_UID", "cal-456")
+
+    client, _ = server._build_zoho_clients_from_env()
+
+    assert client._account_id == "acct-123"
+    assert client._calendar_uid == "cal-456"

@@ -3047,3 +3047,104 @@ async def test_reply_draft_rejects_blank_content_without_a_request(
         await zoho_client.reply_draft(message_id="m-1", content=bad_content)
 
     assert not route.called
+
+
+async def test_get_email_raises_clear_error_when_data_key_absent(
+    respx_mock, zoho_client
+):
+    # Zoho is documented to return 200 with an error-shaped body (fb_not_enabled,
+    # and 404-with-Invalid-Input on note create), so a 200 missing "data" is a
+    # realistic response, not a hypothetical one.
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}"
+        f"/folders/1122334455/messages/1730217600123456789/content"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.get_email(
+            message_id="1730217600123456789", folder_id="1122334455"
+        )
+
+
+# etag is mandatory for both update and delete. A shared or subscribed calendar
+# could plausibly omit it, and a bare KeyError as the tool result is exactly the
+# raw-exception leak the error-handling rules forbid.
+async def test_update_event_raises_clear_error_when_etag_absent(
+    respx_mock, zoho_client
+):
+    raw = _raw_event_for_update()
+    del raw["etag"]
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [raw]}))
+    put_route = respx_mock.put(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    )
+
+    with pytest.raises(ZohoAPIError, match="etag"):
+        await zoho_client.update_event(uid="evt-1", title="New")
+
+    assert not put_route.called
+
+
+async def test_delete_event_raises_clear_error_when_etag_absent(
+    respx_mock, zoho_client
+):
+    raw = _raw_event_for_update()
+    del raw["etag"]
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [raw]}))
+    delete_route = respx_mock.delete(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    )
+
+    with pytest.raises(ZohoAPIError, match="etag"):
+        await zoho_client.delete_event(uid="evt-1")
+
+    assert not delete_route.called
+
+
+# The draft-mode assertions elsewhere all run on a client with sending
+# DISABLED, which left the guard untested in the one configuration where
+# mailing a stranger is possible. Coupling as_draft to _allow_auto_send would
+# pass every other test in this file.
+async def test_create_draft_still_sets_mode_draft_when_auto_send_enabled(
+    respx_mock, sending_client
+):
+    route = mock_compose_endpoints(respx_mock)
+
+    await sending_client.create_draft(
+        to=["a@example.com"], subject="Hi", content="Body"
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS
+
+
+async def test_reply_draft_still_sets_mode_draft_when_auto_send_enabled(
+    respx_mock, sending_client
+):
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    route = respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
+    ).mock(return_value=httpx.Response(200, json={"data": {"messageId": "r-1"}}))
+
+    await sending_client.reply_draft(message_id="m-1", content="Sure")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS

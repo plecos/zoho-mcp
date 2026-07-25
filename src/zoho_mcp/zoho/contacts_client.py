@@ -17,7 +17,11 @@ must always travel with a contact_id rather than being guessed/retried.
 import httpx
 
 from zoho_mcp.zoho.auth import ZohoTokenManager
-from zoho_mcp.zoho.client import ZohoAPIError, zoho_authenticated_get
+from zoho_mcp.zoho.client import (
+    MALFORMED_DATA_ERRORS,
+    ZohoAPIError,
+    zoho_authenticated_get,
+)
 
 ZOHO_CONTACTS_SELF_URL = "https://contacts.zoho.com/api/v1/accounts/self/contacts"
 ZOHO_CONTACTS_ORG_URL = "https://contacts.zoho.com/api/v1/accounts/org/contacts"
@@ -105,7 +109,7 @@ def normalize_contact(raw: dict, scope: str) -> dict:
             "notes": raw.get("notes", ""),
             "birthday": _format_birthday(raw),
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed contact from Zoho: {e}") from e
 
 
@@ -200,7 +204,11 @@ class ZohoContactsClient:
         payload = await self._get(
             f"{url}/{contact_id}", params={"include": "emails,phones"}
         )
-        return normalize_contact(payload["contacts"], scope)
+        try:
+            contact = payload["contacts"]
+        except (KeyError, TypeError) as e:
+            raise ZohoAPIError(f"Malformed contact response from Zoho: {e}") from e
+        return normalize_contact(contact, scope)
 
     async def count_contacts(self) -> dict:
         """Return the user's contact counts directly, via Zoho's own
@@ -234,7 +242,7 @@ class ZohoContactsClient:
                 "archived": org_payload["contacts"]["archived"],
                 "inactive": org_payload["contacts"]["inactive"],
             }
-        except (KeyError, TypeError) as e:
+        except MALFORMED_DATA_ERRORS as e:
             raise ZohoAPIError(
                 f"Malformed contacts count response from Zoho: {e}"
             ) from e

@@ -32,7 +32,7 @@ SCOPES = [
     "ZohoMail.folders.READ",  # used at runtime to filter out Sent/Drafts by folder type
     "ZohoCalendar.event.READ",
     "ZohoCalendar.event.ALL",  # write access: create_event/update_event/delete_event
-    "ZohoCalendar.calendar.READ",  # needed once, to look up the calendar's uid
+    "ZohoCalendar.calendar.READ",  # setup: calendar uid lookup; runtime: list_calendars
     "zohocontacts.contactapi.READ",
     "ZohoMail.tasks.READ",
     "ZohoMail.tasks.CREATE",  # write access: create_task

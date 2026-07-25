@@ -48,7 +48,7 @@ Not a guarantee — context for judging whether something is a real finding:
 - **Sending email is off by default.** `send_email` raises before making any network call unless `ZOHO_ALLOW_AUTO_SEND` is set to `true` (case-insensitive, surrounding whitespace ignored -- so `TRUE` and `True` also enable it; any other value leaves sending off). The check lives in the client — the layer that issues the request — not in a tool wrapper that a different code path could sidestep.
 - **There is no send-a-reply tool in any configuration.** Replies quote incoming mail, which is untrusted input; they always stop at Drafts.
 - **Least-privilege scopes.** Creation uses `.CREATE` rather than `.ALL` where only creation is needed, and the read-only subset is documented for people who want no write access at all.
-- **Raw vendor errors don't reach the model.** Failures are wrapped in `ZohoAPIError` with a specific message rather than a raw HTTP failure or traceback.
+- **No tracebacks or unwrapped exceptions reach the model.** Failures are wrapped in `ZohoAPIError` (or `ZohoAuthError` for token problems). Note the wrapped message *does* include Zoho's own error text verbatim, which is deliberate -- it's what makes a failure diagnosable -- so a Zoho error body could echo back part of a request. That isn't a new exposure, since the model already has access to the mail data it was operating on, but it's stated here rather than claimed away.
 
 ## For operators
 

@@ -769,8 +769,10 @@ def _build_zoho_clients_from_env() -> tuple[ZohoClient, ZohoContactsClient]:
         .strip()
         .lower()
         == "true",
-        # Opt-in only, and deliberately strict: anything other than an
-        # exact "true" leaves sending disabled.
+        # Opt-in only: case-insensitive "true", surrounding whitespace
+        # ignored; any other value leaves sending disabled. Pinned by
+        # tests/test_client_from_env.py -- a truthiness check here would
+        # make ZOHO_ALLOW_AUTO_SEND=false enable live sending.
         allow_auto_send=os.environ.get("ZOHO_ALLOW_AUTO_SEND", "false").strip().lower()
         == "true",
     )

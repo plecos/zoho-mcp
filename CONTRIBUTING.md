@@ -67,7 +67,7 @@ obviously synthetic values (`555…` ids, invented names) on purpose.
 
 ## Reporting a security issue
 
-Please don't open a public issue. Email `[CONTACT EMAIL]` with
+Please don't open a public issue. Email `plecos@thesalters.net` with
 details and we'll respond as quickly as we can.
 
 This server holds an OAuth token with read and write access to a real mailbox

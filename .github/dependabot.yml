@@ -1,0 +1,45 @@
+# Dependabot configuration. Full option reference:
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+
+version: 2
+updates:
+  # Python dependencies, from pyproject.toml and uv.lock.
+  #
+  # Ecosystem is "uv", not "pip" -- "pip" wouldn't understand uv.lock, so
+  # updates would land in pyproject.toml without refreshing the lockfile and
+  # CI would install something other than what the PR claims to test.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Minor and patch bumps arrive as one PR: CI covers lint, types, and 384
+    # tests, so reviewing them together is fine and beats a dozen separate
+    # PRs on a solo project. Majors are deliberately left out of the group so
+    # each lands on its own and stays easy to revert -- mcp in particular
+    # moves quickly and its majors deserve individual attention.
+    groups:
+      python-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    open-pull-requests-limit: 5
+
+  # Workflow action versions in .github/workflows/.
+  #
+  # Worth having: this repo pins astral-sh/setup-uv to an exact patch tag
+  # because no floating major tag existed, and actions/upload-artifact had to
+  # be bumped once already when a Node runtime was deprecated. Neither is the
+  # kind of thing anyone notices until CI breaks.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 3

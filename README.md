@@ -161,7 +161,7 @@ All optional, in `.env`:
 | `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Have `get_email` strip invisible Unicode padding some marketing mail uses to inflate preview text. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
 | `ZOHO_OAUTH_CALLBACK_PORT` | `8765` | Local port for the one-time OAuth redirect. |
 
-Both booleans require the exact string `true`; anything else is off.
+Both booleans are matched case-insensitively with surrounding whitespace ignored, so `true`, `True`, and `TRUE` all enable them. Any other value leaves them off.
 
 ## Development
 
@@ -182,6 +182,10 @@ Conventions, architecture, and the reasoning behind the design are in [CLAUDE.md
 [Apache License 2.0](LICENSE). Use it, modify it, ship it, sell it — commercially or otherwise.
 
 If you redistribute it, in source or binary form, you need to: include a copy of the license, keep the existing copyright and attribution notices, mark any files you changed as modified, and carry forward the contents of [NOTICE](NOTICE). The license also grants you a patent license from the contributors, and doesn't grant any right to use the project's name or the authors' trademarks.
+
+## Security
+
+This server holds an OAuth token that can read and write a real mailbox, so please report vulnerabilities privately rather than in a public issue — see [SECURITY.md](SECURITY.md).
 
 ## Contributing
 

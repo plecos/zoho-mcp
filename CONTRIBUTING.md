@@ -67,9 +67,7 @@ obviously synthetic values (`555…` ids, invented names) on purpose.
 
 ## Reporting a security issue
 
-Please don't open a public issue. Email `plecos@thesalters.net` with
-details and we'll respond as quickly as we can.
-
-This server holds an OAuth token with read and write access to a real mailbox
-and calendar, so anything touching token storage, the auth flow, or the
-send-email gate is worth reporting privately.
+Please don't open a public issue — see [SECURITY.md](SECURITY.md) for how to
+report privately. This server holds an OAuth token with read and write access
+to a real mailbox and calendar, so anything touching token storage, the auth
+flow, or the send-email gate is worth reporting that way.

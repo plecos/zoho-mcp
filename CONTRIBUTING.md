@@ -5,10 +5,10 @@ on a change.
 
 ## Licensing
 
-The project is [MIT](LICENSE) licensed, and contributions are accepted under the
-same terms — by opening a pull request you agree your contribution is licensed
-that way. You keep the copyright in your work; you'll be credited in the git
-history like any other contributor. There's no CLA and nothing to sign.
+The project is [Apache-2.0](LICENSE) licensed. Under section 5 of that license,
+any contribution you intentionally submit is automatically licensed under the
+same terms, so there's no CLA and nothing to sign. You keep the copyright in
+your work and are credited in the git history like any other contributor.
 
 ## Open an issue before writing code
 

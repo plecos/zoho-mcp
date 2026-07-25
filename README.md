@@ -179,7 +179,9 @@ Conventions, architecture, and the reasoning behind the design are in [CLAUDE.md
 
 ## License
 
-[MIT](LICENSE). Use it, modify it, ship it, sell it — commercially or otherwise. The only condition is that the copyright notice and license text travel with copies of the software.
+[Apache License 2.0](LICENSE). Use it, modify it, ship it, sell it — commercially or otherwise.
+
+If you redistribute it, in source or binary form, you need to: include a copy of the license, keep the existing copyright and attribution notices, mark any files you changed as modified, and carry forward the contents of [NOTICE](NOTICE). The license also grants you a patent license from the contributors, and doesn't grant any right to use the project's name or the authors' trademarks.
 
 ## Contributing
 

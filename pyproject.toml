@@ -6,8 +6,8 @@ readme = "README.md"
 authors = [
     { name = "Ken Salter", email = "plecos@thesalters.net" }
 ]
-license = "MIT"
-license-files = ["LICENSE"]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.15.0",

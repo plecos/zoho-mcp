@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A vendor-agnostic MCP server exposing Zoho Mail and Calendar as LLM tools"
 readme = "README.md"
 authors = [
-    { name = "Ken", email = "ken@thesalters.net" }
+    { name = "Ken Salter", email = "plecos@thesalters.net" }
 ]
 requires-python = ">=3.12"
 dependencies = [

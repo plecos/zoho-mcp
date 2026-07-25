@@ -38,8 +38,16 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    # Same split as above, and for the same reason: minor and patch together,
+    # majors on their own. An action's major bump is exactly where a runtime
+    # deprecation or a changed input shows up, and a green CI run only proves
+    # the action still executes -- not that caching or defaults behave the way
+    # they did before. Those deserve to be read one at a time.
     groups:
-      github-actions:
+      github-actions-minor-patch:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
     open-pull-requests-limit: 3

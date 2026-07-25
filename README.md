@@ -176,3 +176,17 @@ uv run mypy src
 CI runs all of the above on every push and PR. A separate `build-validation.yml` workflow runs on `main` and tags to confirm the package builds and its entry points import cleanly — a release-readiness gate, not a deployment; there's no hosting target.
 
 Conventions, architecture, and the reasoning behind the design are in [CLAUDE.md](CLAUDE.md). Zoho's API quirks — the ones that make otherwise-odd-looking code necessary — are in [docs/zoho-api-notes.md](docs/zoho-api-notes.md). Read the latter before touching anything that talks to Zoho.
+
+## License
+
+[Functional Source License 1.1](LICENSE), with an Apache-2.0 future license (`FSL-1.1-ALv2`).
+
+In practice: **use it, modify it, self-host it, and redistribute your changes freely** — personally, for internal use at a company, for research, teaching, or client work. The one thing you can't do is offer it to others as a commercial product or service that competes with this one.
+
+Each released version becomes Apache-2.0 on its second anniversary, so the restriction is time-limited rather than permanent.
+
+This is *source available* rather than OSI-approved open source, since restricting competing commercial use is incompatible with the Open Source Definition. If FSL's terms don't fit your situation, ask — other arrangements are possible.
+
+### Contributing
+
+Contributions are welcome, but note that a contributor licensing agreement will be required before any pull request can be merged, since the project is dual-licensed commercially. Please open an issue to discuss a change before writing it.

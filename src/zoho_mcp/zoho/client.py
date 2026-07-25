@@ -18,18 +18,75 @@ from zoho_mcp.zoho.auth import ZohoTokenManager
 ZOHO_EVENT_RANGE_REQUEST_FORMAT = "%Y%m%dT%H%M%SZ"
 ZOHO_MAIL_BASE_URL = "https://mail.zoho.com/api"
 ZOHO_CALENDAR_BASE_URL = "https://calendar.zoho.com/api/v1"
-ZOHO_TASKS_BASE_URL = "https://mail.zoho.com/api/tasks/me"
-ZOHO_NOTES_BASE_URL = "https://mail.zoho.com/api/notes/me"
-ZOHO_BOOKMARKS_BASE_URL = "https://mail.zoho.com/api/links/me"
+# Each of these three services scopes its data the same way: "/me" for the
+# user's own personal items, "/groups/{id}" for a shared group's. The roots
+# exist so both forms are built in one place (see _scoped_url).
+ZOHO_TASKS_ROOT_URL = "https://mail.zoho.com/api/tasks"
+ZOHO_NOTES_ROOT_URL = "https://mail.zoho.com/api/notes"
+ZOHO_BOOKMARKS_ROOT_URL = "https://mail.zoho.com/api/links"
+ZOHO_TASKS_BASE_URL = f"{ZOHO_TASKS_ROOT_URL}/me"
+ZOHO_NOTES_BASE_URL = f"{ZOHO_NOTES_ROOT_URL}/me"
+ZOHO_BOOKMARKS_BASE_URL = f"{ZOHO_BOOKMARKS_ROOT_URL}/me"
 ZOHO_BRANCHES_URL = "https://calendar.zoho.com/api/v1/branches"
 ZOHO_RESOURCES_URL = "https://calendar.zoho.com/api/v1/resources"
 MAX_EVENT_RANGE_DAYS = 31
+
+# Zoho's own documented eventdata fields accepted by create/update -- see
+# https://www.zoho.com/calendar/help/api/post-create-event.html. Confirmed
+# live that blindly echoing an event's *entire* raw GET response back into
+# an update's eventdata fails: the GET response's "notifyType" (an int,
+# response-only) isn't valid input and gets rejected with a 400
+# "PATTERN_NOT_MATCHED" -- it is NOT the same field as the write-side
+# "notify_attendee". update_event carries forward only fields in this set
+# from the current event, rather than the full raw object, specifically
+# to avoid resending response-only fields Zoho's write endpoint rejects.
+_EVENT_WRITABLE_FIELDS = frozenset(
+    {
+        "title",
+        "isallday",
+        "isprivate",
+        "url",
+        "location",
+        "description",
+        "richtext_description",
+        "color",
+        "attendees",
+        "group_attendees",
+        "reminders",
+        "calendar_alarm",
+        "notify_attendee",
+        "attach",
+        "transparency",
+        "conference",
+        "allowForwarding",
+        "rrule",
+        "repeat",
+        "dateandtime",
+    }
+)
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
+_VALID_EMAIL_STATUSES = frozenset({"read", "unread", "all"})
+# Zoho's "no colour" value for a note, as carried by notes created in the
+# web UI. Sent on every create because the Notes API rejects a note
+# without a colour, despite documenting the field as optional.
+_NOTE_DEFAULT_COLOR = -1
 MIN_TASKS_LIMIT = 1
 MAX_TASKS_LIMIT = 499  # per Zoho's own documented range for this endpoint
 MIN_NOTES_LIMIT = 1
+# Zoho documents 1-399 for both Notes and Bookmarks, but confirmed live it
+# silently *accepts* an over-max limit (HTTP 200 for limit=10000) instead of
+# rejecting it. Silent capping is the worse failure mode -- a caller asking
+# for 1000 can't distinguish "that's everything" from "you were truncated"
+# -- so both bounds are enforced here rather than deferred to Zoho.
+MAX_NOTES_LIMIT = 399
 MIN_BOOKMARKS_LIMIT = 1
+MAX_BOOKMARKS_LIMIT = 399
+
+# Zoho's own view names for the two cross-group task queries, mapped from
+# readable argument values. Confirmed live that only these two exist --
+# "assignedbyme" 400s with PATTERN_NOT_MATCHED.
+_TASK_VIEWS = {"assigned_to_me": "assignedtome", "created_by_me": "createdbyme"}
 
 # search_emails excludes these by default -- not "received" mail by nature.
 # Every user-created/rule-filed folder reports folderType "Inbox" (confirmed
@@ -462,6 +519,62 @@ def normalize_bookmark(raw: dict) -> dict:
         raise ZohoAPIError(f"Malformed bookmark from Zoho: {e}") from e
 
 
+def normalize_group(raw: dict) -> dict:
+    """Normalize one group from a Zoho Mail Tasks/Notes/Bookmarks group list.
+
+    The three services disagree on shape, confirmed live against a real
+    group: Tasks nests its array under ``data.groups`` and keys the id
+    as an **int** ``id``, while Notes and Bookmarks return ``data`` as
+    the array directly and key the id as a **string** ``groupId`` --
+    same group, different key *and* different type. Ids are coerced to
+    ``str`` so callers get one consistent type either way.
+
+    ``owner``/``member_count`` come from Tasks' richer payload
+    (``owner``/``numberOfMembers``); Notes and Bookmarks report neither,
+    so they fall back to ``""``/``None``. In practice Tasks lists every
+    group the user belongs to -- see ``list_groups`` -- so these are
+    normally populated, but the fallbacks keep a group that only one
+    service reports from being dropped or faked.
+
+    Raises:
+        ZohoAPIError: if ``raw`` is missing its id or ``name``.
+    """
+    try:
+        return {
+            "id": str(raw["id"] if "id" in raw else raw["groupId"]),
+            "name": raw["name"],
+            "owner": raw.get("owner") or "",
+            "member_count": raw.get("numberOfMembers"),
+        }
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed group from Zoho: {e}") from e
+
+
+def _created_entity_id(payload: dict, kind: str) -> str:
+    """Pull the new id out of a Notes/Bookmarks create response.
+
+    Both return only ``data.entityId`` plus a URI rather than the stored
+    record, so this is the whole of what those creates can report back.
+
+    Raises:
+        ZohoAPIError: if the response carries no ``entityId``.
+    """
+    entity_id = (payload.get("data") or {}).get("entityId")
+    if not entity_id:
+        raise ZohoAPIError(f"Zoho did not return an id for the created {kind}")
+    return str(entity_id)
+
+
+def _scoped_url(root: str, group_id: str | None) -> str:
+    """Build a Tasks/Notes/Bookmarks URL for either personal or group scope.
+
+    Zoho splits these three services' data by scope in the path rather
+    than by a query param: ``/me`` for the caller's own items,
+    ``/groups/{id}`` for a shared group's.
+    """
+    return f"{root}/groups/{group_id}" if group_id is not None else f"{root}/me"
+
+
 def normalize_floor(raw: dict) -> dict:
     """Normalize one floor from Zoho Calendar's Resource Booking API.
 
@@ -539,6 +652,39 @@ def normalize_resource(raw: dict) -> dict:
         raise ZohoAPIError(f"Malformed resource from Zoho: {e}") from e
 
 
+async def _zoho_authenticated_request(
+    method: str,
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    params: dict | None = None,
+    json_body: dict | None = None,
+) -> dict:
+    """Shared Zoho-auth-header-and-error-wrapping used by every Zoho call,
+    regardless of HTTP method.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    headers = {
+        "Authorization": f"Zoho-oauthtoken {access_token}",
+        "Accept": "application/json",
+    }
+    try:
+        response = await http_client.request(
+            method, url, params=params, json=json_body, headers=headers
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise ZohoAPIError(
+            f"Zoho API request to {url} failed with "
+            f"{e.response.status_code}: {e.response.text}"
+        ) from e
+    except httpx.HTTPError as e:
+        raise ZohoAPIError(f"Zoho API request to {url} failed: {e}") from e
+    return response.json()
+
+
 async def zoho_authenticated_get(
     http_client: httpx.AsyncClient,
     url: str,
@@ -550,21 +696,59 @@ async def zoho_authenticated_get(
     Raises:
         ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
     """
-    headers = {
-        "Authorization": f"Zoho-oauthtoken {access_token}",
-        "Accept": "application/json",
-    }
-    try:
-        response = await http_client.get(url, params=params, headers=headers)
-        response.raise_for_status()
-    except httpx.HTTPStatusError as e:
-        raise ZohoAPIError(
-            f"Zoho API request to {url} failed with "
-            f"{e.response.status_code}: {e.response.text}"
-        ) from e
-    except httpx.HTTPError as e:
-        raise ZohoAPIError(f"Zoho API request to {url} failed: {e}") from e
-    return response.json()
+    return await _zoho_authenticated_request(
+        "GET", http_client, url, access_token, params
+    )
+
+
+async def zoho_authenticated_post(
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    params: dict | None = None,
+    json_body: dict | None = None,
+) -> dict:
+    """Shared POST-with-Zoho-auth-header-and-error-wrapping used by every Zoho write call.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    return await _zoho_authenticated_request(
+        "POST", http_client, url, access_token, params, json_body
+    )
+
+
+async def zoho_authenticated_put(
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    params: dict | None = None,
+    json_body: dict | None = None,
+) -> dict:
+    """Shared PUT-with-Zoho-auth-header-and-error-wrapping used by every Zoho write call.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    return await _zoho_authenticated_request(
+        "PUT", http_client, url, access_token, params, json_body
+    )
+
+
+async def zoho_authenticated_delete(
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    params: dict | None = None,
+) -> dict:
+    """Shared DELETE-with-Zoho-auth-header-and-error-wrapping used by every Zoho write call.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    return await _zoho_authenticated_request(
+        "DELETE", http_client, url, access_token, params
+    )
 
 
 async def _get_default_mail_account(
@@ -630,6 +814,27 @@ async def get_mailbox_timezone(
         raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
 
 
+async def get_primary_email_address(
+    token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
+) -> str:
+    """Look up the address outgoing mail is sent from.
+
+    Zoho requires ``fromAddress`` on every send/draft. It's read live
+    rather than stored in config for the same reason as the timezone: the
+    account's primary address is a mutable setting, and a stale one would
+    mean composing as an address the user no longer owns.
+
+    Raises:
+        ZohoAPIError: if the request fails, the response is malformed, or
+            no account is flagged as the default.
+    """
+    account = await _get_default_mail_account(token_manager, http_client)
+    try:
+        return account["primaryEmailAddress"]
+    except (KeyError, TypeError) as e:
+        raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
+
+
 async def get_folder_types(
     token_manager: ZohoTokenManager, http_client: httpx.AsyncClient, account_id: str
 ) -> dict[str, str]:
@@ -690,18 +895,51 @@ class ZohoClient:
         account_id: str,
         calendar_uid: str,
         strip_invisible_chars: bool = False,
+        allow_auto_send: bool = False,
     ) -> None:
         self._token_manager = token_manager
         self._http_client = http_client
         self._account_id = account_id
         self._calendar_uid = calendar_uid
         self._strip_invisible_chars = strip_invisible_chars
+        # Gates send_email only. Drafting is never gated. Enforced here, in
+        # the layer that actually issues the HTTP call, so no higher-level
+        # code path (or injected instruction reaching a tool) can route
+        # around it.
+        self._allow_auto_send = allow_auto_send
         self._mailbox_timezone_cache: str | None = None
+        self._from_address_cache: str | None = None
         self._excluded_folder_ids_cache: frozenset[str] | None = None
 
     async def _get(self, url: str, params: dict | None = None) -> dict:
         token = await self._token_manager.get_access_token()
         return await zoho_authenticated_get(self._http_client, url, token, params)
+
+    async def _post(
+        self,
+        url: str,
+        params: dict | None = None,
+        json_body: dict | None = None,
+    ) -> dict:
+        token = await self._token_manager.get_access_token()
+        return await zoho_authenticated_post(
+            self._http_client, url, token, params, json_body
+        )
+
+    async def _put(
+        self,
+        url: str,
+        params: dict | None = None,
+        json_body: dict | None = None,
+    ) -> dict:
+        token = await self._token_manager.get_access_token()
+        return await zoho_authenticated_put(
+            self._http_client, url, token, params, json_body
+        )
+
+    async def _delete(self, url: str, params: dict | None = None) -> dict:
+        token = await self._token_manager.get_access_token()
+        return await zoho_authenticated_delete(self._http_client, url, token, params)
 
     async def _get_mailbox_timezone(self) -> str:
         """Return the mailbox's timezone, fetched once per client and cached.
@@ -800,6 +1038,228 @@ class ZohoClient:
 
         return results
 
+    async def list_emails(
+        self,
+        status: str = "all",
+        folder_id: str | None = None,
+        limit: int = 20,
+        start: int = 1,
+    ) -> list[dict]:
+        """List emails by read/unread status, with real pagination.
+
+        Unlike ``search_emails`` (Zoho's Search API, which has no status
+        filter and -- until this was added -- no way to page past the
+        first result window), this uses Zoho's separate List Emails API
+        (``GET .../messages/view``), which supports a documented
+        ``status`` filter and ``start``/``limit`` pagination. Use this
+        when you need to reliably enumerate *every* unread (or read)
+        email, not just the top N by recency.
+
+        Args:
+            status: "unread", "read", or "all" (default).
+            folder_id: restrict to one folder's id, from ``list_folders``.
+                If omitted, searches the whole mailbox and excludes
+                Sent/Drafts/Templates by default (same as
+                ``search_emails``) -- pass a folder_id explicitly to
+                include one of those.
+            limit: maximum number of results per page (1-200).
+            start: 1-based starting sequence number, for paging past the
+                first ``limit`` results (e.g. ``start=21`` with
+                ``limit=20`` fetches the second page).
+
+        Raises:
+            ZohoAPIError: if ``status`` isn't one of "read"/"unread"/
+                "all", ``limit``/``start`` are out of range, or the Zoho
+                Mail API rejects or fails the request.
+        """
+        if status not in _VALID_EMAIL_STATUSES:
+            raise ZohoAPIError(
+                f"status must be one of {sorted(_VALID_EMAIL_STATUSES)} (got {status!r})"
+            )
+        if not (MIN_SEARCH_LIMIT <= limit <= MAX_SEARCH_LIMIT):
+            raise ZohoAPIError(
+                f"limit must be between {MIN_SEARCH_LIMIT} and "
+                f"{MAX_SEARCH_LIMIT} (got {limit})"
+            )
+        if start < 1:
+            raise ZohoAPIError(f"start must be >= 1 (got {start})")
+
+        mailbox_timezone = await self._get_mailbox_timezone()
+
+        params: dict = {"status": status, "start": start, "limit": limit}
+        if folder_id is not None:
+            params["folderId"] = folder_id
+
+        payload = await self._get(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/view",
+            params=params,
+        )
+        raw_items = payload.get("data", [])
+        results = [
+            normalize_email_summary(item, mailbox_timezone) for item in raw_items
+        ]
+
+        if raw_items and folder_id is None:
+            excluded_folder_ids = await self._get_excluded_folder_ids()
+            results = [r for r in results if r["folder_id"] not in excluded_folder_ids]
+
+        return results
+
+    async def _get_from_address(self) -> str:
+        """The account's outgoing address, fetched once per client and cached.
+
+        Same reasoning as ``_get_mailbox_timezone`` -- a mutable account
+        setting, so looked up live with staleness bounded to this process
+        rather than persisted to config.
+        """
+        if self._from_address_cache is None:
+            self._from_address_cache = await get_primary_email_address(
+                self._token_manager, self._http_client
+            )
+        return self._from_address_cache
+
+    async def _compose(
+        self,
+        *,
+        to: list[str],
+        subject: str,
+        content: str,
+        cc: list[str] | None,
+        bcc: list[str] | None,
+        as_draft: bool,
+    ) -> dict:
+        """Shared body-builder for ``create_draft`` and ``send_email``.
+
+        Zoho uses one endpoint for both, distinguished *only* by
+        ``mode: "draft"`` -- omitting it sends the message for real. That
+        makes the flag the single most safety-critical field in this
+        client, so it's set from an explicit ``as_draft`` argument here
+        rather than defaulted or inferred anywhere downstream.
+
+        Raises:
+            ZohoAPIError: if ``to`` has no usable address, or the Zoho
+                Mail API rejects or fails the request.
+        """
+        recipients = [address.strip() for address in to if address.strip()]
+        if not recipients:
+            raise ZohoAPIError("at least one recipient address is required")
+
+        body: dict = {
+            "fromAddress": await self._get_from_address(),
+            "toAddress": ",".join(recipients),
+            "subject": subject,
+            "content": content,
+        }
+        if as_draft:
+            body["mode"] = "draft"
+        if cc:
+            body["ccAddress"] = ",".join(a.strip() for a in cc if a.strip())
+        if bcc:
+            body["bccAddress"] = ",".join(a.strip() for a in bcc if a.strip())
+
+        payload = await self._post(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages",
+            json_body=body,
+        )
+        return {"id": (payload.get("data") or {}).get("messageId", "")}
+
+    async def create_draft(
+        self,
+        to: list[str],
+        subject: str,
+        content: str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+    ) -> dict:
+        """Save an email as a draft. Never sends, and is never gated.
+
+        Args:
+            to: recipient addresses (at least one required).
+            subject: the subject line.
+            content: the message body.
+            cc/bcc: optional additional recipients.
+
+        Returns:
+            ``{"id": ...}`` -- the new draft's message id.
+
+        Raises:
+            ZohoAPIError: if no recipient is given, or the Zoho Mail API
+                rejects or fails the request.
+        """
+        return await self._compose(
+            to=to, subject=subject, content=content, cc=cc, bcc=bcc, as_draft=True
+        )
+
+    async def send_email(
+        self,
+        to: list[str],
+        subject: str,
+        content: str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+    ) -> dict:
+        """Send an email immediately. Disabled unless explicitly configured.
+
+        Sending is irreversible and outward-facing, so it's off by
+        default: the client must be constructed with
+        ``allow_auto_send=True`` (driven by ``ZOHO_ALLOW_AUTO_SEND`` in
+        the environment). When disabled this raises *before* issuing any
+        request, so nothing can leave the account.
+
+        Args/Returns: same as ``create_draft``.
+
+        Raises:
+            ZohoAPIError: if auto-send isn't enabled, no recipient is
+                given, or the Zoho Mail API rejects or fails the request.
+        """
+        if not self._allow_auto_send:
+            raise ZohoAPIError(
+                "Sending email is disabled. This server only saves drafts "
+                "unless auto-send is explicitly turned on by setting "
+                "ZOHO_ALLOW_AUTO_SEND=true in the server's environment. "
+                "Use create_draft instead, and send from Zoho Mail."
+            )
+        return await self._compose(
+            to=to, subject=subject, content=content, cc=cc, bcc=bcc, as_draft=False
+        )
+
+    async def reply_draft(
+        self, message_id: str, content: str, reply_all: bool = False
+    ) -> dict:
+        """Save a reply to an existing email as a draft. Never sends.
+
+        There is deliberately no send-a-reply counterpart: replies quote
+        an incoming message, which is exactly the content most likely to
+        carry an injected instruction, so they always land in Drafts for
+        a human to review.
+
+        Args:
+            message_id: the email being replied to, from ``search_emails``
+                or ``list_emails``.
+            content: the reply body.
+            reply_all: reply to every recipient rather than just the sender.
+
+        Returns:
+            ``{"id": ...}`` -- the new draft's message id.
+
+        Raises:
+            ZohoAPIError: if ``content`` is blank, or the Zoho Mail API
+                rejects or fails the request.
+        """
+        if not content.strip():
+            raise ZohoAPIError("content must not be blank")
+        body = {
+            "fromAddress": await self._get_from_address(),
+            "content": content,
+            "action": "replyall" if reply_all else "reply",
+            "mode": "draft",  # never remove: without it Zoho sends the reply
+        }
+        payload = await self._post(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/{message_id}",
+            json_body=body,
+        )
+        return {"id": (payload.get("data") or {}).get("messageId", "")}
+
     async def get_email(self, message_id: str, folder_id: str) -> dict:
         """Fetch the full plain-text content of one email.
 
@@ -829,6 +1289,87 @@ class ZohoClient:
         )
         attachments = payload.get("data", {}).get("attachments", [])
         return [normalize_attachment(a) for a in attachments]
+
+    async def _update_message(
+        self, mode: str, message_ids: list[str], **extra: object
+    ) -> None:
+        """Shared PUT to Zoho Mail's ``updatemessage`` endpoint underlying
+        every message-state write (mark read/unread, move, label add/
+        remove) -- they differ only in ``mode`` and mode-specific fields.
+
+        Unlike Zoho Calendar's write APIs (payload as an ``eventdata``
+        query param), Zoho Mail's write API takes a JSON request body.
+        Zoho's own endpoint accepts a batch of ``messageId``s per call --
+        this is not looped one-at-a-time, since a caller asking to mark
+        35 emails read should cost one request, not 35.
+
+        Raises:
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
+        """
+        if not message_ids:
+            raise ZohoAPIError("message_ids must contain at least one message id")
+        await self._put(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/updatemessage",
+            json_body={"mode": mode, "messageId": message_ids, **extra},
+        )
+
+    async def mark_as_read(self, message_ids: list[str]) -> None:
+        """Mark one or more emails as read in a single request.
+
+        Raises:
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
+        """
+        await self._update_message("markAsRead", message_ids)
+
+    async def mark_as_unread(self, message_ids: list[str]) -> None:
+        """Mark one or more emails as unread in a single request.
+
+        Raises:
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
+        """
+        await self._update_message("markAsUnread", message_ids)
+
+    async def move_email(self, message_ids: list[str], folder_id: str) -> None:
+        """Move one or more emails to a different folder in a single request.
+
+        Args:
+            message_ids: email ``id``s from a prior ``search_emails`` result.
+            folder_id: the destination folder's ``id``, from ``list_folders``.
+
+        Raises:
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
+        """
+        await self._update_message("moveMessage", message_ids, destfolderId=folder_id)
+
+    async def add_label(self, message_ids: list[str], label_id: str) -> None:
+        """Apply one label to one or more emails in a single request.
+
+        Args:
+            message_ids: email ``id``s from a prior ``search_emails`` result.
+            label_id: the label's ``id``, from ``list_labels``.
+
+        Raises:
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
+        """
+        await self._update_message("applyLabel", message_ids, labelId=[label_id])
+
+    async def remove_label(self, message_ids: list[str], label_id: str) -> None:
+        """Remove one label from one or more emails in a single request.
+
+        Args:
+            message_ids: email ``id``s from a prior ``search_emails`` result.
+            label_id: the label's ``id``, from ``list_labels``.
+
+        Raises:
+            ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
+                API rejects or fails the request.
+        """
+        await self._update_message("removeLabel", message_ids, labelId=[label_id])
 
     async def list_folders(self) -> list[dict]:
         """List all folders in the mailbox, including custom subfolders.
@@ -975,6 +1516,199 @@ class ZohoClient:
             for slot in payload.get("freebusy", [])
         ]
 
+    async def create_event(
+        self,
+        title: str,
+        start: datetime,
+        end: datetime,
+        description: str = "",
+        location: str = "",
+        attendees: list[str] | None = None,
+        calendar_id: str | None = None,
+    ) -> dict:
+        """Create a new calendar event.
+
+        Args:
+            title: event title.
+            start/end: event start/end (any timezone-aware datetime).
+            description: optional event description.
+            location: optional event location.
+            attendees: optional list of attendee email addresses. To book
+                a Resource Booking resource, include its ``email`` (from
+                ``list_resources``) here.
+            calendar_id: which calendar to create the event in -- defaults
+                to the configured default calendar if omitted.
+
+        Returns:
+            The created event, normalized the same way as ``get_event``
+            (id, title, organizer, attendees, location, description,
+            recurrence -- no start/end, see ``normalize_event_detail``).
+
+        Raises:
+            ZohoAPIError: if ``end`` isn't after ``start``, or the
+                Calendar API rejects or fails the request.
+        """
+        if end <= start:
+            raise ZohoAPIError(
+                f"end must be after start (got start={start.isoformat()}, "
+                f"end={end.isoformat()})"
+            )
+        eventdata: dict = {
+            "title": title,
+            "dateandtime": {
+                "start": start.astimezone(timezone.utc).strftime(
+                    ZOHO_EVENT_RANGE_REQUEST_FORMAT
+                ),
+                "end": end.astimezone(timezone.utc).strftime(
+                    ZOHO_EVENT_RANGE_REQUEST_FORMAT
+                ),
+                "timezone": "UTC",
+            },
+        }
+        if description:
+            eventdata["description"] = description
+        if location:
+            eventdata["location"] = location
+        if attendees:
+            eventdata["attendees"] = [
+                {"email": email, "status": "NEEDS-ACTION"} for email in attendees
+            ]
+        payload = await self._post(
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events",
+            params={"eventdata": json.dumps(eventdata)},
+        )
+        events = payload.get("events", [])
+        if not events:
+            raise ZohoAPIError("Zoho did not return the created event")
+        return normalize_event_detail(events[0])
+
+    async def _get_raw_event(self, uid: str, calendar_id: str | None = None) -> dict:
+        """Fetch one event's raw, complete Zoho representation (unnormalized).
+
+        Used internally by ``update_event``/``delete_event``, which need
+        the current ``etag`` (mandatory for both) and, for update, the
+        full current field set to merge against -- Zoho's update endpoint
+        replaces the entire event, so any field not resent is deleted.
+
+        Raises:
+            ZohoAPIError: if no event is found for ``uid``, or the
+                Calendar API rejects or fails the request.
+        """
+        payload = await self._get(
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}"
+        )
+        events = payload.get("events", [])
+        if not events:
+            raise ZohoAPIError(f"No event found for uid={uid!r}")
+        return events[0]
+
+    async def update_event(
+        self,
+        uid: str,
+        title: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        description: str | None = None,
+        location: str | None = None,
+        attendees: list[str] | None = None,
+        calendar_id: str | None = None,
+    ) -> dict:
+        """Update an existing calendar event.
+
+        Only fields explicitly given are changed -- everything else is
+        carried forward from the event's current state (fields in
+        ``_EVENT_WRITABLE_FIELDS`` only, not the full raw GET response --
+        confirmed live that resending an event's full raw representation
+        verbatim fails, since some fields the GET response includes
+        aren't valid write input; see ``_EVENT_WRITABLE_FIELDS``). This
+        matters because Zoho's update endpoint is a full replace, not a
+        partial patch: it "overwrites all existing fields with the values
+        provided in the request" (confirmed in Zoho's own docs), so any
+        writable field silently omitted -- including ones this method
+        doesn't expose an argument for, like ``rrule``/``reminders`` --
+        would be deleted from the event, not left alone.
+
+        Args:
+            uid: the event's id, from a prior ``list_events``/``get_event``/
+                ``create_event`` result.
+            title/start/end/description/location/attendees: only the
+                fields being changed need to be given. ``start``/``end``
+                must be given together (both or neither) -- there's no
+                sensible default for "change only one".
+            calendar_id: which calendar the event belongs to -- defaults
+                to the configured default calendar if omitted.
+
+        Returns:
+            The updated event, normalized the same way as ``get_event``.
+
+        Raises:
+            ZohoAPIError: if ``start``/``end`` are given inconsistently,
+                ``end`` isn't after ``start``, no event is found for
+                ``uid``, or the Calendar API rejects or fails the request.
+        """
+        if (start is None) != (end is None):
+            raise ZohoAPIError("start and end must be given together")
+        if start is not None and end is not None and end <= start:
+            raise ZohoAPIError(
+                f"end must be after start (got start={start.isoformat()}, "
+                f"end={end.isoformat()})"
+            )
+
+        raw = await self._get_raw_event(uid, calendar_id)
+        eventdata = {k: v for k, v in raw.items() if k in _EVENT_WRITABLE_FIELDS}
+        eventdata["etag"] = raw[
+            "etag"
+        ]  # mandatory for update, not itself writable data
+
+        if title is not None:
+            eventdata["title"] = title
+        if start is not None and end is not None:
+            eventdata["dateandtime"] = {
+                "start": start.astimezone(timezone.utc).strftime(
+                    ZOHO_EVENT_RANGE_REQUEST_FORMAT
+                ),
+                "end": end.astimezone(timezone.utc).strftime(
+                    ZOHO_EVENT_RANGE_REQUEST_FORMAT
+                ),
+                "timezone": "UTC",
+            }
+        if description is not None:
+            eventdata["description"] = description
+        if location is not None:
+            eventdata["location"] = location
+        if attendees is not None:
+            eventdata["attendees"] = [
+                {"email": email, "status": "NEEDS-ACTION"} for email in attendees
+            ]
+
+        payload = await self._put(
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}",
+            params={"eventdata": json.dumps(eventdata)},
+        )
+        events = payload.get("events", [])
+        if not events:
+            raise ZohoAPIError("Zoho did not return the updated event")
+        return normalize_event_detail(events[0])
+
+    async def delete_event(self, uid: str, calendar_id: str | None = None) -> None:
+        """Delete an existing calendar event.
+
+        Args:
+            uid: the event's id, from a prior ``list_events``/``get_event``/
+                ``create_event`` result.
+            calendar_id: which calendar the event belongs to -- defaults
+                to the configured default calendar if omitted.
+
+        Raises:
+            ZohoAPIError: if no event is found for ``uid``, or the
+                Calendar API rejects or fails the request.
+        """
+        raw = await self._get_raw_event(uid, calendar_id)
+        await self._delete(
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}",
+            params={"eventdata": json.dumps({"etag": raw["etag"]})},
+        )
+
     async def list_branches(self) -> list[dict]:
         """List the office branches configured for Resource Booking,
         each with its nested buildings and floors.
@@ -1022,16 +1756,82 @@ class ZohoClient:
             )
         return [normalize_resource(r) for r in payload]
 
+    async def list_groups(self) -> list[dict]:
+        """List every shared Zoho Mail group the user belongs to.
+
+        A group is a single entity shared by Tasks, Notes, and Bookmarks
+        -- not a per-service thing. Confirmed live: one real group came
+        back from all three endpoints, keyed by the same id, *including*
+        the services where it holds zero items. So these endpoints list
+        "groups you belong to", not "groups with items in this service",
+        and the same group must collapse to one row here rather than
+        appearing once per service (which would read as three groups).
+
+        Zoho has no single "my groups" endpoint, so all three are still
+        queried and merged by id, rather than trusting one to be
+        complete on the strength of a single observed group. Tasks is
+        merged first because only its payload carries ``owner`` and
+        ``numberOfMembers``. All three work under the scopes already
+        requested for reading those services, and each returns a 200
+        with an empty collection (not an error) when there are no groups.
+
+        Returns:
+            ``[{"id", "name", "owner", "member_count"}, ...]``, one row
+            per distinct group. ``owner``/``member_count`` fall back to
+            ``""``/``None`` for a group Tasks didn't report. An empty
+            list is a normal result -- groups are a shared-mailbox
+            feature most personal accounts never set up. Pass an ``id``
+            to any of ``list_tasks``/``list_notes``/``list_bookmarks``'s
+            ``group_id`` argument; the same id works for all three.
+
+        Raises:
+            ZohoAPIError: if any of the three requests fails, or a group
+                in the response is malformed.
+        """
+        tasks_payload = await self._get(f"{ZOHO_TASKS_ROOT_URL}/groups")
+        notes_payload = await self._get(f"{ZOHO_NOTES_ROOT_URL}/groups")
+        bookmarks_payload = await self._get(f"{ZOHO_BOOKMARKS_ROOT_URL}/groups")
+
+        # Tasks nests its array under data.groups; Notes and Bookmarks
+        # return data as the array itself. Confirmed live.
+        raw_groups = [
+            *tasks_payload.get("data", {}).get("groups", []),
+            *notes_payload.get("data", []),
+            *bookmarks_payload.get("data", []),
+        ]
+
+        # dict preserves insertion order, so Tasks' richer entry wins and
+        # the later bare Notes/Bookmarks duplicates are dropped.
+        merged: dict[str, dict] = {}
+        for raw in raw_groups:
+            group = normalize_group(raw)
+            merged.setdefault(group["id"], group)
+        return list(merged.values())
+
     async def list_tasks(
-        self, limit: int = 20, offset: int = 0
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        group_id: str | None = None,
+        view: str | None = None,
     ) -> tuple[list[dict], bool]:
-        """List the user's personal Zoho Mail tasks.
+        """List Zoho Mail tasks -- personal, a group's, or a cross-group view.
 
         Args:
             limit: maximum number of tasks to return (1-499).
             offset: how many tasks to skip before returning results (Zoho's
                 own ``from`` param -- renamed here since ``from`` is a
                 Python keyword).
+            group_id: list a shared group's tasks instead of the caller's
+                personal ones. Ids come from ``list_groups``.
+            view: ``"assigned_to_me"`` or ``"created_by_me"`` -- Zoho's
+                two cross-group task views, which span every group the
+                user belongs to rather than one scope. Confirmed live
+                that on an account with no groups these return exactly
+                the same tasks as the personal list, so they're only
+                meaningfully different once group tasks exist. Mutually
+                exclusive with ``group_id``, since the two select scope
+                in incompatible ways (a path segment vs. a query param).
 
         Returns:
             ``(tasks, has_more)`` -- ``has_more`` reflects whether Zoho's
@@ -1039,8 +1839,10 @@ class ZohoClient:
             result count.
 
         Raises:
-            ZohoAPIError: if ``limit``/``offset`` are out of range, or the
-                Tasks API rejects or fails the request.
+            ZohoAPIError: if ``limit``/``offset`` are out of range,
+                ``view`` isn't a recognized value, both ``group_id`` and
+                ``view`` are given, or the Tasks API rejects or fails the
+                request.
         """
         if not (MIN_TASKS_LIMIT <= limit <= MAX_TASKS_LIMIT):
             raise ZohoAPIError(
@@ -1049,13 +1851,146 @@ class ZohoClient:
             )
         if offset < 0:
             raise ZohoAPIError(f"offset must be >= 0 (got {offset})")
-        payload = await self._get(
-            ZOHO_TASKS_BASE_URL, params={"limit": limit, "from": offset}
-        )
+        if group_id is not None and view is not None:
+            raise ZohoAPIError("group_id and view cannot be given together")
+        if view is not None and view not in _TASK_VIEWS:
+            raise ZohoAPIError(
+                f"view must be one of {sorted(_TASK_VIEWS)} (got {view!r})"
+            )
+
+        params: dict = {"limit": limit, "from": offset}
+        if view is not None:
+            # The cross-group views live at the service root (trailing
+            # slash required) and need action=view alongside the view name.
+            url = f"{ZOHO_TASKS_ROOT_URL}/"
+            params |= {"action": "view", "view": _TASK_VIEWS[view]}
+        else:
+            url = _scoped_url(ZOHO_TASKS_ROOT_URL, group_id)
+
+        payload = await self._get(url, params=params)
         data = payload.get("data", {})
         tasks = [normalize_task(t) for t in data.get("tasks", [])]
         has_more = bool(data.get("paging", {}).get("nextPage"))
         return tasks, has_more
+
+    async def create_task(
+        self,
+        title: str,
+        description: str = "",
+        priority: str = "",
+        group_id: str | None = None,
+    ) -> dict:
+        """Create a personal or group task.
+
+        Unlike ``create_note``/``create_bookmark``, Zoho returns the whole
+        created task here, so it comes back normalized exactly like a
+        listed one rather than as a bare id.
+
+        Args:
+            title: the task title (the only field Zoho requires).
+            description: optional free-text body.
+            priority: optional; Zoho's own samples show "low"/"high".
+                Passed through unvalidated -- the full set of accepted
+                values isn't documented, so rejecting values here risks
+                blocking ones Zoho actually accepts.
+            group_id: create in a shared group instead of the caller's
+                personal tasks. Ids come from ``list_groups``.
+
+        Raises:
+            ZohoAPIError: if ``title`` is blank, Zoho's response contains
+                no task, or the Tasks API rejects or fails the request.
+        """
+        if not title.strip():
+            raise ZohoAPIError("title must not be blank")
+        body: dict = {"title": title}
+        if description:
+            body["description"] = description
+        if priority:
+            body["priority"] = priority
+        payload = await self._post(
+            _scoped_url(ZOHO_TASKS_ROOT_URL, group_id), json_body=body
+        )
+        task = payload.get("data")
+        if not task:
+            raise ZohoAPIError("Zoho did not return the created task")
+        return normalize_task(task)
+
+    async def create_note(
+        self, content: str, title: str = "", group_id: str | None = None
+    ) -> dict:
+        """Create a personal or group note.
+
+        Args:
+            content: the note body (the only field Zoho requires).
+            title: optional note title.
+            group_id: create in a shared group instead of the caller's
+                personal notes. Ids come from ``list_groups``.
+
+        Returns:
+            ``{"id": ...}``. Zoho's create response carries only the new
+            ``entityId`` and a URI -- not the stored note -- so this
+            returns the id rather than assembling a record the API never
+            sent back. Call ``get_note`` with it for the full note.
+
+        Raises:
+            ZohoAPIError: if ``content`` is blank, the response carries
+                no id, or the Notes API rejects or fails the request.
+        """
+        if not content.strip():
+            raise ZohoAPIError("content must not be blank")
+        # color is REQUIRED despite Zoho documenting it as optional --
+        # confirmed live that {"content": ...} alone returns 404 "Invalid
+        # Input" while adding an integer color creates the note. It must
+        # be an int here even though the read side returns it as a string
+        # ("-1"), the same read/write type asymmetry as the Calendar
+        # notifyType case. -1 is Zoho's own "no colour" value, as carried
+        # by notes created through the web UI.
+        body: dict = {"content": content, "color": _NOTE_DEFAULT_COLOR}
+        if title:
+            body["title"] = title
+        payload = await self._post(
+            _scoped_url(ZOHO_NOTES_ROOT_URL, group_id), json_body=body
+        )
+        return {"id": _created_entity_id(payload, "note")}
+
+    async def create_bookmark(
+        self,
+        url: str,
+        title: str,
+        summary: str = "",
+        group_id: str | None = None,
+    ) -> dict:
+        """Create a personal or group bookmark.
+
+        Args:
+            url: the bookmarked link. Named ``url`` to match what
+                ``normalize_bookmark`` returns; translated to Zoho's own
+                ``link`` field at the request boundary.
+            title: the bookmark title (Zoho requires it alongside the link).
+            summary: optional description.
+            group_id: create in a shared group instead of the caller's
+                personal bookmarks. Ids come from ``list_groups``.
+
+        Returns:
+            ``{"id": ...}`` -- same reasoning as ``create_note``: Zoho
+            returns only the new ``entityId`` and a URI.
+
+        Raises:
+            ZohoAPIError: if ``url`` or ``title`` is blank, the response
+                carries no id, or the Bookmarks API rejects or fails the
+                request.
+        """
+        if not url.strip():
+            raise ZohoAPIError("url must not be blank")
+        if not title.strip():
+            raise ZohoAPIError("title must not be blank")
+        body: dict = {"link": url, "title": title}
+        if summary:
+            body["summary"] = summary
+        payload = await self._post(
+            _scoped_url(ZOHO_BOOKMARKS_ROOT_URL, group_id), json_body=body
+        )
+        return {"id": _created_entity_id(payload, "bookmark")}
 
     async def get_task(self, task_id: str) -> dict:
         """Fetch one personal task by id.
@@ -1070,11 +2005,28 @@ class ZohoClient:
             raise ZohoAPIError(f"No task found for task_id={task_id!r}")
         return normalize_task(tasks[0])
 
-    async def list_notes(self, limit: int = 20, after: int = 0) -> list[dict]:
-        """List the user's personal Zoho Mail notes.
+    async def list_notes(
+        self,
+        limit: int = 20,
+        after: int = 0,
+        group_id: str | None = None,
+        oldest_first: bool = False,
+    ) -> list[dict]:
+        """List Zoho Mail notes -- the caller's personal ones, or a group's.
 
         Args:
-            limit: maximum number of notes to return.
+            limit: maximum number of notes to return (1-399).
+            group_id: list a shared group's notes instead of the caller's
+                personal ones. Ids come from ``list_groups``.
+            oldest_first: return oldest-created first instead of the
+                default newest-first. Sent as Zoho's ``isPrev`` param,
+                whose docs describe only "ascending or descending order
+                based on created time" without saying which value is
+                which -- confirmed live against real notes that
+                ``isPrev=true`` is ascending (oldest first), and that an
+                absent ``isPrev`` is identical to ``isPrev=false``. It's
+                a sort-order flag despite the paging-sounding name;
+                ``after`` offsets within whichever order is selected.
             after: how many notes to skip before returning results. Zoho's
                 own docs describe this vaguely as "specifies from which
                 retrieval has to be done" -- confirmed live it behaves as
@@ -1093,13 +2045,21 @@ class ZohoClient:
             ZohoAPIError: if ``limit``/``after`` are out of range, or the
                 Notes API rejects or fails the request.
         """
-        if limit < MIN_NOTES_LIMIT:
-            raise ZohoAPIError(f"limit must be >= {MIN_NOTES_LIMIT} (got {limit})")
+        if not (MIN_NOTES_LIMIT <= limit <= MAX_NOTES_LIMIT):
+            raise ZohoAPIError(
+                f"limit must be between {MIN_NOTES_LIMIT} and "
+                f"{MAX_NOTES_LIMIT} (got {limit})"
+            )
         if after < 0:
             raise ZohoAPIError(f"after must be >= 0 (got {after})")
         mailbox_timezone = await self._get_mailbox_timezone()
+        params: dict = {"limit": limit, "after": after}
+        if oldest_first:
+            # Only sent when switching order -- absent and "false" are
+            # confirmed equivalent, so the default request is unchanged.
+            params["isPrev"] = "true"
         payload = await self._get(
-            ZOHO_NOTES_BASE_URL, params={"limit": limit, "after": after}
+            _scoped_url(ZOHO_NOTES_ROOT_URL, group_id), params=params
         )
         notes = payload.get("data", {}).get("list", [])
         return [normalize_note(n, mailbox_timezone) for n in notes]
@@ -1119,11 +2079,27 @@ class ZohoClient:
             raise ZohoAPIError(f"Malformed note response from Zoho: {e}") from e
         return normalize_note(note, mailbox_timezone)
 
-    async def list_bookmarks(self, limit: int = 20, after: int = 0) -> list[dict]:
-        """List the user's personal Zoho Mail bookmarks.
+    async def list_bookmarks(
+        self,
+        limit: int = 20,
+        after: int = 0,
+        group_id: str | None = None,
+        oldest_first: bool = False,
+    ) -> list[dict]:
+        """List Zoho Mail bookmarks -- the caller's personal ones, or a group's.
 
         Args:
-            limit: maximum number of bookmarks to return.
+            limit: maximum number of bookmarks to return (1-399).
+            group_id: list a shared group's bookmarks instead of the
+                caller's personal ones. Ids come from ``list_groups``.
+            oldest_first: return oldest-created first instead of the
+                default newest-first, via Zoho's ``isPrev`` param.
+                Verified against real bookmarks independently of
+                ``list_notes`` rather than assumed from it -- these two
+                endpoints already disagree on ``isFavorite``'s type, so
+                matching docs prove nothing. Behavior turned out to
+                match Notes: absent is identical to ``isPrev=false``
+                (newest first) and ``true`` is the exact reverse.
             after: how many bookmarks to skip before returning results
                 (behaves as a plain integer offset -- see ``list_notes``).
 
@@ -1136,12 +2112,18 @@ class ZohoClient:
             ZohoAPIError: if ``limit``/``after`` are out of range, or the
                 Bookmarks API rejects or fails the request.
         """
-        if limit < MIN_BOOKMARKS_LIMIT:
-            raise ZohoAPIError(f"limit must be >= {MIN_BOOKMARKS_LIMIT} (got {limit})")
+        if not (MIN_BOOKMARKS_LIMIT <= limit <= MAX_BOOKMARKS_LIMIT):
+            raise ZohoAPIError(
+                f"limit must be between {MIN_BOOKMARKS_LIMIT} and "
+                f"{MAX_BOOKMARKS_LIMIT} (got {limit})"
+            )
         if after < 0:
             raise ZohoAPIError(f"after must be >= 0 (got {after})")
+        params: dict = {"limit": limit, "after": after}
+        if oldest_first:
+            params["isPrev"] = "true"
         payload = await self._get(
-            ZOHO_BOOKMARKS_BASE_URL, params={"limit": limit, "after": after}
+            _scoped_url(ZOHO_BOOKMARKS_ROOT_URL, group_id), params=params
         )
         bookmarks = payload.get("data", {}).get("list", [])
         return [normalize_bookmark(b) for b in bookmarks]

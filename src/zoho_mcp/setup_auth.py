@@ -27,14 +27,19 @@ from zoho_mcp.zoho.client import get_default_calendar_uid, get_primary_account_i
 
 SCOPES = [
     "ZohoMail.messages.READ",
+    "ZohoMail.messages.ALL",  # write access: mark_as_read/unread, move_email, add/remove_label
     "ZohoMail.accounts.READ",  # needed once, to look up the mail account id
     "ZohoMail.folders.READ",  # used at runtime to filter out Sent/Drafts by folder type
     "ZohoCalendar.event.READ",
+    "ZohoCalendar.event.ALL",  # write access: create_event/update_event/delete_event
     "ZohoCalendar.calendar.READ",  # needed once, to look up the calendar's uid
     "zohocontacts.contactapi.READ",
     "ZohoMail.tasks.READ",
+    "ZohoMail.tasks.CREATE",  # write access: create_task
     "ZohoMail.notes.READ",
+    "ZohoMail.notes.CREATE",  # write access: create_note
     "ZohoMail.links.READ",
+    "ZohoMail.links.CREATE",  # write access: create_bookmark
     "ZohoCalendar.resources.READ",
     "ZohoCalendar.branches.READ",
     "ZohoMail.tags.READ",

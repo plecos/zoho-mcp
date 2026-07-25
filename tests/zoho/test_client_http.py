@@ -32,6 +32,44 @@ def zoho_client(http_client):
     )
 
 
+@pytest.fixture
+def sending_client(http_client):
+    """A client with auto-send explicitly enabled, as ZOHO_ALLOW_AUTO_SEND does."""
+    return ZohoClient(
+        token_manager=FakeTokenManager(),
+        http_client=http_client,
+        account_id=ACCOUNT_ID,
+        calendar_uid=CALENDAR_UID,
+        allow_auto_send=True,
+    )
+
+
+def mock_compose_endpoints(respx_mock):
+    """Accounts lookup (for the mandatory fromAddress) plus the compose POST."""
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    return respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages"
+    ).mock(
+        return_value=httpx.Response(
+            200, json={"status": {"code": 200}, "data": {"messageId": "msg-new-1"}}
+        )
+    )
+
+
 def mock_pacific_accounts_endpoint(respx_mock):
     return respx_mock.get("https://mail.zoho.com/api/accounts").mock(
         return_value=httpx.Response(
@@ -521,6 +559,166 @@ async def test_search_emails_rejects_empty_query_and_no_days_back_without_a_requ
     assert not route.called
 
 
+async def test_list_emails_calls_view_endpoint_with_correct_params(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [_raw_email(message_id="1", folder_id="1122334455")]},
+        )
+    )
+
+    results = await zoho_client.list_emails()
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Zoho-oauthtoken fake-access-token"
+    assert request.url.params["status"] == "all"
+    assert request.url.params["start"] == "1"
+    assert request.url.params["limit"] == "20"
+    assert "folderId" not in request.url.params
+    assert results == [
+        {
+            "id": "1",
+            "from": "someone@example.com",
+            "subject": "Subject",
+            "date": "2024-10-29T09:00:00-07:00",
+            "snippet": "Snippet",
+            "folder_id": "1122334455",
+            "read": True,
+        }
+    ]
+
+
+async def test_list_emails_passes_status_start_and_limit_through(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(return_value=httpx.Response(200, json={"data": []}))
+
+    await zoho_client.list_emails(status="unread", limit=50, start=21)
+
+    assert route.calls.last.request.url.params["status"] == "unread"
+    assert route.calls.last.request.url.params["limit"] == "50"
+    assert route.calls.last.request.url.params["start"] == "21"
+
+
+async def test_list_emails_passes_folder_id_when_given(respx_mock, zoho_client):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [_raw_email(message_id="1", folder_id="folder-9")]},
+        )
+    )
+
+    # No mock_folder_types_endpoint -- an explicit folder_id must skip the
+    # exclusion-filter fetch entirely, same as search_emails' "in:" case.
+    results = await zoho_client.list_emails(folder_id="folder-9")
+
+    assert route.calls.last.request.url.params["folderId"] == "folder-9"
+    assert {r["id"] for r in results} == {"1"}
+
+
+@pytest.mark.parametrize("bad_status", ["", "READ", "unseen", "all "])
+async def test_list_emails_rejects_invalid_status_without_a_request(
+    respx_mock, zoho_client, bad_status
+):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    )
+
+    with pytest.raises(ZohoAPIError, match="status"):
+        await zoho_client.list_emails(status=bad_status)
+
+    assert not route.called
+
+
+@pytest.mark.parametrize("bad_limit", [0, -5, 201, 10_000])
+async def test_list_emails_rejects_out_of_range_limit_without_a_request(
+    respx_mock, zoho_client, bad_limit
+):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    )
+
+    with pytest.raises(ZohoAPIError, match="limit"):
+        await zoho_client.list_emails(limit=bad_limit)
+
+    assert not route.called
+
+
+@pytest.mark.parametrize("bad_start", [0, -1, -100])
+async def test_list_emails_rejects_non_positive_start_without_a_request(
+    respx_mock, zoho_client, bad_start
+):
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    )
+
+    with pytest.raises(ZohoAPIError, match="start"):
+        await zoho_client.list_emails(start=bad_start)
+
+    assert not route.called
+
+
+async def test_list_emails_returns_empty_list_when_data_key_absent(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    results = await zoho_client.list_emails()
+
+    assert results == []
+
+
+async def test_list_emails_filters_out_sent_drafts_and_templates_by_default(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    _raw_email(message_id="1", folder_id="1122334455"),
+                    _raw_email(message_id="2", folder_id="sent-folder-id"),
+                ]
+            },
+        )
+    )
+
+    results = await zoho_client.list_emails()
+
+    assert {r["id"] for r in results} == {"1"}
+
+
+async def test_list_emails_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_emails()
+
+
 async def test_get_event_fetches_by_uid_and_normalizes(respx_mock, zoho_client):
     route = respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-recurring-1"
@@ -758,6 +956,39 @@ async def test_list_notes_sends_limit_and_after_params(respx_mock, zoho_client):
     assert [n["id"] for n in results] == ["1"]
 
 
+# Confirmed live against three real notes: isPrev=true returns oldest ->
+# newest, while absent and isPrev=false are both newest -> oldest and
+# byte-identical. It is a sort-order flag, not the paging-direction flag
+# its name suggests. `after` composes with it, offsetting within whichever
+# order is selected.
+async def test_list_notes_requests_ascending_order_when_oldest_first(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_notes(oldest_first=True)
+
+    assert route.calls.last.request.url.params["isPrev"] == "true"
+
+
+async def test_list_notes_omits_isprev_when_defaulting_to_newest_first(
+    respx_mock, zoho_client
+):
+    # Absent and "false" are confirmed equivalent live, so the default
+    # request stays byte-identical to what shipped before this flag.
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_notes()
+
+    assert "isPrev" not in route.calls.last.request.url.params
+
+
 async def test_list_notes_returns_empty_list_when_list_key_absent(
     respx_mock, zoho_client
 ):
@@ -880,6 +1111,36 @@ async def test_list_bookmarks_sends_limit_and_after_params(respx_mock, zoho_clie
     assert [b["id"] for b in results] == ["1"]
 
 
+# Verified independently against real bookmarks rather than inferred from
+# Notes: these two sibling endpoints already disagree on isFavorite's type
+# (bool on Notes, string here), so identical docs prove nothing. Bookmarks
+# carry no createdTime at all, so ordering was checked via their
+# epoch-ms-prefixed entityIds -- absent == "false" (newest first) and
+# "true" is the exact reverse, matching Notes.
+async def test_list_bookmarks_requests_ascending_order_when_oldest_first(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_bookmarks(oldest_first=True)
+
+    assert route.calls.last.request.url.params["isPrev"] == "true"
+
+
+async def test_list_bookmarks_omits_isprev_when_defaulting_to_newest_first(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_bookmarks()
+
+    assert "isPrev" not in route.calls.last.request.url.params
+
+
 async def test_list_bookmarks_returns_empty_list_when_list_key_absent(
     respx_mock, zoho_client
 ):
@@ -923,6 +1184,252 @@ async def test_list_bookmarks_wraps_http_errors_as_zoho_api_error(
 
     with pytest.raises(ZohoAPIError):
         await zoho_client.list_bookmarks()
+
+
+# Zoho documents 1-399 for both, but confirmed live it silently ACCEPTS an
+# over-max limit (HTTP 200 for limit=10000) rather than rejecting it -- so a
+# caller asking for 1000 can't tell whether they got everything or were
+# quietly capped. Validate explicitly so that ambiguity never reaches them.
+@pytest.mark.parametrize("bad_limit", [400, 500, 10_000])
+async def test_list_notes_rejects_limit_above_max_without_a_request(
+    respx_mock, zoho_client, bad_limit
+):
+    route = respx_mock.get("https://mail.zoho.com/api/notes/me")
+
+    with pytest.raises(ZohoAPIError, match="limit"):
+        await zoho_client.list_notes(limit=bad_limit)
+
+    assert not route.called
+
+
+@pytest.mark.parametrize("bad_limit", [400, 500, 10_000])
+async def test_list_bookmarks_rejects_limit_above_max_without_a_request(
+    respx_mock, zoho_client, bad_limit
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me")
+
+    with pytest.raises(ZohoAPIError, match="limit"):
+        await zoho_client.list_bookmarks(limit=bad_limit)
+
+    assert not route.called
+
+
+@pytest.mark.parametrize("edge_limit", [1, 399])
+async def test_list_notes_accepts_boundary_limit_values(
+    respx_mock, zoho_client, edge_limit
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_notes(limit=edge_limit)
+
+    assert route.called
+
+
+@pytest.mark.parametrize("edge_limit", [1, 399])
+async def test_list_bookmarks_accepts_boundary_limit_values(
+    respx_mock, zoho_client, edge_limit
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_bookmarks(limit=edge_limit)
+
+    assert route.called
+
+
+async def test_list_tasks_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/groups/zg-1").mock(
+        return_value=httpx.Response(200, json={"data": {"tasks": []}})
+    )
+
+    await zoho_client.list_tasks(group_id="zg-1")
+
+    assert route.called
+
+
+async def test_list_notes_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get("https://mail.zoho.com/api/notes/groups/g-1").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_notes(group_id="g-1")
+
+    assert route.called
+
+
+async def test_list_bookmarks_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/links/groups/g-1").mock(
+        return_value=httpx.Response(200, json={"data": {"list": []}})
+    )
+
+    await zoho_client.list_bookmarks(group_id="g-1")
+
+    assert route.called
+
+
+# Confirmed live: these two views are real (assignedbyme is not -- it 400s
+# with PATTERN_NOT_MATCHED), and both require action=view alongside them.
+@pytest.mark.parametrize(
+    ("view", "zoho_view"),
+    [("assigned_to_me", "assignedtome"), ("created_by_me", "createdbyme")],
+)
+async def test_list_tasks_uses_view_endpoint_when_view_given(
+    respx_mock, zoho_client, view, zoho_view
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/").mock(
+        return_value=httpx.Response(200, json={"data": {"tasks": []}})
+    )
+
+    await zoho_client.list_tasks(view=view)
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.url.params["view"] == zoho_view
+    assert request.url.params["action"] == "view"
+
+
+async def test_list_tasks_rejects_unknown_view_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/")
+
+    with pytest.raises(ZohoAPIError, match="view"):
+        await zoho_client.list_tasks(view="assigned_by_me")
+
+    assert not route.called
+
+
+async def test_list_tasks_rejects_group_id_and_view_together_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/")
+
+    with pytest.raises(ZohoAPIError, match="together"):
+        await zoho_client.list_tasks(group_id="zg-1", view="assigned_to_me")
+
+    assert not route.called
+
+
+def mock_group_endpoints(respx_mock, *, tasks, notes, bookmarks):
+    respx_mock.get("https://mail.zoho.com/api/tasks/groups").mock(
+        return_value=httpx.Response(200, json={"data": {"groups": tasks}})
+    )
+    respx_mock.get("https://mail.zoho.com/api/notes/groups").mock(
+        return_value=httpx.Response(200, json={"data": notes})
+    )
+    respx_mock.get("https://mail.zoho.com/api/links/groups").mock(
+        return_value=httpx.Response(200, json={"data": bookmarks})
+    )
+
+
+# Confirmed live: a Zoho Mail group is ONE entity that every service
+# lists, not a per-service thing. The real "test" group came back from
+# all three endpoints -- including tasks and bookmarks, where it holds
+# zero items -- keyed as an int "id" by Tasks and a string "groupId" by
+# Notes/Bookmarks. So the same group must collapse to a single row, or
+# a caller would report three groups where the user has one.
+async def test_list_groups_deduplicates_one_group_reported_by_every_service(
+    respx_mock, zoho_client
+):
+    mock_group_endpoints(
+        respx_mock,
+        tasks=[
+            {
+                "id": 932723008,
+                "name": "test",
+                "owner": "Ken Salter",
+                "numberOfMembers": 1,
+            }
+        ],
+        notes=[{"groupId": "932723008", "name": "test"}],
+        bookmarks=[{"groupId": "932723008", "name": "test"}],
+    )
+
+    results = await zoho_client.list_groups()
+
+    assert results == [
+        {"id": "932723008", "name": "test", "owner": "Ken Salter", "member_count": 1}
+    ]
+
+
+async def test_list_groups_includes_a_group_only_one_service_reports(
+    respx_mock, zoho_client
+):
+    # Don't assume the three listings always agree just because they did
+    # for the one real group available -- a group missing from Tasks
+    # still has to surface, just without the Tasks-only metadata.
+    mock_group_endpoints(
+        respx_mock,
+        tasks=[],
+        notes=[{"groupId": "84626808", "name": "note-only"}],
+        bookmarks=[],
+    )
+
+    results = await zoho_client.list_groups()
+
+    assert results == [
+        {"id": "84626808", "name": "note-only", "owner": "", "member_count": None}
+    ]
+
+
+async def test_list_groups_returns_empty_list_when_no_groups_exist(
+    respx_mock, zoho_client
+):
+    # The real shape on an account with no groups -- confirmed live.
+    respx_mock.get("https://mail.zoho.com/api/tasks/groups").mock(
+        return_value=httpx.Response(200, json={"data": {"groups": []}})
+    )
+    respx_mock.get("https://mail.zoho.com/api/notes/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    respx_mock.get("https://mail.zoho.com/api/links/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+
+    assert await zoho_client.list_groups() == []
+
+
+async def test_list_groups_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.get("https://mail.zoho.com/api/tasks/groups").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+    respx_mock.get("https://mail.zoho.com/api/notes/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    respx_mock.get("https://mail.zoho.com/api/links/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.list_groups()
+
+
+async def test_list_groups_raises_clear_error_on_malformed_group(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/tasks/groups").mock(
+        return_value=httpx.Response(200, json={"data": {"groups": [{"name": "no-id"}]}})
+    )
+    respx_mock.get("https://mail.zoho.com/api/notes/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    respx_mock.get("https://mail.zoho.com/api/links/groups").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+
+    with pytest.raises(ZohoAPIError, match="group"):
+        await zoho_client.list_groups()
 
 
 async def test_get_bookmark_fetches_by_id_and_normalizes(respx_mock, zoho_client):
@@ -1357,6 +1864,165 @@ async def test_list_attachments_wraps_http_errors_as_zoho_api_error(
         )
 
 
+async def test_mark_as_read_sends_correct_mode_and_message_ids(respx_mock, zoho_client):
+    route = respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    await zoho_client.mark_as_read(message_ids=["111", "222", "333"])
+
+    assert route.called
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body == {"mode": "markAsRead", "messageId": ["111", "222", "333"]}
+
+
+async def test_mark_as_read_rejects_empty_message_ids_without_a_request(
+    respx_mock, zoho_client
+):
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.mark_as_read(message_ids=[])
+
+    assert not respx_mock.calls
+
+
+async def test_mark_as_read_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.mark_as_read(message_ids=["111"])
+
+
+async def test_mark_as_unread_sends_correct_mode_and_message_ids(
+    respx_mock, zoho_client
+):
+    route = respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    await zoho_client.mark_as_unread(message_ids=["111", "222"])
+
+    assert route.called
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body == {"mode": "markAsUnread", "messageId": ["111", "222"]}
+
+
+async def test_mark_as_unread_rejects_empty_message_ids_without_a_request(
+    respx_mock, zoho_client
+):
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.mark_as_unread(message_ids=[])
+
+    assert not respx_mock.calls
+
+
+async def test_move_email_sends_correct_mode_and_dest_folder(respx_mock, zoho_client):
+    route = respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    await zoho_client.move_email(message_ids=["111", "222"], folder_id="1122334455")
+
+    assert route.called
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body == {
+        "mode": "moveMessage",
+        "messageId": ["111", "222"],
+        "destfolderId": "1122334455",
+    }
+
+
+async def test_move_email_rejects_empty_message_ids_without_a_request(
+    respx_mock, zoho_client
+):
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.move_email(message_ids=[], folder_id="1122334455")
+
+    assert not respx_mock.calls
+
+
+async def test_move_email_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.move_email(message_ids=["111"], folder_id="1122334455")
+
+
+async def test_add_label_sends_correct_mode_and_label_id(respx_mock, zoho_client):
+    route = respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    await zoho_client.add_label(message_ids=["111", "222"], label_id="lbl-1")
+
+    assert route.called
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body == {
+        "mode": "applyLabel",
+        "messageId": ["111", "222"],
+        "labelId": ["lbl-1"],
+    }
+
+
+async def test_add_label_rejects_empty_message_ids_without_a_request(
+    respx_mock, zoho_client
+):
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.add_label(message_ids=[], label_id="lbl-1")
+
+    assert not respx_mock.calls
+
+
+async def test_add_label_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.add_label(message_ids=["111"], label_id="lbl-1")
+
+
+async def test_remove_label_sends_correct_mode_and_label_id(respx_mock, zoho_client):
+    route = respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    await zoho_client.remove_label(message_ids=["111", "222"], label_id="lbl-1")
+
+    assert route.called
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body == {
+        "mode": "removeLabel",
+        "messageId": ["111", "222"],
+        "labelId": ["lbl-1"],
+    }
+
+
+async def test_remove_label_rejects_empty_message_ids_without_a_request(
+    respx_mock, zoho_client
+):
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.remove_label(message_ids=[], label_id="lbl-1")
+
+    assert not respx_mock.calls
+
+
+async def test_remove_label_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.remove_label(message_ids=["111"], label_id="lbl-1")
+
+
 async def test_list_calendars_fetches_and_normalizes(respx_mock, zoho_client):
     route = respx_mock.get("https://calendar.zoho.com/api/v1/calendars").mock(
         return_value=httpx.Response(
@@ -1509,3 +2175,875 @@ async def test_get_freebusy_wraps_http_errors_as_zoho_api_error(
 
     with pytest.raises(ZohoAPIError):
         await zoho_client.get_freebusy(email="jamie@example.com", start=start, end=end)
+
+
+async def test_create_event_sends_eventdata_and_normalizes_response(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [
+                    {
+                        "uid": "evt-new-1",
+                        "title": "Q3 Sync",
+                        "organizer": "user@example.com",
+                        "attendees": [],
+                    }
+                ]
+            },
+        )
+    )
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+
+    result = await zoho_client.create_event(title="Q3 Sync", start=start, end=end)
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Zoho-oauthtoken fake-access-token"
+    sent_eventdata = json.loads(request.url.params["eventdata"])
+    assert sent_eventdata["title"] == "Q3 Sync"
+    assert sent_eventdata["dateandtime"] == {
+        "start": "20260721T160000Z",
+        "end": "20260721T170000Z",
+        "timezone": "UTC",
+    }
+    assert result["id"] == "evt-new-1"
+    assert result["title"] == "Q3 Sync"
+
+
+async def test_create_event_includes_optional_fields_when_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [
+                    {
+                        "uid": "evt-new-1",
+                        "title": "Q3 Sync",
+                        "organizer": "u@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+
+    await zoho_client.create_event(
+        title="Q3 Sync",
+        start=start,
+        end=end,
+        description="Quarterly roadmap review",
+        location="Room 1",
+        attendees=["jamie@example.com"],
+    )
+
+    sent_eventdata = json.loads(route.calls.last.request.url.params["eventdata"])
+    assert sent_eventdata["description"] == "Quarterly roadmap review"
+    assert sent_eventdata["location"] == "Room 1"
+    assert sent_eventdata["attendees"] == [
+        {"email": "jamie@example.com", "status": "NEEDS-ACTION"}
+    ]
+
+
+async def test_create_event_uses_given_calendar_id_instead_of_default(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [{"uid": "evt-1", "title": "Sync", "organizer": "u@e.com"}]
+            },
+        )
+    )
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+
+    await zoho_client.create_event(
+        title="Sync", start=start, end=end, calendar_id="other-cal"
+    )
+
+    assert route.called
+
+
+async def test_create_event_rejects_end_before_start_without_a_request(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    )
+    start = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError, match="end must be after start"):
+        await zoho_client.create_event(title="Sync", start=start, end=end)
+
+    assert not route.called
+
+
+async def test_create_event_raises_clear_error_when_events_key_absent(
+    respx_mock, zoho_client
+):
+    respx_mock.post(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    ).mock(return_value=httpx.Response(200, json={}))
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_event(title="Sync", start=start, end=end)
+
+
+async def test_create_event_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.post(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_event(title="Sync", start=start, end=end)
+
+
+def _raw_event_for_update():
+    return {
+        "uid": "evt-1",
+        "title": "Old Title",
+        "organizer": "user@example.com",
+        "createdby": "user@example.com",
+        "modifiedby": "user@example.com",
+        "viewEventURL": "https://calendar.zoho.com/zc/viewevent/evt-1",
+        "role": "organizer",
+        "calid": "cal-internal-id",
+        "caluid": "cal-internal-uid",
+        # Confirmed live: this response-only field is NOT valid write
+        # input (a different, incompatible thing from the write-side
+        # "notify_attendee") -- resending it verbatim causes a real 400
+        # "PATTERN_NOT_MATCHED" error. Included here so the merge logic
+        # is tested against the exact shape that broke live.
+        "notifyType": 0,
+        "etag": "111222333",
+        "dateandtime": {
+            "start": "20260721T160000Z",
+            "end": "20260721T170000Z",
+        },
+        "description": "Old description",
+        "location": "Old location",
+        "attendees": [{"email": "old@example.com", "status": "ACCEPTED"}],
+        "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO",
+        "reminders": [{"action": "popup", "minutes": -30}],
+    }
+
+
+async def test_update_event_fetches_current_event_then_puts_merged_result(
+    respx_mock, zoho_client
+):
+    get_route = respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    put_route = respx_mock.put(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [
+                    {
+                        "uid": "evt-1",
+                        "title": "New Title",
+                        "organizer": "user@example.com",
+                    }
+                ]
+            },
+        )
+    )
+
+    result = await zoho_client.update_event(uid="evt-1", title="New Title")
+
+    assert get_route.called
+    assert put_route.called
+    sent_eventdata = json.loads(put_route.calls.last.request.url.params["eventdata"])
+    # Changed field applied...
+    assert sent_eventdata["title"] == "New Title"
+    # ...but everything untouched carried forward as-is, including etag
+    # (mandatory for the update to be accepted) and fields with no
+    # dedicated update_event argument at all (rrule, reminders) -- Zoho's
+    # update is a full replace, so omitting these would silently delete them.
+    assert sent_eventdata["etag"] == "111222333"
+    assert sent_eventdata["description"] == "Old description"
+    assert sent_eventdata["location"] == "Old location"
+    assert sent_eventdata["rrule"] == "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO"
+    assert sent_eventdata["reminders"] == [{"action": "popup", "minutes": -30}]
+    assert "uid" not in sent_eventdata  # goes in the URL, not the body
+    # Response-only fields, including the exact one that caused a real
+    # live 400 "PATTERN_NOT_MATCHED" when echoed back verbatim.
+    for field in (
+        "notifyType",
+        "organizer",
+        "createdby",
+        "modifiedby",
+        "viewEventURL",
+        "role",
+        "calid",
+        "caluid",
+    ):
+        assert field not in sent_eventdata
+    assert result["id"] == "evt-1"
+    assert result["title"] == "New Title"
+
+
+async def test_update_event_overrides_only_given_fields(respx_mock, zoho_client):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    put_route = respx_mock.put(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "events": [
+                    {"uid": "evt-1", "title": "Old Title", "organizer": "u@e.com"}
+                ]
+            },
+        )
+    )
+    start = datetime(2026, 7, 22, 16, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 22, 17, 0, 0, tzinfo=timezone.utc)
+
+    await zoho_client.update_event(
+        uid="evt-1",
+        start=start,
+        end=end,
+        description="New description",
+        location="New location",
+        attendees=["new@example.com"],
+    )
+
+    sent_eventdata = json.loads(put_route.calls.last.request.url.params["eventdata"])
+    assert sent_eventdata["title"] == "Old Title"  # untouched
+    assert sent_eventdata["dateandtime"] == {
+        "start": "20260722T160000Z",
+        "end": "20260722T170000Z",
+        "timezone": "UTC",
+    }
+    assert sent_eventdata["description"] == "New description"
+    assert sent_eventdata["location"] == "New location"
+    assert sent_eventdata["attendees"] == [
+        {"email": "new@example.com", "status": "NEEDS-ACTION"}
+    ]
+
+
+async def test_update_event_uses_given_calendar_id_instead_of_default(
+    respx_mock, zoho_client
+):
+    get_route = respx_mock.get(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    put_route = respx_mock.put(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events/evt-1"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"events": [{"uid": "evt-1", "title": "T", "organizer": "u@e.com"}]},
+        )
+    )
+
+    await zoho_client.update_event(uid="evt-1", title="T", calendar_id="other-cal")
+
+    assert get_route.called
+    assert put_route.called
+
+
+async def test_update_event_rejects_start_without_end(respx_mock, zoho_client):
+    route = respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    )
+
+    with pytest.raises(ZohoAPIError, match="start and end must be given together"):
+        await zoho_client.update_event(
+            uid="evt-1", start=datetime(2026, 7, 22, tzinfo=timezone.utc)
+        )
+
+    assert not route.called
+
+
+async def test_update_event_rejects_end_before_start(respx_mock, zoho_client):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    start = datetime(2026, 7, 22, 17, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 22, 16, 0, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ZohoAPIError, match="end must be after start"):
+        await zoho_client.update_event(uid="evt-1", start=start, end=end)
+
+
+async def test_update_event_raises_clear_error_when_event_not_found(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-missing"
+    ).mock(return_value=httpx.Response(200, json={"events": []}))
+
+    with pytest.raises(ZohoAPIError, match="evt-missing"):
+        await zoho_client.update_event(uid="evt-missing", title="New Title")
+
+
+async def test_update_event_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    respx_mock.put(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.update_event(uid="evt-1", title="New Title")
+
+
+async def test_delete_event_fetches_etag_then_deletes(respx_mock, zoho_client):
+    get_route = respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    delete_route = respx_mock.delete(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    await zoho_client.delete_event(uid="evt-1")
+
+    assert get_route.called
+    assert delete_route.called
+    sent_eventdata = json.loads(delete_route.calls.last.request.url.params["eventdata"])
+    assert sent_eventdata["etag"] == "111222333"
+
+
+async def test_delete_event_uses_given_calendar_id_instead_of_default(
+    respx_mock, zoho_client
+):
+    get_route = respx_mock.get(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    delete_route = respx_mock.delete(
+        "https://calendar.zoho.com/api/v1/calendars/other-cal/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    await zoho_client.delete_event(uid="evt-1", calendar_id="other-cal")
+
+    assert get_route.called
+    assert delete_route.called
+
+
+async def test_delete_event_raises_clear_error_when_event_not_found(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-missing"
+    ).mock(return_value=httpx.Response(200, json={"events": []}))
+
+    with pytest.raises(ZohoAPIError, match="evt-missing"):
+        await zoho_client.delete_event(uid="evt-missing")
+
+
+async def test_delete_event_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
+    respx_mock.delete(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
+    ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.delete_event(uid="evt-1")
+
+
+def _created_task_payload() -> dict:
+    """Zoho's real create-task response: unlike Notes/Bookmarks, it returns
+    the whole task object, so it can be normalized like a listed one."""
+    return {
+        "status": {"code": 200, "description": "success"},
+        "data": {
+            "id": "7000000089009",
+            "title": "Blog Updates",
+            "description": "Announcement blog for recent revamp",
+            "status": "In Progress",
+            "priority": "low",
+            "owner": {"name": "Ken", "id": 4650081},
+            "assignee": {"name": "Ken", "id": 4650081},
+            "tags": [],
+            "subtasks": [],
+            "createdAt": "2017-07-07T01:20:39+05:30",
+            "modifiedTime": "2017-07-07T01:20:39+05:30",
+        },
+    }
+
+
+async def test_create_task_posts_title_and_returns_normalized_task(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(200, json=_created_task_payload())
+    )
+
+    result = await zoho_client.create_task(title="Blog Updates")
+
+    assert route.called
+    assert json.loads(route.calls.last.request.content) == {"title": "Blog Updates"}
+    assert result["id"] == "7000000089009"
+    assert result["title"] == "Blog Updates"
+    assert result["status"] == "In Progress"
+
+
+async def test_create_task_sends_only_optional_fields_that_were_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(200, json=_created_task_payload())
+    )
+
+    await zoho_client.create_task(
+        title="Blog Updates", description="desc", priority="high"
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "title": "Blog Updates",
+        "description": "desc",
+        "priority": "high",
+    }
+
+
+async def test_create_task_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/tasks/groups/zg-1").mock(
+        return_value=httpx.Response(200, json=_created_task_payload())
+    )
+
+    await zoho_client.create_task(title="Blog Updates", group_id="zg-1")
+
+    assert route.called
+
+
+@pytest.mark.parametrize("bad_title", ["", "   "])
+async def test_create_task_rejects_blank_title_without_a_request(
+    respx_mock, zoho_client, bad_title
+):
+    route = respx_mock.post("https://mail.zoho.com/api/tasks/me")
+
+    with pytest.raises(ZohoAPIError, match="title"):
+        await zoho_client.create_task(title=bad_title)
+
+    assert not route.called
+
+
+async def test_create_task_raises_when_response_has_no_task(respx_mock, zoho_client):
+    respx_mock.post("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(200, json={"status": {"code": 200}})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_task(title="Blog Updates")
+
+
+async def test_create_task_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.post("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_task(title="Blog Updates")
+
+
+# Notes and Bookmarks, unlike Tasks, return only the new id and a URI --
+# no created object -- so these return the id rather than inventing a
+# full record the API never sent back.
+async def test_create_note_posts_content_and_returns_new_id(respx_mock, zoho_client):
+    route = respx_mock.post("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "status": {"code": 201, "description": "Created"},
+                "data": {
+                    "entityId": "1711974988431110001",
+                    "URI": "https://mail.zoho.com/api/notes/me/1711974988431110001",
+                },
+            },
+        )
+    )
+
+    result = await zoho_client.create_note(content="note body")
+
+    assert route.called
+    # color is required despite being documented optional -- confirmed live
+    # that content alone 404s. Int, though the read side returns a string.
+    assert json.loads(route.calls.last.request.content) == {
+        "content": "note body",
+        "color": -1,
+    }
+    assert result == {"id": "1711974988431110001"}
+
+
+async def test_create_note_sends_title_when_given(respx_mock, zoho_client):
+    route = respx_mock.post("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(201, json={"data": {"entityId": "1"}})
+    )
+
+    await zoho_client.create_note(content="body", title="My note")
+
+    assert json.loads(route.calls.last.request.content) == {
+        "content": "body",
+        "color": -1,
+        "title": "My note",
+    }
+
+
+async def test_create_note_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/notes/groups/g-1").mock(
+        return_value=httpx.Response(201, json={"data": {"entityId": "1"}})
+    )
+
+    await zoho_client.create_note(content="body", group_id="g-1")
+
+    assert route.called
+
+
+@pytest.mark.parametrize("bad_content", ["", "   "])
+async def test_create_note_rejects_blank_content_without_a_request(
+    respx_mock, zoho_client, bad_content
+):
+    route = respx_mock.post("https://mail.zoho.com/api/notes/me")
+
+    with pytest.raises(ZohoAPIError, match="content"):
+        await zoho_client.create_note(content=bad_content)
+
+    assert not route.called
+
+
+async def test_create_note_raises_when_entity_id_absent(respx_mock, zoho_client):
+    respx_mock.post("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(201, json={"data": {}})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_note(content="body")
+
+
+async def test_create_note_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.post("https://mail.zoho.com/api/notes/me").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_note(content="body")
+
+
+async def test_create_bookmark_posts_link_and_title_and_returns_new_id(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(
+            200, json={"data": {"entityId": "1712055358708110001"}}
+        )
+    )
+
+    result = await zoho_client.create_bookmark(
+        url="https://www.zoho.com", title="zoho link"
+    )
+
+    assert route.called
+    # Zoho's field is "link"; the read side normalizes it to "url", so the
+    # write side takes "url" too and translates at the boundary.
+    assert json.loads(route.calls.last.request.content) == {
+        "link": "https://www.zoho.com",
+        "title": "zoho link",
+    }
+    assert result == {"id": "1712055358708110001"}
+
+
+async def test_create_bookmark_sends_summary_when_given(respx_mock, zoho_client):
+    route = respx_mock.post("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {"entityId": "1"}})
+    )
+
+    await zoho_client.create_bookmark(
+        url="https://www.zoho.com", title="zoho link", summary="desc"
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "link": "https://www.zoho.com",
+        "title": "zoho link",
+        "summary": "desc",
+    }
+
+
+async def test_create_bookmark_targets_group_endpoint_when_group_id_given(
+    respx_mock, zoho_client
+):
+    route = respx_mock.post("https://mail.zoho.com/api/links/groups/g-1").mock(
+        return_value=httpx.Response(200, json={"data": {"entityId": "1"}})
+    )
+
+    await zoho_client.create_bookmark(
+        url="https://www.zoho.com", title="zoho link", group_id="g-1"
+    )
+
+    assert route.called
+
+
+@pytest.mark.parametrize(
+    ("url", "title", "expected"),
+    [("", "t", "url"), ("   ", "t", "url"), ("https://x.com", "", "title")],
+)
+async def test_create_bookmark_rejects_blank_required_fields_without_a_request(
+    respx_mock, zoho_client, url, title, expected
+):
+    route = respx_mock.post("https://mail.zoho.com/api/links/me")
+
+    with pytest.raises(ZohoAPIError, match=expected):
+        await zoho_client.create_bookmark(url=url, title=title)
+
+    assert not route.called
+
+
+async def test_create_bookmark_raises_when_entity_id_absent(respx_mock, zoho_client):
+    respx_mock.post("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(200, json={"data": {}})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_bookmark(url="https://x.com", title="t")
+
+
+async def test_create_bookmark_wraps_http_errors_as_zoho_api_error(
+    respx_mock, zoho_client
+):
+    respx_mock.post("https://mail.zoho.com/api/links/me").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_bookmark(url="https://x.com", title="t")
+
+
+# ---------------------------------------------------------------------------
+# Mail composition. Zoho sends and saves-a-draft through the SAME endpoint,
+# distinguished only by "mode": "draft" -- omitting that one field mails a
+# real person. The tests below pin that field deliberately: they are the
+# regression guard against a refactor silently turning drafts into sends.
+# ---------------------------------------------------------------------------
+
+
+async def test_create_draft_always_sets_mode_draft(respx_mock, zoho_client):
+    route = mock_compose_endpoints(respx_mock)
+
+    await zoho_client.create_draft(to=["a@example.com"], subject="Hi", content="Body")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS
+
+
+async def test_create_draft_builds_the_expected_payload(respx_mock, zoho_client):
+    route = mock_compose_endpoints(respx_mock)
+
+    result = await zoho_client.create_draft(
+        to=["a@example.com", "b@example.com"],
+        subject="Hi",
+        content="Body",
+        cc=["c@example.com"],
+        bcc=["d@example.com"],
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "mode": "draft",
+        "fromAddress": "me@example.com",
+        "toAddress": "a@example.com,b@example.com",
+        "subject": "Hi",
+        "content": "Body",
+        "ccAddress": "c@example.com",
+        "bccAddress": "d@example.com",
+    }
+    assert result == {"id": "msg-new-1"}
+
+
+async def test_create_draft_omits_cc_and_bcc_when_not_given(respx_mock, zoho_client):
+    route = mock_compose_endpoints(respx_mock)
+
+    await zoho_client.create_draft(to=["a@example.com"], subject="Hi", content="B")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert "ccAddress" not in sent
+    assert "bccAddress" not in sent
+
+
+@pytest.mark.parametrize("bad_to", [[], [""], ["   "]])
+async def test_create_draft_rejects_missing_recipients_without_a_request(
+    respx_mock, zoho_client, bad_to
+):
+    route = respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages")
+
+    with pytest.raises(ZohoAPIError, match="recipient"):
+        await zoho_client.create_draft(to=bad_to, subject="Hi", content="B")
+
+    assert not route.called
+
+
+async def test_create_draft_works_without_auto_send_enabled(respx_mock, zoho_client):
+    # Drafting must never be gated -- only sending is.
+    route = mock_compose_endpoints(respx_mock)
+
+    await zoho_client.create_draft(to=["a@example.com"], subject="Hi", content="B")
+
+    assert route.called
+
+
+async def test_send_email_refuses_and_makes_no_request_when_not_enabled(
+    respx_mock, zoho_client
+):
+    # The critical safety test: a disabled client must not reach Zoho at all,
+    # so no email can escape even if every other layer is bypassed.
+    route = respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages")
+
+    with pytest.raises(ZohoAPIError, match="ZOHO_ALLOW_AUTO_SEND"):
+        await zoho_client.send_email(to=["a@example.com"], subject="Hi", content="B")
+
+    assert not route.called
+
+
+async def test_send_email_omits_mode_so_zoho_actually_sends(respx_mock, sending_client):
+    route = mock_compose_endpoints(respx_mock)
+
+    result = await sending_client.send_email(
+        to=["a@example.com"], subject="Hi", content="Body"
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert "mode" not in sent
+    assert sent["toAddress"] == "a@example.com"
+    assert result == {"id": "msg-new-1"}
+
+
+async def test_send_email_rejects_missing_recipients_without_a_request(
+    respx_mock, sending_client
+):
+    route = respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages")
+
+    with pytest.raises(ZohoAPIError, match="recipient"):
+        await sending_client.send_email(to=[], subject="Hi", content="B")
+
+    assert not route.called
+
+
+async def test_compose_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages").mock(
+        return_value=httpx.Response(401, json={"error": "invalid token"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.create_draft(to=["a@example.com"], subject="Hi", content="B")
+
+
+async def test_reply_draft_sets_both_action_reply_and_mode_draft(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    route = respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
+    ).mock(
+        return_value=httpx.Response(200, json={"data": {"messageId": "msg-reply-1"}})
+    )
+
+    result = await zoho_client.reply_draft(message_id="m-1", content="Sure thing")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["action"] == "reply"
+    assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS
+    assert sent["content"] == "Sure thing"
+    assert result == {"id": "msg-reply-1"}
+
+
+async def test_reply_draft_uses_reply_all_action_when_asked(respx_mock, zoho_client):
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    route = respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
+    ).mock(return_value=httpx.Response(200, json={"data": {"messageId": "r-1"}}))
+
+    await zoho_client.reply_draft(message_id="m-1", content="Sure", reply_all=True)
+
+    assert json.loads(route.calls.last.request.content)["action"] == "replyall"
+
+
+@pytest.mark.parametrize("bad_content", ["", "   "])
+async def test_reply_draft_rejects_blank_content_without_a_request(
+    respx_mock, zoho_client, bad_content
+):
+    route = respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
+    )
+
+    with pytest.raises(ZohoAPIError, match="content"):
+        await zoho_client.reply_draft(message_id="m-1", content=bad_content)
+
+    assert not route.called

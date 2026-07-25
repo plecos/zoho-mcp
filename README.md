@@ -176,3 +176,13 @@ uv run mypy src
 CI runs all of the above on every push and PR. A separate `build-validation.yml` workflow runs on `main` and tags to confirm the package builds and its entry points import cleanly — a release-readiness gate, not a deployment; there's no hosting target.
 
 Conventions, architecture, and the reasoning behind the design are in [CLAUDE.md](CLAUDE.md). Zoho's API quirks — the ones that make otherwise-odd-looking code necessary — are in [docs/zoho-api-notes.md](docs/zoho-api-notes.md). Read the latter before touching anything that talks to Zoho.
+
+## License
+
+[Apache License 2.0](LICENSE). Use it, modify it, ship it, sell it — commercially or otherwise.
+
+If you redistribute it, in source or binary form, you need to: include a copy of the license, keep the existing copyright and attribution notices, mark any files you changed as modified, and carry forward the contents of [NOTICE](NOTICE). The license also grants you a patent license from the contributors, and doesn't grant any right to use the project's name or the authors' trademarks.
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). For anything beyond a typo, please open an issue first; this project has firm opinions about how it's built, and it's easier to sort out a mismatch in an issue than in review.

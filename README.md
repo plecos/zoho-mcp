@@ -179,16 +179,8 @@ Conventions, architecture, and the reasoning behind the design are in [CLAUDE.md
 
 ## License
 
-[Functional Source License 1.1](LICENSE), with an Apache-2.0 future license (`FSL-1.1-ALv2`).
+[MIT](LICENSE). Use it, modify it, ship it, sell it — commercially or otherwise. The only condition is that the copyright notice and license text travel with copies of the software.
 
-In practice: **use it, modify it, self-host it, and redistribute your changes freely** — personally, for internal use at a company, for research, teaching, or client work. The one thing you can't do is offer it to others as a commercial product or service that competes with this one.
+## Contributing
 
-Each released version becomes Apache-2.0 on its second anniversary, so the restriction is time-limited rather than permanent.
-
-This is *source available* rather than OSI-approved open source, since restricting competing commercial use is incompatible with the Open Source Definition. If FSL's terms don't fit your situation, ask — other arrangements are possible.
-
-### Contributing
-
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Because the project is also licensed commercially, merging a pull request requires signing the [Contributor License Agreement](CLA.md); you keep your copyright, and the agreement grants the sublicensing right that lets your work ship in both builds.
-
-The CLA is currently a draft pending legal review and has no signing mechanism yet, so **pull requests can't be merged for the moment** — please open an issue instead.
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). For anything beyond a typo, please open an issue first; this project has firm opinions about how it's built, and it's easier to sort out a mismatch in an issue than in review.

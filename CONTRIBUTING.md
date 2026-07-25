@@ -3,24 +3,12 @@
 Contributions are welcome. Two things are worth knowing before you spend time
 on a change.
 
-## A licensing agreement is required
+## Licensing
 
-The Project is offered under a source-available license
-([LICENSE](LICENSE)) and, separately, under commercial terms. Including your
-work in both requires your permission, so pull requests can only be merged once
-you've signed the [Contributor License Agreement](CLA.md).
-
-You keep the copyright in your contribution. The agreement grants us a license
-broad enough to sublicense it, which is what allows your work to ship in the
-commercially licensed build as well as the public one.
-
-> **Status:** the CLA is still a draft pending legal review, and no signing
-> mechanism is set up yet. Until that's done, pull requests can't be merged —
-> please open an issue instead, and the discussion won't be wasted.
-
-If you'd rather not sign, that's completely reasonable. Open an issue describing
-the problem and what you'd change; a well-written bug report costs you far less
-and is often just as useful.
+The project is [MIT](LICENSE) licensed, and contributions are accepted under the
+same terms — by opening a pull request you agree your contribution is licensed
+that way. You keep the copyright in your work; you'll be credited in the git
+history like any other contributor. There's no CLA and nothing to sign.
 
 ## Open an issue before writing code
 

@@ -6,10 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Ken Salter", email = "plecos@thesalters.net" }
 ]
-# Source-available, not OSI open source: permits any use except offering this
-# as a competing product or service, and converts to Apache-2.0 two years
-# after each version's release. See LICENSE.
-license = "LicenseRef-FSL-1.1-ALv2"
+license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [

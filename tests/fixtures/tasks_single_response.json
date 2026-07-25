@@ -9,7 +9,7 @@
         "status": "In Progress",
         "priority": "High",
         "project": {"name": "General", "id": "555001"},
-        "assignee": {"name": "Jamie Rivera", "id": 709548548},
+        "assignee": {"name": "Jamie Rivera", "id": 500000001},
         "tags": ["errands"],
         "subtasks": [{"id": "1001-1"}],
         "createdAt": "2026-01-05T09:00:00-08:00",

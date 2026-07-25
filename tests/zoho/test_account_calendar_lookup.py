@@ -43,7 +43,7 @@ async def test_get_primary_account_id_returns_the_default_account(
 
     account_id = await get_primary_account_id(FakeTokenManager(), http_client)
 
-    assert account_id == "3870383000000008002"
+    assert account_id == "5550000000000001002"
     assert (
         route.calls.last.request.headers["Authorization"]
         == "Zoho-oauthtoken fake-access-token"

@@ -5,13 +5,13 @@
   },
   "data": [
     {
-      "accountId": "3870383000000001001",
+      "accountId": "5550000000000001001",
       "isDefaultAccount": false,
       "mailboxAddress": "alias@example.com",
       "accountDisplayName": "alias"
     },
     {
-      "accountId": "3870383000000008002",
+      "accountId": "5550000000000001002",
       "isDefaultAccount": true,
       "mailboxAddress": "user@example.com",
       "accountDisplayName": "user",

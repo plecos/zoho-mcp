@@ -2,7 +2,7 @@ from zoho_mcp.server import create_server
 
 
 class FakeZohoClient:
-    async def search_emails(self, query, limit=20):
+    async def search_emails(self, query, limit=20, days_back=None):
         return []
 
     async def list_emails(self, status="all", folder_id=None, limit=20, start=1):

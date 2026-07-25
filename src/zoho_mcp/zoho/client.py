@@ -112,6 +112,18 @@ class ZohoAPIError(Exception):
     """Raised when a Zoho Mail/Calendar API call fails or is rejected."""
 
 
+# Everything a normalizer can hit when Zoho's payload isn't what it claims: a
+# missing key, a wrong type, an unparseable string, or -- for timestamps -- an
+# epoch so far out of range that datetime raises OSError/OverflowError rather
+# than ValueError.
+#
+# Defined once and shared (including with contacts_client) because these clauses
+# drifted: some listed ValueError and some didn't, so out-of-range dates leaked
+# a raw OSError and a non-numeric birthday leaked a raw ValueError straight to
+# the caller. A single tuple makes that impossible to get inconsistent again.
+MALFORMED_DATA_ERRORS = (KeyError, TypeError, ValueError, OSError, OverflowError)
+
+
 def _epoch_ms_to_iso8601(epoch_ms: str, tz_name: str) -> str:
     """Convert a Zoho epoch-millisecond timestamp string to ISO 8601 in ``tz_name``.
 
@@ -187,7 +199,7 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
             # value defaults to unread, the safer failure mode.
             "read": raw["status"] == "1",
         }
-    except (KeyError, TypeError, ValueError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed email summary from Zoho: {e}") from e
 
 
@@ -217,7 +229,7 @@ def normalize_email_content(raw: dict, *, strip_invisible_chars: bool = False) -
             "id": str(raw["messageId"]),
             "text": text,
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed email content from Zoho: {e}") from e
 
 
@@ -239,7 +251,7 @@ def normalize_signature(raw: dict) -> dict:
             "name": raw["name"],
             "content": text,
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed signature from Zoho: {e}") from e
 
 
@@ -264,7 +276,7 @@ def normalize_folder(raw: dict) -> dict:
             "path": raw["path"],
             "type": raw["folderType"],
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed folder from Zoho: {e}") from e
 
 
@@ -280,7 +292,7 @@ def normalize_label(raw: dict) -> dict:
             "name": raw["displayName"],
             "color": raw.get("color", ""),
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed label from Zoho: {e}") from e
 
 
@@ -301,7 +313,7 @@ def normalize_attachment(raw: dict) -> dict:
             "name": raw["attachmentName"],
             "size_bytes": raw["attachmentSize"],
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed attachment from Zoho: {e}") from e
 
 
@@ -319,7 +331,7 @@ def normalize_calendar(raw: dict) -> dict:
             "timezone": raw.get("timezone", ""),
             "privilege": raw.get("privilege", ""),
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed calendar from Zoho: {e}") from e
 
 
@@ -339,7 +351,7 @@ def normalize_freebusy_slot(raw: dict, mailbox_timezone: str) -> dict:
             "end": _zoho_event_time_to_iso8601(raw["endTime"], mailbox_timezone),
             "status": raw["fbtype"],
         }
-    except (KeyError, TypeError, ValueError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed free/busy slot from Zoho: {e}") from e
 
 
@@ -367,7 +379,7 @@ def normalize_event(raw: dict, mailbox_timezone: str) -> dict:
                 for a in raw.get("attendees", [])
             ],
         }
-    except (KeyError, TypeError, ValueError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed event from Zoho: {e}") from e
 
 
@@ -402,7 +414,7 @@ def normalize_event_detail(raw: dict) -> dict:
                 for a in raw.get("attendees") or []
             ],
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed event detail from Zoho: {e}") from e
 
 
@@ -445,7 +457,7 @@ def normalize_task(raw: dict) -> dict:
             "created_at": raw.get("createdAt") or "",
             "modified_at": raw.get("modifiedTime") or "",
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed task from Zoho: {e}") from e
 
 
@@ -459,7 +471,8 @@ def normalize_note(raw: dict, mailbox_timezone: str) -> dict:
     not assumed from Tasks' behavior.
 
     Excludes ``summary`` (redundant with ``content``, just a preview of
-    it), the numeric ``color`` index (``colorHex`` is the actual usable
+    it), the raw ``color`` value (a string like ``"-1"``; ``colorHex`` is
+    the actual usable
     value), and ``namespaceId``/``ownerZuid`` (Zoho-internal, redundant
     with ``ownerDisplayName``).
 
@@ -479,7 +492,7 @@ def normalize_note(raw: dict, mailbox_timezone: str) -> dict:
             "created_at": _epoch_ms_to_iso8601(raw["createdTime"], mailbox_timezone),
             "modified_at": _epoch_ms_to_iso8601(raw["modifiedTime"], mailbox_timezone),
         }
-    except (KeyError, TypeError, ValueError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed note from Zoho: {e}") from e
 
 
@@ -515,7 +528,7 @@ def normalize_bookmark(raw: dict) -> dict:
             "is_favorite": str(raw.get("isFavorite", False)).lower() == "true",
             "tags": raw.get("tags") or [],
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed bookmark from Zoho: {e}") from e
 
 
@@ -546,7 +559,7 @@ def normalize_group(raw: dict) -> dict:
             "owner": raw.get("owner") or "",
             "member_count": raw.get("numberOfMembers"),
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed group from Zoho: {e}") from e
 
 
@@ -587,7 +600,7 @@ def normalize_floor(raw: dict) -> dict:
             "name": raw["floor_name"],
             "has_resource": raw.get("has_resource", False),
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed floor from Zoho: {e}") from e
 
 
@@ -604,7 +617,7 @@ def normalize_building(raw: dict) -> dict:
             "name": raw["building_name"],
             "floors": [normalize_floor(f) for f in raw.get("floors") or []],
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed building from Zoho: {e}") from e
 
 
@@ -622,7 +635,7 @@ def normalize_branch(raw: dict) -> dict:
             "timezone": raw.get("time_zone", ""),
             "buildings": [normalize_building(b) for b in raw.get("buildings") or []],
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed branch from Zoho: {e}") from e
 
 
@@ -648,7 +661,7 @@ def normalize_resource(raw: dict) -> dict:
             "building_id": raw.get("building_id") or "",
             "floor_id": raw.get("floor_id") or "",
         }
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed resource from Zoho: {e}") from e
 
 
@@ -771,7 +784,7 @@ async def _get_default_mail_account(
         for account in payload["data"]:
             if account.get("isDefaultAccount"):
                 return account
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
     raise ZohoAPIError("No default Zoho Mail account found in the accounts response")
 
@@ -788,7 +801,7 @@ async def get_primary_account_id(
     account = await _get_default_mail_account(token_manager, http_client)
     try:
         return account["accountId"]
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
 
 
@@ -810,7 +823,7 @@ async def get_mailbox_timezone(
     account = await _get_default_mail_account(token_manager, http_client)
     try:
         return account["timeZone"]
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
 
 
@@ -831,7 +844,7 @@ async def get_primary_email_address(
     account = await _get_default_mail_account(token_manager, http_client)
     try:
         return account["primaryEmailAddress"]
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
 
 
@@ -855,7 +868,7 @@ async def get_folder_types(
     )
     try:
         return {folder["folderId"]: folder["folderType"] for folder in payload["data"]}
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed folders response from Zoho: {e}") from e
 
 
@@ -876,7 +889,7 @@ async def get_default_calendar_uid(
         for calendar in payload["calendars"]:
             if calendar.get("isdefault"):
                 return calendar["uid"]
-    except (KeyError, TypeError) as e:
+    except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed calendars response from Zoho: {e}") from e
     raise ZohoAPIError("No default Zoho Calendar found in the calendars response")
 
@@ -1270,8 +1283,12 @@ class ZohoClient:
             f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}"
             f"/folders/{folder_id}/messages/{message_id}/content"
         )
+        try:
+            data = payload["data"]
+        except (KeyError, TypeError) as e:
+            raise ZohoAPIError(f"Malformed email response from Zoho: {e}") from e
         return normalize_email_content(
-            payload["data"], strip_invisible_chars=self._strip_invisible_chars
+            data, strip_invisible_chars=self._strip_invisible_chars
         )
 
     async def list_attachments(self, message_id: str, folder_id: str) -> list[dict]:
@@ -1600,7 +1617,17 @@ class ZohoClient:
         events = payload.get("events", [])
         if not events:
             raise ZohoAPIError(f"No event found for uid={uid!r}")
-        return events[0]
+        event = events[0]
+        # Both callers (update_event, delete_event) require the etag: Zoho
+        # rejects either write without it. Checked here so a response that
+        # omits it fails with a clear message instead of a bare KeyError at
+        # the point of use.
+        if not event.get("etag"):
+            raise ZohoAPIError(
+                f"Zoho returned no etag for uid={uid!r}, so this event cannot "
+                "be updated or deleted"
+            )
+        return event
 
     async def update_event(
         self,
@@ -2075,7 +2102,7 @@ class ZohoClient:
         payload = await self._get(f"{ZOHO_NOTES_BASE_URL}/{note_id}")
         try:
             note = payload["data"]
-        except (KeyError, TypeError) as e:
+        except MALFORMED_DATA_ERRORS as e:
             raise ZohoAPIError(f"Malformed note response from Zoho: {e}") from e
         return normalize_note(note, mailbox_timezone)
 
@@ -2138,6 +2165,6 @@ class ZohoClient:
         payload = await self._get(f"{ZOHO_BOOKMARKS_BASE_URL}/{bookmark_id}")
         try:
             bookmark = payload["data"]
-        except (KeyError, TypeError) as e:
+        except MALFORMED_DATA_ERRORS as e:
             raise ZohoAPIError(f"Malformed bookmark response from Zoho: {e}") from e
         return normalize_bookmark(bookmark)

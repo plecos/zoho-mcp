@@ -1,8 +1,8 @@
 name: Build Validation
 
-# Release-readiness gate, not a deployment -- there's no hosting target
-# yet (planned for a later phase). Confirms the package builds cleanly
-# and its entry-point modules import without error.
+# Release-readiness gate, not a deployment -- there is no hosting target yet.
+# Confirms the package builds cleanly and its entry-point modules import
+# without error.
 
 on:
   push:

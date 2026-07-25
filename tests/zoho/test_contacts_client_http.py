@@ -378,3 +378,14 @@ async def test_count_contacts_wraps_http_errors_as_zoho_api_error(
 
     with pytest.raises(ZohoAPIError):
         await contacts_client.count_contacts()
+
+
+async def test_get_contact_raises_clear_error_when_contacts_key_absent(
+    respx_mock, contacts_client
+):
+    respx_mock.get("https://contacts.zoho.com/api/v1/accounts/self/contacts/c-1").mock(
+        return_value=httpx.Response(200, json={"status": "success"})
+    )
+
+    with pytest.raises(ZohoAPIError):
+        await contacts_client.get_contact("c-1", scope="personal")

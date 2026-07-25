@@ -1,6 +1,6 @@
 # zoho-mcp
 
-An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contacts, Tasks, Notes, and Bookmarks as tools to any MCP-compatible LLM client — Claude, ChatGPT, Gemini, or anything else that speaks MCP.
+An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contacts, Tasks, Notes, Bookmarks, Groups, and Resource Booking as tools to any MCP-compatible LLM client — Claude, ChatGPT, Gemini, or anything else that speaks MCP.
 
 37 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
 
@@ -35,7 +35,7 @@ Single-user, local stdio transport, personal-scale. It works and is in daily use
    zohocontacts.contactapi.READ
    ```
 
-   A few are needed at runtime rather than just at setup: `accounts.READ` for the live timezone and outgoing-address lookups, `folders.READ` for filtering Sent/Drafts/Templates out of search results. `calendar.READ` is used once, to find your calendar's UID.
+   Several are needed at runtime, not just during setup: `accounts.READ` for the live timezone and outgoing-address lookups, `folders.READ` for filtering Sent/Drafts/Templates out of search results, and `calendar.READ` for `list_calendars` (it's also what finds your calendar's UID during setup).
 
    If you only want read-only access, omit the `.ALL` and `.CREATE` scopes — the read tools work fine without them, and the write tools will fail with a clear scope error.
 
@@ -106,7 +106,7 @@ The write tools take lists, and one call handles the whole batch.
 | `list_bookmarks` / `get_bookmark` / `create_bookmark` | Zoho Mail's Bookmarks feature |
 | `list_groups` | Shared groups you belong to |
 
-All three list tools take an optional `group_id` to read a shared group's items instead of your own, and an `oldest_first` flag. `list_tasks` also takes `view="assigned_to_me"` or `"created_by_me"` for Zoho's cross-group views.
+All three list tools take an optional `group_id` to read a shared group's items instead of your own. `list_notes` and `list_bookmarks` additionally take `oldest_first` (and paginate with `after`); `list_tasks` does not, and paginates with `offset`. `list_tasks` takes `view="assigned_to_me"` or `"created_by_me"` for Zoho's cross-group views.
 
 A Zoho group is one entity shared across all three features, so the same `group_id` works everywhere — a group can hold notes but no tasks. An empty `list_groups` is normal; most personal accounts have none.
 

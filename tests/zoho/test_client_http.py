@@ -1346,20 +1346,20 @@ async def test_list_groups_deduplicates_one_group_reported_by_every_service(
         respx_mock,
         tasks=[
             {
-                "id": 932723008,
+                "id": 555000123,
                 "name": "test",
-                "owner": "Ken Salter",
+                "owner": "Sam Rivera",
                 "numberOfMembers": 1,
             }
         ],
-        notes=[{"groupId": "932723008", "name": "test"}],
-        bookmarks=[{"groupId": "932723008", "name": "test"}],
+        notes=[{"groupId": "555000123", "name": "test"}],
+        bookmarks=[{"groupId": "555000123", "name": "test"}],
     )
 
     results = await zoho_client.list_groups()
 
     assert results == [
-        {"id": "932723008", "name": "test", "owner": "Ken Salter", "member_count": 1}
+        {"id": "555000123", "name": "test", "owner": "Sam Rivera", "member_count": 1}
     ]
 
 

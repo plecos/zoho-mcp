@@ -1,51 +1,178 @@
 # zoho-mcp
 
-A vendor-agnostic MCP (Model Context Protocol) server that exposes Zoho Mail, Zoho Calendar, and Zoho Contacts as tools to any MCP-compatible LLM client (Claude, ChatGPT, Gemini, etc.).
+An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contacts, Tasks, Notes, and Bookmarks as tools to any MCP-compatible LLM client — Claude, ChatGPT, Gemini, or anything else that speaks MCP.
+
+37 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
+
+**Sending email is disabled by default.** The server saves drafts instead, and only sends if you explicitly opt in. See [Composing email](#composing-email).
 
 ## Status
 
-Phase 1: personal prototype (local stdio transport, single-user Zoho OAuth). Mostly read-only; write operations are being added incrementally on `phase2-write-ops`, each one clearly marked as such (`readOnlyHint: false` in its tool annotation).
+Single-user, local stdio transport, personal-scale. It works and is in daily use, but there's no hosting, no multi-tenancy, and no auth beyond one account's OAuth token.
 
-Tools implemented:
-- `search_emails` (optionally filtered by `days_back`, resolved via a live, per-process-cached lookup of the mailbox's own timezone -- never assumed or stored statically, since that setting can change; each result includes a `read` bool, confirmed against Zoho's `status` field empirically rather than from docs; excludes Sent/Drafts/Templates by default, matched by `folderType` so rule-filed custom folders are never accidentally caught -- pass an explicit `in:Sent` etc. qualifier to search one of those specifically; `subject`/`snippet` are HTML-entity-decoded, since Zoho's search API frequently returns literal undecoded entities like `&#39;` -- confirmed live in ~10%/~36% of a real sample respectively; Zoho Mail auto-files certain emails into a real "Notification" folder and also tags them with a matching label -- both `in:Notification` and `label:Notification` work). Zoho's Search API has no read/unread filter and no pagination past the first `limit` results by recency -- a real usability gap found live (a "mark all unread as read" request repeatedly missed older stragglers pushed out of the top-N window). **`list_emails`** fixes this: it uses Zoho's separate List Emails endpoint (`GET .../messages/view`), which has a documented `status` (read/unread/all) filter and real `start`/`limit` pagination -- confirmed live it returns the same fields as Search, so no separate normalization was needed. Use `list_emails` for anything that needs to reliably enumerate *every* matching email; use `search_emails` for keyword/sender/label queries.
-- `get_email`
-- `list_attachments` -- metadata only (id, name, size_bytes) for one email's attachments; reading actual attachment content is out of scope (no document-parsing infrastructure to make binary content usefully consumable)
-- `list_folders` -- id, name, path (e.g. "/Inbox/Work" -- the real hierarchy signal), type. `previousFolderId` in Zoho's raw response is NOT a parent reference despite the name -- it's a display-order "previous sibling" pointer (a linked list), so it's excluded from the normalized shape
-- `list_labels` -- id, name, color for every label/tag configured in the mailbox
-- `list_signatures` -- id, name, content for every configured email signature; `content` is HTML-stripped to plain text like `get_email`
-- **`mark_as_read`, `mark_as_unread`, `move_email`, `add_label`, `remove_label`** (write) -- all five share one Zoho endpoint (`PUT .../updatemessage`), differing only in a `mode` field and mode-specific extras (`destfolderId` for move, `labelId` for label ops). Unlike Calendar's write APIs (`eventdata` as a query param), Zoho Mail's write API takes a JSON request body -- confirmed live end-to-end (mark read → unread, move to a folder → back, add a label → remove it). Each takes a `message_ids` list and sends the whole batch in a single Zoho request -- an early per-message-id design was replaced after live use against ~35 unread emails showed the LLM client looping one call per email, which was slow; Zoho's API already accepts the full batch in one call, so the tool now does too.
-- **`create_draft`, `reply_draft`** (write), and **`send_email`** (write, disabled by default) -- mail composition, deliberately draft-first. Zoho sends and saves-a-draft through the *same* endpoint (`POST .../messages`), distinguished only by `"mode": "draft"` -- omit that one field and a real email goes out, which makes it the most safety-critical field in the client and the subject of explicit regression tests. `create_draft`/`reply_draft` always work and always set it. `send_email` is registered but refuses unless the operator sets `ZOHO_ALLOW_AUTO_SEND=true`; the check lives in the client, before any HTTP call, so nothing can leave the account when it's off. There is intentionally no send-a-reply tool at all: replies quote incoming mail, which is the content most likely to carry an injected instruction, so they always land in Drafts for a human. `fromAddress` is looked up live (`primaryEmailAddress`) rather than stored in config, since it's a mutable account setting. Note that drafts are **not** findable via `search_emails` -- confirmed live that `in:Drafts` returns nothing even for drafts that demonstrably exist, so use `list_emails(folder_id=...)` with the Drafts folder id instead.
-- `list_events`, `get_event` (organizer, full attendee list, location, description, recurrence rule -- `list_events` can report only your own attendee entry for a recurring occurrence, not every invitee, which is why `get_event` exists; deliberately excludes start/end since Zoho's single-event endpoint can return the wrong dates for a recurring event -- keep using `list_events`' own start/end for timing; both take an optional `calendar_id` to target a non-default calendar), `list_calendars` (id, name, is_default, timezone, privilege)
-- `get_freebusy` -- busy time slots for a given email's calendar. Only returns data for calendars with Zoho Calendar's per-calendar "include in my Free/Busy sharing" setting enabled (Settings → Calendar → My Calendars → a calendar's Details tab) -- raises a clear error rather than silently returning an empty (misreadable as "fully free") list when that isn't the case. Resource free/busy (`/resources/<id>/freebusy`) consistently 404s regardless of which resource identifier is tried and isn't exposed -- unclear whether it needs additional account-level setup.
-- `list_tasks`, `get_task` -- Zoho Mail's own Tasks feature (`mail.zoho.com/api/tasks`, same OAuth token family as Mail/Calendar, no separate scope family unlike Contacts). Returns id, title, description, status, priority, due_date, project, assignee, tags, subtask_count, recurring, created_at/modified_at. `created_at`/`modified_at` are already proper ISO 8601 with a real UTC offset straight from Zoho, unlike Mail/Calendar's other timestamp formats. `due_date`'s real format is unverified (never seen populated on this account) -- treated as an opaque string. Zoho offers **no** server-side filter for task status, priority, due date, or assignee (only `limit`/`from`), so filtering happens on the returned fields. Takes an optional `group_id` (see `list_groups`) and an optional `view` of `assigned_to_me`/`created_by_me` -- Zoho's two cross-group views, confirmed live to be the only valid ones (`assignedbyme` 400s) and to require an `action=view` param at a trailing-slash URL. On an account with no groups both views return exactly the same tasks as the personal list. **`create_task`** (write) takes title (required), description, priority, and an optional `group_id`; Zoho returns the whole created task, so it comes back in the same shape `list_tasks` uses. Confirmed live that Zoho normalizes `priority` casing on the way in (`"high"` is stored as `"High"`).
-- `list_notes`, `get_note` -- Zoho Mail's own Notes feature (`mail.zoho.com/api/notes`). Returns id, title, content, book, owner, is_favorite, color, created_at/modified_at. Unlike Tasks, Notes' timestamps are epoch-millisecond strings (converted like Mail's) rather than pre-formatted ISO 8601. No `has_more` -- Zoho's response includes no paging/total signal for this endpoint at all; fewer results than `limit` is the only sign you've reached the end. **`create_note`** (write) takes content (required), an optional title, and an optional `group_id`. Zoho's docs list only `content` as mandatory -- that is wrong: confirmed live that `{"content": ...}` alone returns `404 Invalid Input` and the note is only created once an integer `color` is included, so every create sends Zoho's own "no colour" value (`-1`). It's also another read/write type asymmetry -- the read side returns `color` as the string `"-1"` while create requires an int. The create response carries only the new `entityId` and a URI rather than the stored note, so the tool returns `{"id": ...}` instead of assembling a record Zoho never sent. Takes an optional `oldest_first` (Zoho's `isPrev`): the docs describe it only as "ascending or descending order based on created time" without saying which value means which, so it was left unimplemented until there were enough real notes to settle it -- confirmed live that `isPrev=true` is ascending (oldest first), that an absent `isPrev` is identical to `isPrev=false`, and that it's a sort-order flag rather than the paging-direction flag its name suggests (`after` offsets within whichever order is chosen).
-- `list_bookmarks`, `get_bookmark` -- Zoho Mail's own Bookmarks feature (`mail.zoho.com/api/links`). Returns id, title, url, summary, collection, owner, is_favorite, tags. No timestamps at all (bookmarks don't have created/modified fields), and no `has_more` (same as Notes). `is_favorite` is normalized from a string `"true"`/`"false"` on this endpoint -- confirmed live it's a real boolean on the otherwise-identical Notes endpoint, so don't assume type consistency across same-named fields on sibling endpoints. **`create_bookmark`** (write) takes url + title (both required by Zoho), an optional summary, and an optional `group_id`; it returns `{"id": ...}` for the same reason as `create_note`. Zoho's own docs list a mandatory field spelled **`tiltle`** while the sample body on the same page uses `title` -- confirmed live that `title` is correct and the documented spelling is simply a typo. Both Notes and Bookmarks cap `limit` at 399, enforced locally: confirmed live that Zoho *silently accepts* an over-max limit (HTTP 200 for `limit=10000`) rather than rejecting it, so without the check a caller couldn't tell "that's everything" from "you were quietly truncated". Both also take `oldest_first`, verified separately against real data on each endpoint rather than inferring one from the other -- given `isFavorite` already differs between them, matching docs aren't evidence of matching behavior. They did turn out to agree: absent is identical to `isPrev=false` (newest first), and `true` is the exact reverse. Since bookmarks carry no timestamps at all, ordering is the only way to reason about their age.
-- `list_groups` -- every shared group the user belongs to, as `{id, name, owner, member_count}`. A Zoho Mail group is **one entity shared by Tasks, Notes, and Bookmarks**, not a per-service thing: confirmed live that a single real group is returned by all three endpoints under the same id, *including* the services where it holds zero items -- so these list "groups you belong to", not "groups with items here". The same `group_id` therefore works for `list_tasks`/`list_notes`/`list_bookmarks`, and a group can legitimately have notes but no tasks. Zoho has no single "my groups" endpoint, so all three are queried and merged by id; Tasks is merged first because only its payload carries `owner`/`numberOfMembers` (these fall back to `""`/`null` for a group Tasks doesn't report). The services disagree on shape in a way worth knowing: Tasks nests under `data.groups` with an **int** `id`, while Notes/Bookmarks return `data` as the array with a **string** `groupId` -- same group, different key and different type, so ids are coerced to `str`. All three work under the scopes already requested for reading those services (no extra OAuth scope), and return a 200 with an empty collection, not an error, when there are no groups. Group items are properly isolated -- verified that a group's notes do not appear in the personal list.
-- `list_branches`, `list_resources` -- Zoho Calendar's Resource Booking feature (`calendar.zoho.com/api/v1/branches`+`/resources`, office meeting rooms/equipment organized under a Branch → Building → Floor hierarchy). An empty `list_branches` result is normal -- most personal/small accounts never set this up. Each resource has an `email` -- invite it to a calendar event (via `create_event`'s `attendees`) to book it.
-- **`create_event`** (write) -- the first write tool; annotated `readOnlyHint: false`. Zoho's create-event API takes its payload as a JSON-encoded `eventdata` query parameter, not a request body -- confirmed live end-to-end (create → shows correctly in `list_events`/`get_event`, including timezone conversion). `attendees` is a plain list of email addresses (normalized to Zoho's `{"email":..., "status": "NEEDS-ACTION"}` shape internally).
-- **`update_event`** (write) -- only the fields you pass are changed; everything else on the event is carried forward as-is. Internally this requires a read-modify-write: Zoho's update endpoint is a full replace (it needs the event's current `etag`, and any writable field not resent gets deleted), so `update_event` fetches the event's current state first and merges your changes into it, from a whitelist of Zoho's own documented writable fields -- not the full raw response, since some read-side fields (`notifyType`) aren't valid write input and get rejected with a 400 if resent verbatim.
-- **`delete_event`** (write) -- deletes an event permanently. Requires the event's current `etag` (fetched internally, same as `update_event`), included in the DELETE request's `eventdata`.
-- `search_contacts` (matches name, email, *and* phone number server-side; searches both the Personal and Organization contact pools and merges the results, returning `{"contacts": [...], "has_more": bool}` -- `has_more` is Zoho's own signal, not inferred from a suspiciously-round result count; excludes Archived/Inactive contacts by default -- pass `status="archived"` or `status="inactive"` to search those folders instead, via `filter_type`, an undocumented Zoho param found by inspecting the real Contacts web client's network requests and confirmed against a real archived contact), `get_contact` (requires both `contact_id` and `scope`, since the same id can mean an unrelated record in the other scope -- confirmed live: fetching an org contact's id through the personal endpoint returns a 200 with a different, partial record rather than a 404), `count_contacts` (returns `{"personal": {"contacts": int, "archived": int, "inactive": int}, "organization": {...same shape...}, "total": int}` -- archived/inactive are surfaced as their own properties rather than hidden, though `total` only sums the active `contacts` count from each scope; a dedicated count lookup, no pagination/summing needed) -- Zoho Contacts, a separate Zoho product (`contacts.zoho.com`) from Mail/Calendar, sharing the same OAuth token. Each contact includes a `scope` field plus phones, notes, nickname, and birthday when set.
+## Requirements
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/)
+- A Zoho account, plus a registered application in the [Zoho API Console](https://accounts.zoho.com/developerconsole)
 
 ## Setup
 
-1. Register a Server-based Application in the [Zoho API Console](https://accounts.zoho.com/developerconsole) with scopes `ZohoMail.messages.READ`, `ZohoMail.accounts.READ`, `ZohoMail.folders.READ`, `ZohoCalendar.event.READ`, `ZohoCalendar.calendar.READ`, `zohocontacts.contactapi.READ`, `ZohoMail.tasks.READ`, `ZohoMail.notes.READ`, `ZohoMail.links.READ`, `ZohoCalendar.resources.READ`, and `ZohoCalendar.branches.READ` (`.accounts.READ` and `.folders.READ` are also used at runtime, for `search_emails`'s timezone lookup and Sent/Drafts/Templates filtering respectively, not just at setup; `.calendar.READ` is only needed once, to look up the calendar UID in step 4), redirect URI `http://localhost:8765/callback` (change the port via `ZOHO_OAUTH_CALLBACK_PORT` if 8765 is taken).
-2. Copy `.env.example` to `.env` and fill in `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`.
-3. `uv run zoho-mcp-setup` -- opens your browser to approve access, stores a refresh token in the OS credential store (Windows Credential Manager via `keyring`), and prints your `ZOHO_ACCOUNT_ID`/`ZOHO_CALENDAR_UID` values (looked up automatically from your default mail account and calendar). Add both to `.env`.
-4. `uv run zoho-mcp` to start the server over stdio.
+1. **Register a Server-based Application** in the Zoho API Console with redirect URI `http://localhost:8765/callback` (change the port with `ZOHO_OAUTH_CALLBACK_PORT` if 8765 is taken).
 
-Optional: set `ZOHO_STRIP_INVISIBLE_CHARS=true` in `.env` to have `get_email` strip invisible Unicode padding characters some marketing emails use to pad preview text. Off by default; never strips zero-width joiner/non-joiner, which carry real meaning in emoji sequences and some scripts.
+   Request these scopes:
+
+   ```
+   ZohoMail.messages.READ      ZohoMail.messages.ALL
+   ZohoMail.accounts.READ      ZohoMail.folders.READ
+   ZohoMail.tags.READ
+   ZohoMail.tasks.READ         ZohoMail.tasks.CREATE
+   ZohoMail.notes.READ         ZohoMail.notes.CREATE
+   ZohoMail.links.READ         ZohoMail.links.CREATE
+   ZohoCalendar.event.READ     ZohoCalendar.event.ALL
+   ZohoCalendar.calendar.READ  ZohoCalendar.freebusy.READ
+   ZohoCalendar.branches.READ  ZohoCalendar.resources.READ
+   zohocontacts.contactapi.READ
+   ```
+
+   A few are needed at runtime rather than just at setup: `accounts.READ` for the live timezone and outgoing-address lookups, `folders.READ` for filtering Sent/Drafts/Templates out of search results. `calendar.READ` is used once, to find your calendar's UID.
+
+   If you only want read-only access, omit the `.ALL` and `.CREATE` scopes — the read tools work fine without them, and the write tools will fail with a clear scope error.
+
+2. **Copy `.env.example` to `.env`** and fill in `ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET`.
+
+3. **Run the one-time auth flow:**
+
+   ```bash
+   uv run zoho-mcp-setup
+   ```
+
+   This opens your browser to approve access, stores the refresh token in your OS credential store (via `keyring`), and prints your `ZOHO_ACCOUNT_ID` and `ZOHO_CALENDAR_UID`. Add both to `.env`.
+
+4. **Start the server:**
+
+   ```bash
+   uv run zoho-mcp
+   ```
+
+   It speaks MCP over stdio. Point your client at the `zoho-mcp` executable in `.venv/Scripts/` (Windows) or `.venv/bin/` (macOS/Linux).
+
+If you later add scopes, re-run `zoho-mcp-setup` — the stored token carries whatever scopes it was granted, so new ones need fresh consent.
+
+## Tools
+
+### Mail
+
+| Tool | |
+| --- | --- |
+| `search_emails` | Keyword/sender/label search using Zoho's search syntax, optionally limited to the last N days |
+| `list_emails` | Enumerate mail by read/unread status, with real pagination |
+| `get_email` | Full plain-text body of one message |
+| `list_attachments` | Attachment metadata (name, size) for one message |
+| `list_folders` | All folders, with paths |
+| `list_labels` | All labels/tags |
+| `list_signatures` | Configured signatures, as plain text |
+| `create_draft` | Save a new email as a draft *(write)* |
+| `reply_draft` | Save a reply to an existing email as a draft *(write)* |
+| `send_email` | Send immediately — **disabled unless opted in** *(write)* |
+| `mark_as_read` / `mark_as_unread` | Flip read status on one or many messages *(write)* |
+| `move_email` | Move one or many messages to a folder *(write)* |
+| `add_label` / `remove_label` | Apply or remove a label on one or many messages *(write)* |
+
+`search_emails` and `list_emails` do different jobs and aren't interchangeable. Zoho's search API has no read/unread filter and can't page past its first batch of results by recency, so it will miss older mail. Use `list_emails` whenever you need to reliably act on *every* matching message ("mark all my unread email as read"); use `search_emails` for actual searching.
+
+The write tools take lists, and one call handles the whole batch.
+
+### Calendar
+
+| Tool | |
+| --- | --- |
+| `list_events` | Events in a time range (Zoho caps the range at 31 days) |
+| `get_event` | Organizer, full attendee list, location, description, recurrence rule |
+| `list_calendars` | All accessible calendars |
+| `get_freebusy` | Busy slots for a given address |
+| `create_event` | *(write)* |
+| `update_event` | Change only the fields you pass *(write)* |
+| `delete_event` | Permanent *(write)* |
+
+`get_event` deliberately doesn't return start/end times — Zoho's single-event endpoint returns wrong dates for some recurring occurrences, so timing comes from `list_events`. `get_freebusy` only works for calendars whose owner enabled Zoho's per-calendar "include in my Free/Busy sharing" setting; it raises a clear error otherwise rather than reporting a falsely empty schedule.
+
+### Tasks, Notes, Bookmarks
+
+| Tool | |
+| --- | --- |
+| `list_tasks` / `get_task` / `create_task` | Zoho Mail's Tasks feature |
+| `list_notes` / `get_note` / `create_note` | Zoho Mail's Notes feature |
+| `list_bookmarks` / `get_bookmark` / `create_bookmark` | Zoho Mail's Bookmarks feature |
+| `list_groups` | Shared groups you belong to |
+
+All three list tools take an optional `group_id` to read a shared group's items instead of your own, and an `oldest_first` flag. `list_tasks` also takes `view="assigned_to_me"` or `"created_by_me"` for Zoho's cross-group views.
+
+A Zoho group is one entity shared across all three features, so the same `group_id` works everywhere — a group can hold notes but no tasks. An empty `list_groups` is normal; most personal accounts have none.
+
+Zoho offers no server-side filtering for task status, priority, or due date, so filter on the returned fields.
+
+### Contacts
+
+| Tool | |
+| --- | --- |
+| `search_contacts` | Matches name, email, *and* phone number |
+| `get_contact` | Requires both `contact_id` and `scope` |
+| `count_contacts` | Counts per scope, including archived/inactive |
+
+An account has two separate contact pools, Personal and Organization, and a `contact_id` is **not** unique across them — the same id resolves to a different record in the other pool and returns a success, not a 404. Every contact carries the `scope` it came from, and `get_contact` requires it rather than guessing.
+
+`search_contacts` excludes archived and inactive contacts by default; pass `status="archived"` or `"inactive"` to search those instead.
+
+### Resource Booking
+
+| Tool | |
+| --- | --- |
+| `list_branches` | Branch → Building → Floor hierarchy |
+| `list_resources` | Bookable rooms/equipment |
+
+Each resource has an email address; invite it via `create_event`'s `attendees` to book it. An empty result is normal — most accounts never configure this.
+
+## Composing email
+
+Mail composition is draft-first by design, because sending is the one operation here that's irreversible and reaches another person.
+
+`create_draft` and `reply_draft` always work and always save to Drafts. `send_email` exists but refuses unless the operator sets:
+
+```
+ZOHO_ALLOW_AUTO_SEND=true
+```
+
+When that's unset, `send_email` fails before making any network call, so nothing can leave the account.
+
+There is intentionally **no send-a-reply tool at all**, in any configuration. A reply quotes an incoming email, and email bodies are untrusted input — a message in your mailbox can contain text trying to talk an assistant into sending something on your behalf. Replies always stop at Drafts for a human to read.
+
+Leave `ZOHO_ALLOW_AUTO_SEND` off unless you specifically want an assistant able to email people without review.
+
+One practical note: drafts don't show up in `search_emails` at all (a Zoho quirk, not a bug here). Find them with `list_emails(folder_id=...)` using the Drafts folder id from `list_folders`.
+
+## Configuration
+
+All optional, in `.env`:
+
+| Variable | Default | |
+| --- | --- | --- |
+| `ZOHO_ALLOW_AUTO_SEND` | `false` | Allow `send_email` to actually send. See above. |
+| `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Have `get_email` strip invisible Unicode padding some marketing mail uses to inflate preview text. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
+| `ZOHO_OAUTH_CALLBACK_PORT` | `8765` | Local port for the one-time OAuth redirect. |
+
+Both booleans require the exact string `true`; anything else is off.
 
 ## Development
 
-```
+```bash
 uv sync
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy
+uv run mypy src
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above on every push/PR. A separate `build-validation.yml` workflow runs on `main`/tags to confirm the package builds and its entry-point modules import cleanly -- it's a release-readiness gate only, not a real deployment; there's no hosting target yet.
+CI runs all of the above on every push and PR. A separate `build-validation.yml` workflow runs on `main` and tags to confirm the package builds and its entry points import cleanly — a release-readiness gate, not a deployment; there's no hosting target.
 
-See [CLAUDE.md](CLAUDE.md) for the project's development rules (TDD, layered architecture, error handling, documentation).
+Conventions, architecture, and the reasoning behind the design are in [CLAUDE.md](CLAUDE.md). Zoho's API quirks — the ones that make otherwise-odd-looking code necessary — are in [docs/zoho-api-notes.md](docs/zoho-api-notes.md). Read the latter before touching anything that talks to Zoho.

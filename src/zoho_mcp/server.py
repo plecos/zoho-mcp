@@ -132,10 +132,43 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """List attachment metadata for one email found via search_emails.
 
         Returns [{"id", "name", "size_bytes"}, ...] -- metadata only.
-        Reading the actual file content of an attachment isn't supported.
+        Pass an id to get_attachment to read one's content.
         """
         return await mail_tools.list_attachments(
             client, message_id=message_id, folder_id=folder_id
+        )
+
+    @mcp.tool(title="Read an attachment", annotations=_READ_ONLY)
+    async def get_attachment(
+        message_id: str, folder_id: str, attachment_id: str
+    ) -> dict:
+        """Read the content of one attachment, given an id from
+        list_attachments.
+
+        Returns {"id", "name", "size_bytes", "media_type", "is_text",
+        "text", "truncated", "note"}.
+
+        text holds the attachment's content and is only present when
+        is_text is true -- meaning the bytes decoded cleanly as UTF-8.
+        Binary attachments (PDFs, images, archives, Office documents)
+        return is_text false and text null; note says why. This server
+        does not decode, convert, or extract text from binary formats, so
+        don't retry or tell the user it failed -- report what the
+        attachment is and let them open it themselves.
+
+        media_type is inferred from the filename and is a hint only;
+        is_text is the fact. A .csv that isn't UTF-8 is still binary here,
+        and a .gz that happens to be plain text is still readable.
+
+        Long text is cut off at 100,000 characters with truncated true.
+        Attachments over 5 MB are not downloaded at all -- size_bytes is
+        still reported so you can tell the user how big it is.
+        """
+        return await mail_tools.get_attachment(
+            client,
+            message_id=message_id,
+            folder_id=folder_id,
+            attachment_id=attachment_id,
         )
 
     @mcp.tool(title="List mail folders", annotations=_READ_ONLY)

@@ -2,7 +2,7 @@
 
 An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contacts, Tasks, Notes, Bookmarks, Groups, and Resource Booking as tools to any MCP-compatible LLM client — Claude, ChatGPT, Gemini, or anything else that speaks MCP.
 
-37 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
+38 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
 
 **Sending email is disabled by default.** The server saves drafts instead, and only sends if you explicitly opt in. See [Composing email](#composing-email).
 
@@ -77,6 +77,7 @@ If you later add scopes, re-run `zoho-mcp-setup` — the stored token carries wh
 | `list_emails` | Enumerate mail by read/unread status, with real pagination |
 | `get_email` | Full plain-text body of one message |
 | `list_attachments` | Attachment metadata (name, size) for one message |
+| `get_attachment` | One attachment's content, as text when it is text |
 | `list_folders` | All folders, with paths |
 | `list_labels` | All labels/tags |
 | `list_signatures` | Configured signatures, as plain text |
@@ -90,6 +91,8 @@ If you later add scopes, re-run `zoho-mcp-setup` — the stored token carries wh
 `search_emails` and `list_emails` do different jobs and aren't interchangeable. Zoho's search API has no read/unread filter and can't page past its first batch of results by recency, so it will miss older mail. Use `list_emails` whenever you need to reliably act on *every* matching message ("mark all my unread email as read"); use `search_emails` for actual searching.
 
 The write tools take lists, and one call handles the whole batch.
+
+`get_attachment` returns a JSON record, never a file or a blob — a tool result goes into a context window, so the bytes stop at the server. Content comes back as `text` only when it actually decodes as UTF-8; for a PDF, image, or archive you get `is_text: false` and a `note` saying what it is. Nothing here decodes or extracts text from binary formats. Zoho gives no media type on either attachment endpoint (see [the notes](docs/zoho-api-notes.md#nothing-in-the-attachment-apis-tells-you-an-attachments-type)), so `media_type` is inferred from the filename and is a hint; the decode is the fact. Text over 100,000 characters is truncated with `truncated: true`, and anything over 5 MB isn't downloaded at all.
 
 ### Calendar
 

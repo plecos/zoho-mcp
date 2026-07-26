@@ -7,6 +7,7 @@ MCP tools happens here and only here.
 
 import html
 import json
+import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -85,6 +86,46 @@ MIN_NOTES_LIMIT = 1
 MAX_NOTES_LIMIT = 399
 MIN_BOOKMARKS_LIMIT = 1
 MAX_BOOKMARKS_LIMIT = 399
+
+# Attachment content is bounded twice, for two different reasons. The fetch
+# cap keeps a large file from being pulled into the process at all; the text
+# cap keeps a merely-long text file from swallowing a context window. Both
+# are this project's own limits -- Zoho imposes neither.
+MAX_ATTACHMENT_FETCH_BYTES = 5_000_000
+MAX_ATTACHMENT_TEXT_CHARS = 100_000
+
+# Zoho gives us nothing to type an attachment with: `attachmentinfo` returns
+# only id/name/size, and the download response is always
+# `application/octet-stream` even for a gzip (both confirmed live -- see
+# docs/zoho-api-notes.md). So the extension is the only hint available.
+# Hand-maintained rather than `mimetypes.guess_type`, whose answers vary by
+# platform because it reads the Windows registry.
+_MEDIA_TYPES_BY_EXTENSION = {
+    "txt": "text/plain",
+    "log": "text/plain",
+    "csv": "text/csv",
+    "md": "text/markdown",
+    "json": "application/json",
+    "xml": "application/xml",
+    "html": "text/html",
+    "htm": "text/html",
+    "ics": "text/calendar",
+    "vcf": "text/vcard",
+    "eml": "message/rfc822",
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "gif": "image/gif",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "svg": "image/svg+xml",
+    "gz": "application/gzip",
+    "zip": "application/zip",
+    "doc": "application/msword",
+    "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
 
 # Zoho's own view names for the two cross-group task queries, mapped from
 # readable argument values. Confirmed live that only these two exist --
@@ -318,6 +359,87 @@ def normalize_attachment(raw: dict) -> dict:
         }
     except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed attachment from Zoho: {e}") from e
+
+
+def _media_type_for(name: str) -> str:
+    """Best-effort media type from a filename, or ``application/octet-stream``.
+
+    A *hint* only -- see ``normalize_attachment_content``, which decides
+    text-vs-binary from the bytes rather than from this.
+    """
+    _, _, extension = name.rpartition(".")
+    return _MEDIA_TYPES_BY_EXTENSION.get(extension.lower(), "application/octet-stream")
+
+
+def normalize_attachment_content(
+    attachment_id: str, name: str, size_bytes: int, data: bytes | None
+) -> dict:
+    """Turn raw attachment bytes into a JSON record an LLM can act on.
+
+    The bytes themselves are never returned. Content reaches the caller only
+    as ``text``, and only when it actually decodes as UTF-8 -- otherwise the
+    record says what the attachment is and why there's no text, which is
+    something a model can reason about, unlike a blob or a bare failure.
+
+    ``is_text`` is decided by decoding, not by the extension: a ``.csv``
+    that isn't UTF-8 would otherwise hand the model mojibake, and a ``.gz``
+    that happens to be plain text would be hidden for no reason.
+
+    Args:
+        attachment_id: the attachment's Zoho id, echoed back.
+        name: the filename, used for ``media_type`` only.
+        size_bytes: the attachment's size on Zoho's side.
+        data: the fetched bytes, or ``None`` if it was too large to fetch.
+
+    Returns:
+        ``{"id", "name", "size_bytes", "media_type", "is_text", "text",
+        "truncated", "note"}``. ``text`` is ``None`` unless ``is_text``;
+        ``note`` explains why whenever ``text`` is absent or truncated, and
+        is ``""`` when the full content is present.
+    """
+    record = {
+        "id": attachment_id,
+        "name": name,
+        "size_bytes": size_bytes,
+        "media_type": _media_type_for(name),
+        "is_text": False,
+        "text": None,
+        "truncated": False,
+        "note": "",
+    }
+
+    if data is None:
+        record["note"] = (
+            f"Not fetched: {size_bytes} bytes exceeds the "
+            f"{MAX_ATTACHMENT_FETCH_BYTES}-byte limit for reading attachment "
+            f"content. Its metadata is above."
+        )
+        return record
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    # A NUL decodes cleanly but means the payload isn't text; passing it
+    # through would put control characters into the context window.
+    if text is None or "\x00" in text:
+        record["note"] = (
+            f"Content is not text ({record['media_type']}), so it isn't "
+            f"included. Only UTF-8 decodable attachments are returned as text."
+        )
+        return record
+
+    record["is_text"] = True
+    if len(text) > MAX_ATTACHMENT_TEXT_CHARS:
+        record["text"] = text[:MAX_ATTACHMENT_TEXT_CHARS]
+        record["truncated"] = True
+        record["note"] = (
+            f"Content was truncated to the first {MAX_ATTACHMENT_TEXT_CHARS} "
+            f"characters of {len(text)}."
+        )
+    else:
+        record["text"] = text
+    return record
 
 
 def normalize_calendar(raw: dict) -> dict:
@@ -721,6 +843,71 @@ async def zoho_authenticated_get(
     return await _zoho_authenticated_request(
         "GET", http_client, url, access_token, params
     )
+
+
+async def zoho_authenticated_get_bytes(
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    max_bytes: int,
+) -> tuple[bytes | None, int, str]:
+    """GET a Zoho endpoint that answers with a byte stream rather than JSON.
+
+    Only attachment content works this way; every other Zoho call goes
+    through ``zoho_authenticated_get``. Streamed rather than buffered so an
+    oversized attachment is refused on its ``Content-Length`` without ever
+    being read into memory -- the caller gets ``None`` for the body and the
+    declared size, and decides what to tell the model.
+
+    Returns:
+        ``(data, size_bytes, filename)``. ``data`` is ``None`` when the
+        response declares more than ``max_bytes``. ``filename`` comes from
+        ``Content-Disposition`` and is ``""`` when absent.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    headers = {
+        "Authorization": f"Zoho-oauthtoken {access_token}",
+        "Accept": "application/octet-stream",
+    }
+    try:
+        async with http_client.stream("GET", url, headers=headers) as response:
+            if response.status_code >= 400:
+                await response.aread()
+                response.raise_for_status()
+            filename = _filename_from_content_disposition(
+                response.headers.get("content-disposition", "")
+            )
+            declared = response.headers.get("content-length")
+            if declared is not None and int(declared) > max_bytes:
+                return None, int(declared), filename
+            data = await response.aread()
+    except httpx.HTTPStatusError as e:
+        raise ZohoAPIError(
+            f"Zoho API request to {url} failed with "
+            f"{e.response.status_code}: {e.response.text}"
+        ) from e
+    except httpx.HTTPError as e:
+        raise ZohoAPIError(f"Zoho API request to {url} failed: {e}") from e
+    except MALFORMED_DATA_ERRORS as e:
+        raise ZohoAPIError(f"Malformed attachment response from Zoho: {e}") from e
+    return data, len(data), filename
+
+
+def _filename_from_content_disposition(header: str) -> str:
+    """Pull the filename out of a ``Content-Disposition`` header.
+
+    Zoho writes it as ``attachment; filename = <name>`` -- note the spaces
+    around the ``=``, which the usual ``filename=`` split misses -- and
+    percent-encodes the name, so ``report!.csv`` arrives as
+    ``report%21.csv``.
+    """
+    for part in header.split(";"):
+        key, sep, value = part.partition("=")
+        if sep and key.strip().lower() == "filename":
+            return urllib.parse.unquote(value.strip().strip('"'))
+    return ""
 
 
 async def zoho_authenticated_post(
@@ -1362,8 +1549,7 @@ class ZohoClient:
     async def list_attachments(self, message_id: str, folder_id: str) -> list[dict]:
         """List attachment metadata (name, size) for one email.
 
-        Metadata only -- fetching/parsing actual attachment content is
-        out of scope, see ``normalize_attachment``.
+        Metadata only -- ``get_attachment`` reads one attachment's content.
 
         Raises:
             ZohoAPIError: if the Zoho Mail API rejects or fails the request.
@@ -1375,6 +1561,45 @@ class ZohoClient:
         )
         attachments = payload.get("data", {}).get("attachments", [])
         return [normalize_attachment(a) for a in attachments]
+
+    async def get_attachment(
+        self, message_id: str, folder_id: str, attachment_id: str
+    ) -> dict:
+        """Read one attachment's content, as a JSON record rather than a file.
+
+        Zoho answers this endpoint with a raw byte stream, but a tool result
+        goes into a context window, not onto a disk -- so the bytes stop
+        here and the caller gets a description plus, when the content is
+        UTF-8 text, the text. See ``normalize_attachment_content`` for how
+        text-vs-binary is decided and why the extension doesn't decide it.
+
+        Args:
+            message_id: an email's ``id`` from ``search_emails``/``list_emails``.
+            folder_id: that same email's ``folder_id``.
+            attachment_id: an ``id`` from ``list_attachments``.
+
+        Returns:
+            The record described by ``normalize_attachment_content``.
+
+        Raises:
+            ZohoAPIError: if ``attachment_id`` is blank, or the Zoho Mail
+                API rejects or fails the request.
+        """
+        if not attachment_id.strip():
+            raise ZohoAPIError("attachment_id must not be blank")
+        account_id = await self._get_account_id()
+        token = await self._token_manager.get_access_token()
+        data, size_bytes, filename = await zoho_authenticated_get_bytes(
+            self._http_client,
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}"
+            f"/folders/{folder_id}/messages/{message_id}"
+            f"/attachments/{attachment_id}",
+            token,
+            MAX_ATTACHMENT_FETCH_BYTES,
+        )
+        return normalize_attachment_content(
+            attachment_id, filename or attachment_id, size_bytes, data
+        )
 
     async def _update_message(
         self, mode: str, message_ids: list[str], **extra: object

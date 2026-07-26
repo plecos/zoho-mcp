@@ -117,6 +117,35 @@ Zoho files certain mail into a genuine `/Notification` folder (`folderType:
 "Inbox"`, like any custom folder) and *also* tags it with a matching label.
 Both `in:Notification` and `label:Notification` work.
 
+### Nothing in the attachment APIs tells you an attachment's type
+
+Two endpoints are involved and neither carries a media type.
+
+`.../messages/{id}/attachmentinfo` returns exactly three fields per
+attachment — `attachmentId`, `attachmentName`, `attachmentSize`. Verified
+across 180 real messages: no fourth key ever appeared.
+
+`.../messages/{id}/attachments/{attachmentId}` returns the content as a raw
+byte stream, and its `Content-Type` is **always**
+`application/octet-stream;charset=UTF-8`. Verified against a gzip, a PNG, a
+GIF, a PDF, and an `.ics` — all five reported the same header, and the
+`charset=UTF-8` on a PNG is meaningless. The header is not a type signal.
+
+So the filename extension is the only *hint* available. `get_attachment`
+uses it for a best-effort `media_type` but decides text-vs-binary by
+actually decoding the bytes, since the extension can lie in both directions.
+
+### The attachment filename lives in `Content-Disposition`, oddly formatted
+
+Two things about it. The header is written `attachment; filename = <name>`
+— with spaces around the `=`, which a plain `filename=` split misses. And
+the name is percent-encoded, so `report!.csv` arrives as `report%21.csv`.
+
+Unrelated to the Resource Booking percent-encoding [noted
+below](#percent-encoded-names-were-a-data-entry-artifact-not-an-api-quirk),
+which was bad data rather than transport encoding. This one is real
+encoding and does need decoding.
+
 ---
 
 ## Mail — writing

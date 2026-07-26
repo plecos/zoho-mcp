@@ -108,13 +108,36 @@ async def list_attachments(
 
     Returns:
         ``[{"id": ..., "name": ..., "size_bytes": ...}, ...]``. Metadata
-        only -- reading the actual file content of an attachment isn't
-        supported.
+        only -- pass an ``id`` to ``get_attachment`` to read the content.
 
     Raises:
         ZohoAPIError: if the Zoho Mail API rejects or fails the request.
     """
     return await client.list_attachments(message_id=message_id, folder_id=folder_id)
+
+
+async def get_attachment(
+    client: ZohoClient, message_id: str, folder_id: str, attachment_id: str
+) -> dict:
+    """Read one attachment's content.
+
+    Args:
+        client: injected Zoho client.
+        message_id: an email's ``id`` from a prior ``search_emails`` result.
+        folder_id: that same email's ``folder_id`` from ``search_emails``.
+        attachment_id: an ``id`` from a prior ``list_attachments`` result.
+
+    Returns:
+        ``{"id", "name", "size_bytes", "media_type", "is_text", "text",
+        "truncated", "note"}``.
+
+    Raises:
+        ZohoAPIError: if ``attachment_id`` is blank, or the Zoho Mail API
+            rejects or fails the request.
+    """
+    return await client.get_attachment(
+        message_id=message_id, folder_id=folder_id, attachment_id=attachment_id
+    )
 
 
 async def list_folders(client: ZohoClient) -> list[dict]:

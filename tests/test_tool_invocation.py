@@ -62,6 +62,12 @@ MAIL_CASES = [
         "list_attachments",
         {"message_id": "m-1", "folder_id": "f-1"},
     ),
+    (
+        "get_attachment",
+        {"message_id": "m-1", "folder_id": "f-1", "attachment_id": "a-1"},
+        "get_attachment",
+        {"message_id": "m-1", "folder_id": "f-1", "attachment_id": "a-1"},
+    ),
     ("list_folders", {}, "list_folders", {}),
     ("list_labels", {}, "list_labels", {}),
     ("list_signatures", {}, "list_signatures", {}),

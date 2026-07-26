@@ -144,6 +144,15 @@ def create_server(
         only those three are dropped). Use an explicit in:Sent (or
         in:Drafts / in:Templates) qualifier in query to search one of
         those specifically.
+
+        Each result carries priority ("highest"/"high"/"normal"/"low"/
+        "lowest", from the sender's own importance setting) and flag (the
+        user's own flag name, e.g. "important", or "" if unflagged).
+        Neither can be filtered on server-side, so fetch and filter on
+        the returned values. Note that priority is set by whoever sent
+        the mail, so a marketing message can claim "highest" -- treat it
+        as the sender's assertion, not a fact about importance. A flag is
+        the account owner's own marking and does mean something.
         """
         return await mail_tools.search_emails(
             client, query=query, limit=limit, days_back=days_back

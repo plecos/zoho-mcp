@@ -146,14 +146,40 @@ other 35 it simply repeated `fromAddress` verbatim. It's the display name
 when there is one, and a copy of the address when there isn't — surfaced
 here as `from_name`, blank when it would only duplicate.
 
-### `flagid`, `priority`, and the thread fields could not be verified
+### `priority` is X-Priority, confirmed against the `Importance` header
 
-Recorded as *unknown*, not as absent. On a real mailbox: `flagid` was
-`flag_not_set` on all 120 messages, `priority` was `"3"` on all 120, and
-the two messages carrying `threadCount` reported `"0"` with
-`threadId == messageId`. None of those distinguishes anything, so none is
-surfaced. If a future account has flagged mail or real threads, this is the
-first thing to re-derive.
+Lower means more important. Established by sending a high-importance message
+and reading its own source back:
+
+| `priority` | `Importance` header on the same message |
+| --- | --- |
+| `"2"` | `High` |
+| `"3"` | `Medium` |
+
+So Zoho's numeric field follows the X-Priority convention, and `"3"` is the
+default — it was `"3"` on 99 of 100 real messages. `1`/`4`/`5` follow that
+same convention as highest/low/lowest but have **not** been observed on this
+account; Zoho's compose UI appears to offer only High/Normal/Low, which would
+produce 2/3/4.
+
+This was recorded as unverifiable for weeks, because a real mailbox with no
+prioritized mail in it gives you a column of `"3"` and no way to read it. The
+fix was to create the data, then check the answer against the message's own
+headers rather than against a guess.
+
+### `flagid` is a flag *type name*, not a boolean
+
+`flag_not_set` when unflagged; a name otherwise. Flagging a message in Zoho's
+UI produced `flagid: "important"`. Only that one value has been seen, so
+`normalize_email_summary` passes any other name through unchanged rather than
+matching against a list that would silently drop the ones nobody has hit yet.
+
+### The thread fields still could not be verified
+
+`threadId`/`threadCount` appeared on 2 of 60 messages, reporting
+`threadCount: "0"` with `threadId == messageId`. That distinguishes nothing,
+so neither is surfaced. Unlike flag and priority, this one has no obvious
+test to construct — it would need a genuinely threaded conversation.
 
 ### `originalmessage` is account-scoped and types its id differently
 

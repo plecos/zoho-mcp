@@ -252,6 +252,21 @@ def _today_in_timezone(tz_name: str) -> date:
     return datetime.now(ZoneInfo(tz_name)).date()
 
 
+def _strip_invisible_padding(text: str) -> str:
+    """Remove the invisible characters some marketing mail uses as padding.
+
+    Deliberately leaves zero-width joiner/non-joiner alone -- they're
+    load-bearing in emoji sequences and in Persian and Indic scripts, so
+    removing them corrupts content rather than tidying it. See
+    ``_INVISIBLE_PADDING_CHARS``.
+
+    Extracted rather than inlined at both call sites (email bodies and
+    snippets): a second copy is a second chance for the two to diverge on
+    which characters are safe to drop.
+    """
+    return "".join(c for c in text if c not in _INVISIBLE_PADDING_CHARS)
+
+
 def _split_address_field(value: object) -> list[str]:
     """Turn one of Zoho's address strings into a list of addresses.
 
@@ -280,7 +295,9 @@ def _split_address_field(value: object) -> list[str]:
     return addresses
 
 
-def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
+def normalize_email_summary(
+    raw: dict, mailbox_timezone: str, *, strip_invisible_chars: bool = False
+) -> dict:
     """Normalize one entry from Zoho Mail's List Emails ``data`` array.
 
     Returns the compact shape the LLM sees. ``date`` is in
@@ -295,6 +312,10 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
     is wrong, and ``flagid``/``priority``/``threadId``/``threadCount``
     could not be distinguished from a real mailbox's data.
 
+    ``strip_invisible_chars`` applies to ``snippet`` only, not ``subject``.
+    The padding is a preview-text trick, and a padded subject would look
+    broken to a human in any mail client, so senders don't use it there.
+
     Every field beyond the core degrades to a default rather than raising,
     because Zoho's key set genuinely varies per message -- ``toAddress``
     was absent on one of 60 real messages and ``labelId`` on 27 of them.
@@ -305,6 +326,9 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
             an unexpected type/value (e.g. a non-numeric date).
     """
     try:
+        snippet = html.unescape(raw["summary"])
+        if strip_invisible_chars:
+            snippet = _strip_invisible_padding(snippet)
         sender = html.unescape(str(raw.get("sender") or ""))
         from_address = raw["fromAddress"]
         try:
@@ -326,7 +350,7 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
             # account's own UTC offset across unrelated senders. receivedTime
             # is Zoho's own authoritative server-side receipt timestamp.
             "date": _epoch_ms_to_iso8601(raw["receivedTime"], mailbox_timezone),
-            "snippet": html.unescape(raw["summary"]),
+            "snippet": snippet,
             "folder_id": raw["folderId"],
             # Confirmed empirically (a freshly-sent, unopened email showed
             # status="0"; already-read mail showed "1"); any other/unknown
@@ -367,7 +391,7 @@ def normalize_email_content(raw: dict, *, strip_invisible_chars: bool = False) -
             separator="\n", strip=True
         )
         if strip_invisible_chars:
-            text = "".join(c for c in text if c not in _INVISIBLE_PADDING_CHARS)
+            text = _strip_invisible_padding(text)
         return {
             "id": str(raw["messageId"]),
             "text": text,
@@ -1472,7 +1496,12 @@ class ZohoClient:
         )
         raw_items = payload.get("data", [])
         results = [
-            normalize_email_summary(item, mailbox_timezone) for item in raw_items
+            normalize_email_summary(
+                item,
+                mailbox_timezone,
+                strip_invisible_chars=self._strip_invisible_chars,
+            )
+            for item in raw_items
         ]
 
         # Skip the folder-type fetch entirely when there's nothing to
@@ -1544,7 +1573,12 @@ class ZohoClient:
         )
         raw_items = payload.get("data", [])
         results = [
-            normalize_email_summary(item, mailbox_timezone) for item in raw_items
+            normalize_email_summary(
+                item,
+                mailbox_timezone,
+                strip_invisible_chars=self._strip_invisible_chars,
+            )
+            for item in raw_items
         ]
 
         if raw_items and folder_id is None:

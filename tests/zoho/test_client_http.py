@@ -3311,3 +3311,58 @@ async def test_blank_cc_and_bcc_entries_are_dropped(respx_mock, zoho_client):
     assert sent["toAddress"] == "a@example.com"
     assert "ccAddress" not in sent
     assert sent["bccAddress"] == "d@example.com"
+
+
+# The flag reaching the normalizer is the part that was actually missing:
+# `normalize_email_summary` grew the parameter, but a listing tool that
+# forgot to pass it would look correct in every unit test of the normalizer
+# and still hand the model padded snippets.
+# search_emails refuses an empty query by design, so each tool gets the
+# minimum arguments it considers valid.
+_LISTING_CALLS = {"search_emails": {"query": "entire:deal"}, "list_emails": {}}
+
+
+@pytest.mark.parametrize("tool", list(_LISTING_CALLS))
+async def test_listing_tools_pass_strip_invisible_chars_through(
+    respx_mock, http_client, tool
+):
+    combining_grapheme_joiner = chr(0x034F)
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    raw = _raw_email(message_id="1", folder_id="1122334455")
+    raw["summary"] = f"Deal{combining_grapheme_joiner} inside"
+    for endpoint in ("search", "view"):
+        respx_mock.get(
+            f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/{endpoint}"
+        ).mock(return_value=httpx.Response(200, json={"data": [raw]}))
+    stripping_client = ZohoClient(
+        token_manager=FakeTokenManager(),
+        http_client=http_client,
+        account_id=ACCOUNT_ID,
+        calendar_uid=CALENDAR_UID,
+        strip_invisible_chars=True,
+    )
+
+    results = await getattr(stripping_client, tool)(**_LISTING_CALLS[tool])
+
+    assert results[0]["snippet"] == "Deal inside"
+
+
+@pytest.mark.parametrize("tool", list(_LISTING_CALLS))
+async def test_listing_tools_keep_padding_when_the_flag_is_off(
+    respx_mock, http_client, zoho_client, tool
+):
+    combining_grapheme_joiner = chr(0x034F)
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    raw = _raw_email(message_id="1", folder_id="1122334455")
+    padded = f"Deal{combining_grapheme_joiner} inside"
+    raw["summary"] = padded
+    for endpoint in ("search", "view"):
+        respx_mock.get(
+            f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/{endpoint}"
+        ).mock(return_value=httpx.Response(200, json={"data": [raw]}))
+
+    results = await getattr(zoho_client, tool)(**_LISTING_CALLS[tool])
+
+    assert results[0]["snippet"] == padded

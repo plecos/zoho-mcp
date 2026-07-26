@@ -204,3 +204,66 @@ def test_a_missing_core_field_still_raises():
 
     with pytest.raises(ZohoAPIError, match="Malformed email summary"):
         normalize_email_summary(raw, TIMEZONE)
+
+
+# The padding-stripping toggle originally covered `get_email` bodies only, so
+# every listing carried the noise regardless. Observed live: a real marketing
+# message's snippet was mostly U+034F, which is worse than a body -- a body is
+# something you deliberately opened, while snippets arrive for every message
+# in every listing.
+COMBINING_GRAPHEME_JOINER = chr(0x034F)
+
+
+def test_snippet_padding_is_kept_by_default():
+    padded = f"Deal{COMBINING_GRAPHEME_JOINER} inside{COMBINING_GRAPHEME_JOINER}"
+
+    record = normalize_email_summary(raw_email(summary=padded), TIMEZONE)
+
+    assert record["snippet"] == padded
+
+
+def test_snippet_padding_is_stripped_when_enabled():
+    padded = f"Deal{COMBINING_GRAPHEME_JOINER} inside{COMBINING_GRAPHEME_JOINER}"
+
+    record = normalize_email_summary(
+        raw_email(summary=padded), TIMEZONE, strip_invisible_chars=True
+    )
+
+    assert record["snippet"] == "Deal inside"
+
+
+@pytest.mark.parametrize("codepoint", [0x200B, 0xFEFF, 0x2060])
+def test_every_padding_character_is_stripped_from_snippets(codepoint):
+    record = normalize_email_summary(
+        raw_email(summary=f"a{chr(codepoint)}b"), TIMEZONE, strip_invisible_chars=True
+    )
+
+    assert record["snippet"] == "ab"
+
+
+@pytest.mark.parametrize("codepoint", [0x200C, 0x200D])
+def test_load_bearing_joiners_survive_snippet_stripping(codepoint):
+    # ZWJ/ZWNJ carry real meaning in emoji sequences and in Persian and Indic
+    # scripts. Stripping them corrupts content rather than tidying it, which
+    # is why they are absent from _INVISIBLE_PADDING_CHARS -- assert it here
+    # too, since a second call site is a second chance to get it wrong.
+    joiner = chr(codepoint)
+
+    record = normalize_email_summary(
+        raw_email(summary=f"a{joiner}b"), TIMEZONE, strip_invisible_chars=True
+    )
+
+    assert record["snippet"] == f"a{joiner}b"
+
+
+def test_subject_is_left_alone_even_when_stripping():
+    # Deliberately narrower than the body/snippet case. The padding is a
+    # preview-text trick, and a padded subject would look broken to a human
+    # in any mail client, so senders don't do it. Widen this if one turns up.
+    padded = f"Sale{COMBINING_GRAPHEME_JOINER}"
+
+    record = normalize_email_summary(
+        raw_email(subject=padded), TIMEZONE, strip_invisible_chars=True
+    )
+
+    assert record["subject"] == padded

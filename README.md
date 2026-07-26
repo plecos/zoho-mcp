@@ -208,7 +208,7 @@ One practical note: drafts don't show up in `search_emails` at all (a Zoho quirk
 | `ZOHO_ACCOUNT_ID` | *discovered* | Your Zoho Mail account id. Left unset, the server looks it up on first use and caches it for the life of the process. Setting it saves one API call per start. |
 | `ZOHO_CALENDAR_UID` | *discovered* | Your default calendar's uid, same story — looked up only when a calendar tool is called without an explicit `calendar_id`. |
 | `ZOHO_ALLOW_AUTO_SEND` | `false` | Allow `send_email` to actually send. See above. |
-| `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Have `get_email` strip invisible Unicode padding some marketing mail uses to inflate preview text. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
+| `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Strip the invisible Unicode padding some marketing mail uses to inflate preview text — from `get_email` bodies and from the `snippet` of every `search_emails`/`list_emails` result. Subjects are left alone; senders don't pad those, since it would look broken in any mail client. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
 | `ZOHO_OAUTH_CALLBACK_PORT` | `8765` | Local port for the one-time OAuth redirect. |
 
 Both booleans are matched case-insensitively with surrounding whitespace ignored, so `true`, `True`, and `TRUE` all enable them. Any other value leaves them off.

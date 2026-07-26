@@ -125,6 +125,8 @@ Only needed if the server was started without a stored token — the case for a 
 
 The write tools take lists, and one call handles the whole batch.
 
+`snippet` always comes back with runs of whitespace collapsed to a single space. Marketing mail pads preview text heavily, and a real example measured 249 characters of which ~200 were padding — some invisible, some `U+2007` FIGURE SPACE and similar width-having variants that no list of codepoints keeps up with. Collapsing runs discards nothing (every mail client does it visually) and catches all of them. Removing the *invisible* characters does change content, so that part stays opt-in via `ZOHO_STRIP_INVISIBLE_CHARS`. Neither touches `subject`.
+
 `search_emails` and `list_emails` return 13 fields per message — id, from, from_name, subject, date, snippet, folder_id, read, to, cc, has_attachment, size_bytes, label_ids. Zoho sends 21; the eight left out are left out for stated reasons ([the notes](docs/zoho-api-notes.md#flagid-priority-and-the-thread-fields-could-not-be-verified)), chiefly that a real mailbox couldn't distinguish their values.
 
 `get_email_source` answers the questions `get_email` can't: who really sent this, did it pass SPF/DKIM/DMARC, what path did it take. Zoho returns the whole message source — 28,000 to 82,000 characters for ordinary mail — so it's parsed here into headers, an ordered `Received` chain, and the names of the headers not returned by value. RFC 2047 encoded-words are decoded. `include_raw=true` adds the source text itself, capped.
@@ -208,7 +210,7 @@ One practical note: drafts don't show up in `search_emails` at all (a Zoho quirk
 | `ZOHO_ACCOUNT_ID` | *discovered* | Your Zoho Mail account id. Left unset, the server looks it up on first use and caches it for the life of the process. Setting it saves one API call per start. |
 | `ZOHO_CALENDAR_UID` | *discovered* | Your default calendar's uid, same story — looked up only when a calendar tool is called without an explicit `calendar_id`. |
 | `ZOHO_ALLOW_AUTO_SEND` | `false` | Allow `send_email` to actually send. See above. |
-| `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Have `get_email` strip invisible Unicode padding some marketing mail uses to inflate preview text. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
+| `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Strip the invisible Unicode padding some marketing mail uses to inflate preview text — from `get_email` bodies and from the `snippet` of every `search_emails`/`list_emails` result. Subjects are left alone; senders don't pad those, since it would look broken in any mail client. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
 | `ZOHO_OAUTH_CALLBACK_PORT` | `8765` | Local port for the one-time OAuth redirect. |
 
 Both booleans are matched case-insensitively with surrounding whitespace ignored, so `true`, `True`, and `TRUE` all enable them. Any other value leaves them off.

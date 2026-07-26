@@ -204,3 +204,155 @@ def test_a_missing_core_field_still_raises():
 
     with pytest.raises(ZohoAPIError, match="Malformed email summary"):
         normalize_email_summary(raw, TIMEZONE)
+
+
+# The padding-stripping toggle originally covered `get_email` bodies only, so
+# every listing carried the noise regardless. Observed live: a real marketing
+# message's snippet was mostly U+034F, which is worse than a body -- a body is
+# something you deliberately opened, while snippets arrive for every message
+# in every listing.
+COMBINING_GRAPHEME_JOINER = chr(0x034F)
+
+
+def test_snippet_padding_is_kept_by_default():
+    padded = f"Deal{COMBINING_GRAPHEME_JOINER} inside{COMBINING_GRAPHEME_JOINER}"
+
+    record = normalize_email_summary(raw_email(summary=padded), TIMEZONE)
+
+    assert record["snippet"] == padded
+
+
+def test_snippet_padding_is_stripped_when_enabled():
+    padded = f"Deal{COMBINING_GRAPHEME_JOINER} inside{COMBINING_GRAPHEME_JOINER}"
+
+    record = normalize_email_summary(
+        raw_email(summary=padded), TIMEZONE, strip_invisible_chars=True
+    )
+
+    assert record["snippet"] == "Deal inside"
+
+
+@pytest.mark.parametrize("codepoint", [0x200B, 0xFEFF, 0x2060])
+def test_every_padding_character_is_stripped_from_snippets(codepoint):
+    record = normalize_email_summary(
+        raw_email(summary=f"a{chr(codepoint)}b"), TIMEZONE, strip_invisible_chars=True
+    )
+
+    assert record["snippet"] == "ab"
+
+
+@pytest.mark.parametrize("codepoint", [0x200C, 0x200D])
+def test_load_bearing_joiners_survive_snippet_stripping(codepoint):
+    # ZWJ/ZWNJ carry real meaning in emoji sequences and in Persian and Indic
+    # scripts. Stripping them corrupts content rather than tidying it, which
+    # is why they are absent from _INVISIBLE_PADDING_CHARS -- assert it here
+    # too, since a second call site is a second chance to get it wrong.
+    joiner = chr(codepoint)
+
+    record = normalize_email_summary(
+        raw_email(summary=f"a{joiner}b"), TIMEZONE, strip_invisible_chars=True
+    )
+
+    assert record["snippet"] == f"a{joiner}b"
+
+
+def test_subject_is_left_alone_even_when_stripping():
+    # Deliberately narrower than the body/snippet case. The padding is a
+    # preview-text trick, and a padded subject would look broken to a human
+    # in any mail client, so senders don't do it. Widen this if one turns up.
+    padded = f"Sale{COMBINING_GRAPHEME_JOINER}"
+
+    record = normalize_email_summary(
+        raw_email(subject=padded), TIMEZONE, strip_invisible_chars=True
+    )
+
+    assert record["subject"] == padded
+
+
+# Whitespace collapsing is unconditional, unlike the invisible-character
+# stripping above. Deleting invisible characters changes content, so it stays
+# opt-in; collapsing a run of spaces in a *preview string* discards nothing --
+# every mail client does it visually -- and it catches the padding variants
+# that have width, which no list of codepoints would keep up with. Observed
+# live: after stripping U+034F, a real snippet was still ~139 characters of
+# U+2007 FIGURE SPACE around 40 characters of text.
+def test_runs_of_spaces_collapse_to_one():
+    record = normalize_email_summary(
+        raw_email(summary="See   details      about  you"), TIMEZONE
+    )
+
+    assert record["snippet"] == "See details about you"
+
+
+@pytest.mark.parametrize(
+    "codepoint",
+    [0x2007, 0x00A0, 0x2002, 0x2003, 0x200A, 0x3000],
+    ids=["figure", "nbsp", "en", "em", "hair", "ideographic"],
+)
+def test_every_space_variant_collapses(codepoint):
+    space = chr(codepoint)
+    record = normalize_email_summary(
+        raw_email(summary=f"Deal{space}{space}{space}inside"), TIMEZONE
+    )
+
+    assert record["snippet"] == "Deal inside"
+
+
+def test_tabs_and_newlines_collapse_too():
+    record = normalize_email_summary(
+        raw_email(summary="Deal\r\n\tinside\n\nnow"), TIMEZONE
+    )
+
+    assert record["snippet"] == "Deal inside now"
+
+
+def test_leading_and_trailing_whitespace_is_trimmed():
+    record = normalize_email_summary(raw_email(summary="   Deal inside   "), TIMEZONE)
+
+    assert record["snippet"] == "Deal inside"
+
+
+def test_collapsing_happens_even_with_stripping_off():
+    # The point of making this unconditional: nobody has to find a flag.
+    record = normalize_email_summary(
+        raw_email(summary="Deal      inside"), TIMEZONE, strip_invisible_chars=False
+    )
+
+    assert record["snippet"] == "Deal inside"
+
+
+def test_padding_is_stripped_before_whitespace_is_collapsed():
+    # Order is load-bearing. Collapsing first leaves the invisible characters
+    # as non-space tokens; removing them afterwards then leaves the double
+    # spaces they were separating. Stripping first avoids that entirely.
+    padded = (
+        f"Deal{COMBINING_GRAPHEME_JOINER} {COMBINING_GRAPHEME_JOINER} "
+        f"{COMBINING_GRAPHEME_JOINER} inside"
+    )
+
+    record = normalize_email_summary(
+        raw_email(summary=padded), TIMEZONE, strip_invisible_chars=True
+    )
+
+    assert record["snippet"] == "Deal inside"
+
+
+def test_single_spaces_between_words_are_untouched():
+    record = normalize_email_summary(raw_email(summary="Deal inside now"), TIMEZONE)
+
+    assert record["snippet"] == "Deal inside now"
+
+
+def test_a_whitespace_only_snippet_becomes_empty():
+    record = normalize_email_summary(raw_email(summary="  \r\n\t  "), TIMEZONE)
+
+    assert record["snippet"] == ""
+
+
+def test_subject_whitespace_is_left_alone():
+    # Same scope decision as the stripping: subjects are shown to humans in
+    # every mail client, so senders don't pad them, and a subject's exact
+    # spacing is more plausibly deliberate than a generated preview's.
+    record = normalize_email_summary(raw_email(subject="Big   Sale"), TIMEZONE)
+
+    assert record["subject"] == "Big   Sale"

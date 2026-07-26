@@ -252,6 +252,40 @@ def _today_in_timezone(tz_name: str) -> date:
     return datetime.now(ZoneInfo(tz_name)).date()
 
 
+def _strip_invisible_padding(text: str) -> str:
+    """Remove the invisible characters some marketing mail uses as padding.
+
+    Deliberately leaves zero-width joiner/non-joiner alone -- they're
+    load-bearing in emoji sequences and in Persian and Indic scripts, so
+    removing them corrupts content rather than tidying it. See
+    ``_INVISIBLE_PADDING_CHARS``.
+
+    Extracted rather than inlined at both call sites (email bodies and
+    snippets): a second copy is a second chance for the two to diverge on
+    which characters are safe to drop.
+    """
+    return "".join(c for c in text if c not in _INVISIBLE_PADDING_CHARS)
+
+
+def _collapse_whitespace(text: str) -> str:
+    """Collapse every run of whitespace to a single space, and trim the ends.
+
+    Applied to snippets unconditionally, unlike ``_strip_invisible_padding``.
+    Deleting invisible characters changes content, so that stays opt-in; a run
+    of spaces inside a generated preview carries no information -- every mail
+    client collapses it visually -- so there's nothing to protect.
+
+    It also catches the padding variants that have *width*, which the
+    codepoint set deliberately won't touch. Measured on a real message: after
+    removing its U+034F, the snippet was still ~139 characters of U+2007
+    FIGURE SPACE wrapped around 40 characters of text. `split` treats every
+    Unicode space separator as whitespace, so one call handles figure space,
+    no-break space, en/em/hair/ideographic space and plain runs alike, with no
+    list to keep up to date.
+    """
+    return " ".join(text.split())
+
+
 def _split_address_field(value: object) -> list[str]:
     """Turn one of Zoho's address strings into a list of addresses.
 
@@ -280,7 +314,9 @@ def _split_address_field(value: object) -> list[str]:
     return addresses
 
 
-def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
+def normalize_email_summary(
+    raw: dict, mailbox_timezone: str, *, strip_invisible_chars: bool = False
+) -> dict:
     """Normalize one entry from Zoho Mail's List Emails ``data`` array.
 
     Returns the compact shape the LLM sees. ``date`` is in
@@ -295,6 +331,13 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
     is wrong, and ``flagid``/``priority``/``threadId``/``threadCount``
     could not be distinguished from a real mailbox's data.
 
+    ``snippet`` always has runs of whitespace collapsed to a single space
+    (see ``_collapse_whitespace``). ``strip_invisible_chars`` additionally
+    removes invisible padding characters from it. Both apply to ``snippet``
+    only, never ``subject``: the padding is a preview-text trick, a padded
+    subject would look broken to a human in any mail client, and a subject's
+    exact spacing is more plausibly deliberate than a generated preview's.
+
     Every field beyond the core degrades to a default rather than raising,
     because Zoho's key set genuinely varies per message -- ``toAddress``
     was absent on one of 60 real messages and ``labelId`` on 27 of them.
@@ -305,6 +348,13 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
             an unexpected type/value (e.g. a non-numeric date).
     """
     try:
+        snippet = html.unescape(raw["summary"])
+        if strip_invisible_chars:
+            snippet = _strip_invisible_padding(snippet)
+        # Stripping first, then collapsing. The other order leaves the double
+        # spaces that the removed characters were separating, because an
+        # invisible character is a non-space token to `split`.
+        snippet = _collapse_whitespace(snippet)
         sender = html.unescape(str(raw.get("sender") or ""))
         from_address = raw["fromAddress"]
         try:
@@ -326,7 +376,7 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
             # account's own UTC offset across unrelated senders. receivedTime
             # is Zoho's own authoritative server-side receipt timestamp.
             "date": _epoch_ms_to_iso8601(raw["receivedTime"], mailbox_timezone),
-            "snippet": html.unescape(raw["summary"]),
+            "snippet": snippet,
             "folder_id": raw["folderId"],
             # Confirmed empirically (a freshly-sent, unopened email showed
             # status="0"; already-read mail showed "1"); any other/unknown
@@ -367,7 +417,7 @@ def normalize_email_content(raw: dict, *, strip_invisible_chars: bool = False) -
             separator="\n", strip=True
         )
         if strip_invisible_chars:
-            text = "".join(c for c in text if c not in _INVISIBLE_PADDING_CHARS)
+            text = _strip_invisible_padding(text)
         return {
             "id": str(raw["messageId"]),
             "text": text,
@@ -1472,7 +1522,12 @@ class ZohoClient:
         )
         raw_items = payload.get("data", [])
         results = [
-            normalize_email_summary(item, mailbox_timezone) for item in raw_items
+            normalize_email_summary(
+                item,
+                mailbox_timezone,
+                strip_invisible_chars=self._strip_invisible_chars,
+            )
+            for item in raw_items
         ]
 
         # Skip the folder-type fetch entirely when there's nothing to
@@ -1544,7 +1599,12 @@ class ZohoClient:
         )
         raw_items = payload.get("data", [])
         results = [
-            normalize_email_summary(item, mailbox_timezone) for item in raw_items
+            normalize_email_summary(
+                item,
+                mailbox_timezone,
+                strip_invisible_chars=self._strip_invisible_chars,
+            )
+            for item in raw_items
         ]
 
         if raw_items and folder_id is None:

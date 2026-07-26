@@ -66,6 +66,17 @@ uv run mypy src
 
 CI runs all four and they must pass.
 
+### On Windows, a running server locks the files you're about to rebuild
+
+If an MCP client is pointed at your checkout, it holds `.venv\Scripts\zoho-mcp.exe` open, and `uv run` fails trying to replace it:
+
+```
+error: failed to remove file `...\.venv\Lib\site-packages\../../Scripts/zoho-mcp.exe`:
+The process cannot access the file because it is being used by another process. (os error 32)
+```
+
+Use `uv run --no-sync` to skip the reinstall, or disconnect the client first. The same lock is why an installed `.mcpb` extension can't be uninstalled while it's running — see the [README](README.md#installing-as-a-claude-desktop-extension).
+
 Don't include real account data — email addresses, account or folder ids, or
 message contents — in tests, fixtures, or commit messages. Fixtures use
 obviously synthetic values (`555…` ids, invented names) on purpose.

@@ -41,7 +41,7 @@ def env(monkeypatch):
 async def test_auto_send_enabled_only_for_true(env, value):
     env.setenv("ZOHO_ALLOW_AUTO_SEND", value)
 
-    client, _ = server._build_zoho_clients_from_env()
+    client, *_ = server._build_zoho_clients_from_env()
 
     assert client._allow_auto_send is True
 
@@ -55,13 +55,13 @@ async def test_auto_send_enabled_only_for_true(env, value):
 async def test_auto_send_disabled_for_everything_else(env, value):
     env.setenv("ZOHO_ALLOW_AUTO_SEND", value)
 
-    client, _ = server._build_zoho_clients_from_env()
+    client, *_ = server._build_zoho_clients_from_env()
 
     assert client._allow_auto_send is False
 
 
 async def test_auto_send_disabled_when_unset(env):
-    client, _ = server._build_zoho_clients_from_env()
+    client, *_ = server._build_zoho_clients_from_env()
 
     assert client._allow_auto_send is False
 
@@ -73,23 +73,92 @@ async def test_auto_send_disabled_when_unset(env):
 async def test_strip_invisible_chars_parses_the_same_way(env, value, expected):
     env.setenv("ZOHO_STRIP_INVISIBLE_CHARS", value)
 
-    client, _ = server._build_zoho_clients_from_env()
+    client, *_ = server._build_zoho_clients_from_env()
 
     assert client._strip_invisible_chars is expected
 
 
-async def test_raises_a_clear_error_when_no_refresh_token_is_stored(env):
+async def test_starts_unauthenticated_rather_than_refusing_to_start(env):
+    # Refusing to start would make `authenticate` unreachable, which is the
+    # only way an MCPB install can be authorized at all. The error surfaces
+    # per-call from get_access_token instead -- see
+    # tests/zoho/test_deferred_authentication.py.
     env.setattr(server, "load_refresh_token", lambda: None)
 
-    with pytest.raises(RuntimeError, match="refresh token"):
-        server._build_zoho_clients_from_env()
+    _, _, token_manager, _ = server._build_zoho_clients_from_env()
+
+    assert token_manager.is_authenticated is False
+
+
+async def test_missing_credentials_do_not_stop_the_server_starting(env):
+    # `authenticate` reports these missing in the conversation, where the
+    # user can act on it; a KeyError here would just be a dead server.
+    env.delenv("ZOHO_CLIENT_ID", raising=False)
+    env.delenv("ZOHO_CLIENT_SECRET", raising=False)
+
+    client, *_ = server._build_zoho_clients_from_env()
+
+    assert client is not None
 
 
 async def test_account_and_calendar_ids_are_passed_through(env):
     env.setenv("ZOHO_ACCOUNT_ID", "acct-123")
     env.setenv("ZOHO_CALENDAR_UID", "cal-456")
 
-    client, _ = server._build_zoho_clients_from_env()
+    client, *_ = server._build_zoho_clients_from_env()
 
-    assert client._account_id == "acct-123"
-    assert client._calendar_uid == "cal-456"
+    assert client._account_id_cache == "acct-123"
+    assert client._calendar_uid_cache == "cal-456"
+
+
+async def test_missing_account_and_calendar_ids_are_left_for_discovery(env):
+    # Neither is required any more -- ZohoClient looks them up. A KeyError
+    # here would put the ids back on the setup checklist.
+    env.delenv("ZOHO_ACCOUNT_ID", raising=False)
+    env.delenv("ZOHO_CALENDAR_UID", raising=False)
+
+    client, *_ = server._build_zoho_clients_from_env()
+
+    assert client._account_id_cache is None
+    assert client._calendar_uid_cache is None
+
+
+# A key left in .env with no value is the likely shape of a half-finished
+# setup; it has to read as "not configured", not as an empty path segment.
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_blank_ids_are_treated_as_unconfigured(env, blank):
+    env.setenv("ZOHO_ACCOUNT_ID", blank)
+    env.setenv("ZOHO_CALENDAR_UID", blank)
+
+    client, *_ = server._build_zoho_clients_from_env()
+
+    assert client._account_id_cache is None
+    assert client._calendar_uid_cache is None
+
+
+# An MCPB host substitutes a `number` user_config value into the environment,
+# and the rendering isn't pinned by the spec -- "8765" and "8765.0" are both
+# plausible. Getting this wrong means listening on the default port while the
+# registered redirect points elsewhere, which fails as a timeout with nothing
+# pointing back here.
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("9000", 9000),
+        ("9000.0", 9000),
+        (" 9000 ", 9000),
+        ("", 8765),
+        ("   ", 8765),
+        ("not-a-port", 8765),
+    ],
+)
+async def test_callback_port_parsing(env, value, expected):
+    env.setenv("ZOHO_OAUTH_CALLBACK_PORT", value)
+
+    assert server._callback_port() == expected
+
+
+async def test_callback_port_defaults_when_unset(env):
+    env.delenv("ZOHO_OAUTH_CALLBACK_PORT", raising=False)
+
+    assert server._callback_port() == 8765

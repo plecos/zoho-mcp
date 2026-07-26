@@ -1,4 +1,7 @@
+import httpx
+
 from zoho_mcp.server import create_server
+from zoho_mcp.zoho.auth import ZohoTokenManager
 
 
 class FakeZohoClient:
@@ -53,6 +56,12 @@ class FakeZohoClient:
 
     async def list_attachments(self, message_id, folder_id):
         return []
+
+    async def get_attachment(self, message_id, folder_id, attachment_id):
+        return {}
+
+    async def get_email_source(self, message_id, include_raw=False):
+        return {}
 
     async def list_folders(self):
         return []
@@ -137,17 +146,34 @@ class FakeContactsClient:
         return {"personal": 0, "organization": 0, "total": 0}
 
 
-async def test_create_server_registers_all_thirty_seven_tools():
-    server = create_server(FakeZohoClient(), FakeContactsClient())
+def build_server():
+    """A server wired to fakes -- registration and annotations only, no I/O."""
+    http_client = httpx.AsyncClient()
+    token_manager = ZohoTokenManager(
+        client_id="id",
+        client_secret="secret",
+        refresh_token="refresh",
+        http_client=http_client,
+    )
+    return create_server(
+        FakeZohoClient(), FakeContactsClient(), token_manager, http_client
+    )
+
+
+async def test_create_server_registers_every_expected_tool():
+    server = build_server()
 
     tools = await server.list_tools()
     tool_names = {tool.name for tool in tools}
 
     assert tool_names == {
+        "authenticate",
         "search_emails",
         "list_emails",
         "get_email",
         "list_attachments",
+        "get_attachment",
+        "get_email_source",
         "list_folders",
         "list_labels",
         "list_signatures",
@@ -184,7 +210,31 @@ async def test_create_server_registers_all_thirty_seven_tools():
     }
 
 
+async def test_every_tool_has_a_human_readable_title():
+    # MCP clients show `title` in permission prompts and tool pickers; a
+    # missing one falls back to the snake_case function name.
+    server = build_server()
+
+    tools = await server.list_tools()
+    untitled = [t.name for t in tools if not (t.title or "").strip()]
+
+    assert untitled == []
+
+
+async def test_tool_titles_are_prose_not_repeated_function_names():
+    server = build_server()
+
+    tools = await server.list_tools()
+    titles = [t.title for t in tools]
+
+    assert [t.name for t in tools if "_" in (t.title or "")] == []
+    assert len(set(titles)) == len(titles)
+
+
 _WRITE_TOOL_NAMES = {
+    # Not a Zoho write, but definitely not read-only: it opens a browser and
+    # obtains a credential.
+    "authenticate",
     "create_draft",
     "reply_draft",
     "send_email",
@@ -203,7 +253,7 @@ _WRITE_TOOL_NAMES = {
 
 
 async def test_read_only_tools_are_annotated_correctly():
-    server = create_server(FakeZohoClient(), FakeContactsClient())
+    server = build_server()
 
     tools = await server.list_tools()
     read_only_tools = [t for t in tools if t.name not in _WRITE_TOOL_NAMES]
@@ -212,7 +262,7 @@ async def test_read_only_tools_are_annotated_correctly():
 
 
 async def test_write_tools_are_not_annotated_read_only():
-    server = create_server(FakeZohoClient(), FakeContactsClient())
+    server = build_server()
 
     tools = await server.list_tools()
     write_tools = [t for t in tools if t.name in _WRITE_TOOL_NAMES]
@@ -224,7 +274,7 @@ async def test_write_tools_are_not_annotated_read_only():
 async def test_send_email_is_annotated_as_irreversible_and_outward_facing():
     # send_email is the only tool that reaches a third party and cannot be
     # undone; its annotations must say so, so clients can gate it.
-    server = create_server(FakeZohoClient(), FakeContactsClient())
+    server = build_server()
 
     tools = await server.list_tools()
     send = next(t for t in tools if t.name == "send_email")

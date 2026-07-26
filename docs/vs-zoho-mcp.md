@@ -182,9 +182,20 @@ coarse.
 
 ### Where they cover more
 
-`getOriginalMessage` returns the raw MIME of a message. **This project has no
-equivalent** — if you need headers, signatures, or the original encoding, theirs
-does something ours doesn't.
+`getOriginalMessage` returns the raw MIME of a message. This project now has
+`get_email_source`, but the two aren't the same thing and which is better
+depends on what you're after. Theirs forwards the source; ours parses it into
+headers, an ordered `Received` chain, and the names of the headers it didn't
+return by value, with `include_raw` to get the source anyway. For DKIM
+signature bytes or exact original encoding, forwarding is the right answer and
+theirs does it more directly. For "did this pass SPF" it's the difference
+between an answer and 82,000 characters of homework.
+
+`getMessageAttachmentInfo` returns attachment metadata, which is where this
+project sat until recently. There's no attachment-content tool in the
+Reading & Search bundle, so `get_attachment` is now ground ours covers and
+theirs doesn't — though the other two Mail bundles are
+[unexamined](#what-we-still-could-not-verify) and may have one.
 
 They also got the batch shape right: `readMessages` and `flagMessages` both take
 one or many ids. That's the same lesson recorded in
@@ -277,13 +288,24 @@ arithmetic below can be checked rather than taken on faith.
  "fromAddress": "…",          "status": "0"}
 ```
 
-**Ours** — 7:
+**Ours** — 13:
 
 ```
-{"id": "…", "from": "…", "subject": "…",
+{"id": "…", "from": "…", "from_name": "…", "subject": "…",
  "date": "2026-07-25T19:14:03.525000-07:00",
- "snippet": "…", "folder_id": "…", "read": false}
+ "snippet": "…", "folder_id": "…", "read": false,
+ "to": ["…"], "cc": [], "has_attachment": false,
+ "size_bytes": 24825, "label_ids": ["…"]}
 ```
+
+The gap is 8 fields, not 13, and it isn't a coverage gap. `sentDateInGMT` is
+omitted because it's wrong. `flagid`, `priority`, `threadId`, and
+`threadCount` are omitted because a real mailbox couldn't distinguish their
+values — `flagid` was `flag_not_set` on all 120 messages sampled, `priority`
+was `"3"` on all 120, and the two rows carrying `threadCount` said `"0"` with
+`threadId == messageId`. Shipping the plausible reading of those would be
+guessing. `hasInline`, `calendarType`, and `status2` are undocumented and
+carry no evident decision value.
 
 Six things in that left-hand column are worth naming:
 
@@ -309,9 +331,17 @@ Six things in that left-hand column are worth naming:
   `"Not Provided"`, not `null` or an omitted key — so any caller has to know that
   string means nothing.
 
-Field sets also vary between records in a single result set: sent items carry
-`threadId`, `threadCount`, `toAddr`, and `mailDeliveryStatus`; received ones
-don't. A caller cannot assume a stable schema across the array.
+Field sets also vary between records in a single result set. Measured since
+this page was first written: 60 messages from one `SearchEmails`-equivalent
+response contained **five distinct key sets** — `toAddress` absent on one row,
+`labelId` on 27, `threadId`/`threadCount` present on two, and
+`toAddr`/`mailDeliveryStatus` on a single row. A caller cannot assume a stable
+schema across the array.
+
+That one cuts both ways, and it's the reason every field this project added
+beyond the original seven defaults rather than raising when it's missing.
+Theirs surfaces the variation to the model; ours absorbs it. Neither makes
+Zoho's schema stable.
 
 **And a behavioral difference, not just a shape one:** their result set included a
 message from the Sent folder. `search_emails` excludes Sent, Drafts, and

@@ -5,6 +5,8 @@ refresh token into a live access token, and where that refresh token lives
 at rest (the OS credential store via ``keyring``).
 """
 
+import http.server
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
@@ -13,6 +15,66 @@ import keyring
 
 ZOHO_TOKEN_URL = "https://accounts.zoho.com/oauth/v2/token"
 ZOHO_AUTHORIZATION_URL = "https://accounts.zoho.com/oauth/v2/auth"
+
+# Every scope the tool surface needs, requested together in one consent
+# screen. Sent in the authorization request -- scopes are not configured in
+# the Zoho API Console, which only needs the redirect URI. Delete the .ALL
+# and .CREATE entries for a read-only install; the write tools then fail
+# with a scope error rather than silently having had permission.
+#
+# Lives here rather than in the CLI because both callers need it: the
+# `zoho-mcp-setup` command and the `authenticate` tool.
+SCOPES = [
+    "ZohoMail.messages.READ",
+    "ZohoMail.messages.ALL",  # write access: mark_as_read/unread, move_email, add/remove_label
+    "ZohoMail.accounts.READ",  # needed once, to look up the mail account id
+    "ZohoMail.folders.READ",  # used at runtime to filter out Sent/Drafts by folder type
+    "ZohoCalendar.event.READ",
+    "ZohoCalendar.event.ALL",  # write access: create_event/update_event/delete_event
+    "ZohoCalendar.calendar.READ",  # setup: calendar uid lookup; runtime: list_calendars
+    "zohocontacts.contactapi.READ",
+    "ZohoMail.tasks.READ",
+    "ZohoMail.tasks.CREATE",  # write access: create_task
+    "ZohoMail.notes.READ",
+    "ZohoMail.notes.CREATE",  # write access: create_note
+    "ZohoMail.links.READ",
+    "ZohoMail.links.CREATE",  # write access: create_bookmark
+    "ZohoCalendar.resources.READ",
+    "ZohoCalendar.branches.READ",
+    "ZohoMail.tags.READ",
+    "ZohoCalendar.freebusy.READ",
+]
+DEFAULT_CALLBACK_PORT = 8765
+
+
+class _CallbackHandler(http.server.BaseHTTPRequestHandler):
+    """Captures the OAuth redirect's query string, then serves a plain notice."""
+
+    def do_GET(self) -> None:  # noqa: N802 (http.server's required method name)
+        self.server.callback_query = urllib.parse.parse_qs(  # type: ignore[attr-defined]
+            urllib.parse.urlparse(self.path).query
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(
+            b"<html><body>Authorized. You can close this tab.</body></html>"
+        )
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass  # suppress http.server's default request logging to stderr
+
+
+def wait_for_callback(port: int) -> dict[str, list[str]]:
+    """Block until exactly one request hits the local callback, then return its query.
+
+    The listener exists only for the duration of one redirect -- it is not a
+    server socket the process holds open.
+    """
+    server = http.server.HTTPServer(("localhost", port), _CallbackHandler)
+    server.handle_request()
+    return server.callback_query  # type: ignore[attr-defined]
+
 
 # Refresh this many seconds early so a request never races an in-flight expiry.
 REFRESH_SAFETY_MARGIN_SECONDS = 60
@@ -35,26 +97,105 @@ class ZohoTokenManager:
         self,
         client_id: str,
         client_secret: str,
-        refresh_token: str,
+        refresh_token: str | None,
         http_client: httpx.AsyncClient,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
-        self._refresh_token = refresh_token
+        # Optional so the server can start before anyone has authorized it:
+        # an MCPB bundle has a single entry point, so the setup CLI isn't
+        # reachable from an installed extension. The `authenticate` tool
+        # supplies this later via ``set_refresh_token``.
+        self._refresh_token = (refresh_token or "").strip() or None
         self._http_client = http_client
         self._access_token: str | None = None
         self._expires_at: datetime | None = None
 
+    @property
+    def is_authenticated(self) -> bool:
+        """Whether a usable refresh token is held (not whether Zoho accepts it)."""
+        return self._refresh_token is not None
+
+    def set_refresh_token(self, refresh_token: str) -> None:
+        """Adopt a newly obtained refresh token for subsequent calls.
+
+        Discards any cached access token, because re-authenticating is how
+        new scopes get granted -- keeping the old one would go on using the
+        narrower grant until it expired, resurfacing a scope error the user
+        has already fixed.
+
+        Raises:
+            ZohoAuthError: if ``refresh_token`` is blank.
+        """
+        if not refresh_token.strip():
+            raise ZohoAuthError("Cannot set a blank Zoho refresh token")
+        self._refresh_token = refresh_token.strip()
+        self._access_token = None
+        self._expires_at = None
+
     async def get_access_token(self) -> str:
         """Return a valid access token, refreshing it first if needed.
 
+        This is the single point every Zoho call passes through, so it is
+        also where an unauthenticated server is caught -- one actionable
+        error covers every tool, and no tool can route around it.
+
         Raises:
-            ZohoAuthError: if Zoho rejects the refresh (e.g. revoked token).
+            ZohoAuthError: if credentials are missing, no refresh token is
+                held, or Zoho rejects the refresh (e.g. revoked token).
         """
+        # Checked before the token, and before Zoho is asked at all. Found by
+        # driving the packed bundle: a refresh with a blank client id gets
+        # `invalid_client` back, which says nothing about what to fix. A
+        # bundle reinstall lands exactly there -- the credential store keeps
+        # the token while the settings form starts empty. Naming the
+        # credentials beats naming the token, since `authenticate` can't run
+        # without them either.
+        for name, value in (
+            ("ZOHO_CLIENT_ID", self._client_id),
+            ("ZOHO_CLIENT_SECRET", self._client_secret),
+        ):
+            if not value.strip():
+                raise ZohoAuthError(
+                    f"{name} is not set, so this server cannot talk to Zoho. "
+                    f"Register a Server-based Application at "
+                    f"https://accounts.zoho.com/developerconsole and supply "
+                    f"its credentials, then authenticate."
+                )
+        if self._refresh_token is None:
+            self._adopt_any_stored_token()
+        if self._refresh_token is None:
+            raise ZohoAuthError(
+                "This server has no Zoho authorization yet. Call the "
+                "authenticate tool to grant it access, then retry."
+            )
         if self._access_token is None or self._is_expired():
             await self._refresh()
         assert self._access_token is not None
         return self._access_token
+
+    def _adopt_any_stored_token(self) -> None:
+        """Re-read the credential store, in case another process authorized us.
+
+        Found in a real host: two clients were connected, so two server
+        processes were running. ``authenticate`` in one wrote the token to the
+        credential store and updated its own in-memory manager, while the
+        sibling -- started unauthenticated moments earlier -- went on refusing
+        every call until it was restarted.
+
+        Only reached when no token is held, so it never overrides a live one;
+        overriding would undo a ``set_refresh_token`` that had just granted
+        wider scopes. A failing credential store is swallowed on purpose:
+        ``keyring`` raises on locked or unavailable backends, and that is
+        still just "not authenticated", where the caller is better served by
+        the message naming ``authenticate`` than by a keyring traceback.
+        """
+        try:
+            stored = load_refresh_token()
+        except Exception:  # noqa: BLE001 -- any backend failure means "no token"
+            return
+        if stored and stored.strip():
+            self.set_refresh_token(stored)
 
     def _is_expired(self) -> bool:
         assert self._expires_at is not None

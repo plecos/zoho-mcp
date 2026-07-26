@@ -117,6 +117,85 @@ Zoho files certain mail into a genuine `/Notification` folder (`folderType:
 "Inbox"`, like any custom folder) and *also* tags it with a matching label.
 Both `in:Notification` and `label:Notification` work.
 
+### The key set varies message to message, on both list endpoints
+
+Not just between endpoints — between *rows of the same response*. Across 60
+messages from `/messages/view`, five distinct key sets appeared: `toAddress`
+was missing on one, `labelId` on 27, and `threadId`/`threadCount` were
+present on only two. `/messages/search` was the same story, plus
+`toAddr` and `mailDeliveryStatus` on a single row and nowhere in `view`.
+
+So every field beyond the core has to tolerate absence.
+`normalize_email_summary` defaults them rather than raising, and only the
+fields a record is unusable without still raise.
+
+### An empty address field is the literal text `Not Provided`
+
+Not `null`, not `""`, not an absent key. `ccAddress` was the string
+`"Not Provided"` on 116 of 120 real messages. Passed through, a model
+reports a recipient by that name.
+
+`toAddress`/`ccAddress` are also HTML-entity-encoded (`&lt;a@b.com&gt;`)
+and comma-joined when there's more than one.
+
+### `sender` is a display name, not an address
+
+Despite sitting next to `fromAddress` and looking like a peer. On 25 of 60
+real messages it contained no `@` at all while `fromAddress` did; on the
+other 35 it simply repeated `fromAddress` verbatim. It's the display name
+when there is one, and a copy of the address when there isn't — surfaced
+here as `from_name`, blank when it would only duplicate.
+
+### `flagid`, `priority`, and the thread fields could not be verified
+
+Recorded as *unknown*, not as absent. On a real mailbox: `flagid` was
+`flag_not_set` on all 120 messages, `priority` was `"3"` on all 120, and
+the two messages carrying `threadCount` reported `"0"` with
+`threadId == messageId`. None of those distinguishes anything, so none is
+surfaced. If a future account has flagged mail or real threads, this is the
+first thing to re-derive.
+
+### `originalmessage` is account-scoped and types its id differently
+
+`GET /accounts/{accountId}/messages/{messageId}/originalmessage` takes **no
+`folderId`**, unlike every other per-message endpoint.
+
+The response is JSON — `data.content` holds the entire RFC 822 source as one
+string — and `data.messageId` comes back as an **int**, where every other
+endpoint sends the same id as a string.
+
+Sizes are the reason `get_email_source` parses rather than forwards: three
+ordinary messages measured 28,469, 41,142, and 82,201 characters of source.
+
+### Nothing in the attachment APIs tells you an attachment's type
+
+Two endpoints are involved and neither carries a media type.
+
+`.../messages/{id}/attachmentinfo` returns exactly three fields per
+attachment — `attachmentId`, `attachmentName`, `attachmentSize`. Verified
+across 180 real messages: no fourth key ever appeared.
+
+`.../messages/{id}/attachments/{attachmentId}` returns the content as a raw
+byte stream, and its `Content-Type` is **always**
+`application/octet-stream;charset=UTF-8`. Verified against a gzip, a PNG, a
+GIF, a PDF, and an `.ics` — all five reported the same header, and the
+`charset=UTF-8` on a PNG is meaningless. The header is not a type signal.
+
+So the filename extension is the only *hint* available. `get_attachment`
+uses it for a best-effort `media_type` but decides text-vs-binary by
+actually decoding the bytes, since the extension can lie in both directions.
+
+### The attachment filename lives in `Content-Disposition`, oddly formatted
+
+Two things about it. The header is written `attachment; filename = <name>`
+— with spaces around the `=`, which a plain `filename=` split misses. And
+the name is percent-encoded, so `report!.csv` arrives as `report%21.csv`.
+
+Unrelated to the Resource Booking percent-encoding [noted
+below](#percent-encoded-names-were-a-data-entry-artifact-not-an-api-quirk),
+which was bad data rather than transport encoding. This one is real
+encoding and does need decoding.
+
 ---
 
 ## Mail — writing

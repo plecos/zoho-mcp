@@ -5,8 +5,11 @@ bodies, event timestamps) into the compact, LLM-facing shapes used by the
 MCP tools happens here and only here.
 """
 
+import email.header
+import email.parser
 import html
 import json
+import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -86,6 +89,79 @@ MAX_NOTES_LIMIT = 399
 MIN_BOOKMARKS_LIMIT = 1
 MAX_BOOKMARKS_LIMIT = 399
 
+# Attachment content is bounded twice, for two different reasons. The fetch
+# cap keeps a large file from being pulled into the process at all; the text
+# cap keeps a merely-long text file from swallowing a context window. Both
+# are this project's own limits -- Zoho imposes neither.
+MAX_ATTACHMENT_FETCH_BYTES = 5_000_000
+MAX_ATTACHMENT_TEXT_CHARS = 100_000
+
+# An ordinary message's RFC 822 source ran 28,469 characters on a real
+# account, so `raw` is both opt-in and capped.
+MAX_RAW_MESSAGE_CHARS = 100_000
+
+# Headers worth returning by value, mapped to the names the record uses.
+# Everything else is reported by *name* only -- DKIM-Signature is the
+# motivating case: a long base64 blob no reader benefits from, whose
+# absence would still be worth knowing about.
+_INTERESTING_HEADERS = {
+    "from": "from",
+    "to": "to",
+    "cc": "cc",
+    "bcc": "bcc",
+    "reply-to": "reply_to",
+    "subject": "subject",
+    "date": "date",
+    "message-id": "message_id",
+    "in-reply-to": "in_reply_to",
+    "references": "references",
+    "return-path": "return_path",
+    "delivered-to": "delivered_to",
+    "list-id": "list_id",
+    "list-unsubscribe": "list_unsubscribe",
+    "authentication-results": "authentication_results",
+    "received-spf": "received_spf",
+    "dkim-filter": "dkim_filter",
+    "content-type": "content_type",
+    "precedence": "precedence",
+    "auto-submitted": "auto_submitted",
+    "x-mailer": "x_mailer",
+    "user-agent": "user_agent",
+}
+
+# Zoho gives us nothing to type an attachment with: `attachmentinfo` returns
+# only id/name/size, and the download response is always
+# `application/octet-stream` even for a gzip (both confirmed live -- see
+# docs/zoho-api-notes.md). So the extension is the only hint available.
+# Hand-maintained rather than `mimetypes.guess_type`, whose answers vary by
+# platform because it reads the Windows registry.
+_MEDIA_TYPES_BY_EXTENSION = {
+    "txt": "text/plain",
+    "log": "text/plain",
+    "csv": "text/csv",
+    "md": "text/markdown",
+    "json": "application/json",
+    "xml": "application/xml",
+    "html": "text/html",
+    "htm": "text/html",
+    "ics": "text/calendar",
+    "vcf": "text/vcard",
+    "eml": "message/rfc822",
+    "pdf": "application/pdf",
+    "png": "image/png",
+    "gif": "image/gif",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "svg": "image/svg+xml",
+    "gz": "application/gzip",
+    "zip": "application/zip",
+    "doc": "application/msword",
+    "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
 # Zoho's own view names for the two cross-group task queries, mapped from
 # readable argument values. Confirmed live that only these two exist --
 # "assignedbyme" 400s with PATTERN_NOT_MATCHED.
@@ -96,6 +172,11 @@ _TASK_VIEWS = {"assigned_to_me": "assignedtome", "created_by_me": "createdbyme"}
 # against the real API), so this can never accidentally catch a user's own
 # folder, only Zoho's built-in non-received ones.
 EXCLUDED_FOLDER_TYPES = frozenset({"Sent", "Drafts", "Templates"})
+
+# What Zoho puts in an address field that has no addresses -- literal text,
+# not an empty string or an absent key. Seen on 116 of 120 real messages'
+# ccAddress.
+ZOHO_EMPTY_ADDRESS_SENTINEL = "Not Provided"
 
 # Characters with no legitimate visible meaning, used by some marketing
 # emails purely to pad preview text. Deliberately excludes ZWJ (U+200D) and
@@ -171,24 +252,74 @@ def _today_in_timezone(tz_name: str) -> date:
     return datetime.now(ZoneInfo(tz_name)).date()
 
 
+def _split_address_field(value: object) -> list[str]:
+    """Turn one of Zoho's address strings into a list of addresses.
+
+    Three quirks in one field. The value is HTML-entity-encoded, so an
+    address arrives as ``&lt;a@b.com&gt;``. Multiple addresses are
+    comma-joined. And an empty one is the literal text ``"Not Provided"``
+    rather than an empty string or an absent key -- passing that through
+    would have the model report a recipient by that name.
+
+    Bare ``<addr>`` wrappers are unwrapped; a display name plus address is
+    left intact, since dropping either half loses information.
+    """
+    if not isinstance(value, str):
+        return []
+    decoded = html.unescape(value).strip()
+    if not decoded or decoded == ZOHO_EMPTY_ADDRESS_SENTINEL:
+        return []
+    addresses = []
+    for part in decoded.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part.startswith("<") and part.endswith(">"):
+            part = part[1:-1].strip()
+        addresses.append(part)
+    return addresses
+
+
 def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
     """Normalize one entry from Zoho Mail's List Emails ``data`` array.
 
-    Returns the compact shape the LLM sees: id, from, subject, date, snippet.
-    ``date`` is in ``mailbox_timezone``, not UTC -- see ``_epoch_ms_to_iso8601``.
+    Returns the compact shape the LLM sees. ``date`` is in
+    ``mailbox_timezone``, not UTC -- see ``_epoch_ms_to_iso8601``.
     ``subject``/``snippet`` are HTML-entity-decoded -- confirmed live that
     Zoho's search API frequently returns these with literal undecoded
     entities (e.g. "&#39;" instead of an apostrophe, seen in ~10% of
     subjects and ~36% of snippets in a real sample), not human-readable text.
+
+    Zoho sends 21 keys per message and this keeps 13. The omissions are
+    deliberate and documented in docs/zoho-api-notes.md: ``sentDateInGMT``
+    is wrong, and ``flagid``/``priority``/``threadId``/``threadCount``
+    could not be distinguished from a real mailbox's data.
+
+    Every field beyond the core degrades to a default rather than raising,
+    because Zoho's key set genuinely varies per message -- ``toAddress``
+    was absent on one of 60 real messages and ``labelId`` on 27 of them.
+    The core fields still raise, since a record without them is unusable.
 
     Raises:
         ZohoAPIError: if ``raw`` is missing an expected field or a field has
             an unexpected type/value (e.g. a non-numeric date).
     """
     try:
+        sender = html.unescape(str(raw.get("sender") or ""))
+        from_address = raw["fromAddress"]
+        try:
+            size_bytes: int | None = int(raw["size"])
+        except (KeyError, TypeError, ValueError):
+            size_bytes = None
+        label_ids = raw.get("labelId") or []
         return {
             "id": raw["messageId"],
-            "from": raw["fromAddress"],
+            "from": from_address,
+            # `sender` is a display name, not an address: on 25 of 60 real
+            # messages it had no "@" at all while fromAddress did, and on
+            # the other 35 it simply repeated fromAddress. Blank rather
+            # than duplicated, so a value here always means something.
+            "from_name": "" if sender == from_address else sender,
             "subject": html.unescape(raw["subject"]),
             # receivedTime, not sentDateInGMT: despite its name, sentDateInGMT
             # is not reliably GMT -- observed consistently off by exactly the
@@ -201,6 +332,15 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
             # status="0"; already-read mail showed "1"); any other/unknown
             # value defaults to unread, the safer failure mode.
             "read": raw["status"] == "1",
+            "to": _split_address_field(raw.get("toAddress")),
+            "cc": _split_address_field(raw.get("ccAddress")),
+            "has_attachment": raw.get("hasAttachment") == "1",
+            "size_bytes": size_bytes,
+            # Wrapped rather than iterated if it ever arrives as a bare
+            # string: splitting one into characters is the worst outcome.
+            "label_ids": (
+                list(label_ids) if isinstance(label_ids, list) else [label_ids]
+            ),
         }
     except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed email summary from Zoho: {e}") from e
@@ -318,6 +458,175 @@ def normalize_attachment(raw: dict) -> dict:
         }
     except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed attachment from Zoho: {e}") from e
+
+
+def _media_type_for(name: str) -> str:
+    """Best-effort media type from a filename, or ``application/octet-stream``.
+
+    A *hint* only -- see ``normalize_attachment_content``, which decides
+    text-vs-binary from the bytes rather than from this.
+    """
+    _, _, extension = name.rpartition(".")
+    return _MEDIA_TYPES_BY_EXTENSION.get(extension.lower(), "application/octet-stream")
+
+
+def normalize_attachment_content(
+    attachment_id: str, name: str, size_bytes: int, data: bytes | None
+) -> dict:
+    """Turn raw attachment bytes into a JSON record an LLM can act on.
+
+    The bytes themselves are never returned. Content reaches the caller only
+    as ``text``, and only when it actually decodes as UTF-8 -- otherwise the
+    record says what the attachment is and why there's no text, which is
+    something a model can reason about, unlike a blob or a bare failure.
+
+    ``is_text`` is decided by decoding, not by the extension: a ``.csv``
+    that isn't UTF-8 would otherwise hand the model mojibake, and a ``.gz``
+    that happens to be plain text would be hidden for no reason.
+
+    Args:
+        attachment_id: the attachment's Zoho id, echoed back.
+        name: the filename, used for ``media_type`` only.
+        size_bytes: the attachment's size on Zoho's side.
+        data: the fetched bytes, or ``None`` if it was too large to fetch.
+
+    Returns:
+        ``{"id", "name", "size_bytes", "media_type", "is_text", "text",
+        "truncated", "note"}``. ``text`` is ``None`` unless ``is_text``;
+        ``note`` explains why whenever ``text`` is absent or truncated, and
+        is ``""`` when the full content is present.
+    """
+    record = {
+        "id": attachment_id,
+        "name": name,
+        "size_bytes": size_bytes,
+        "media_type": _media_type_for(name),
+        "is_text": False,
+        "text": None,
+        "truncated": False,
+        "note": "",
+    }
+
+    if data is None:
+        record["note"] = (
+            f"Not fetched: {size_bytes} bytes exceeds the "
+            f"{MAX_ATTACHMENT_FETCH_BYTES}-byte limit for reading attachment "
+            f"content. Its metadata is above."
+        )
+        return record
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    # A NUL decodes cleanly but means the payload isn't text; passing it
+    # through would put control characters into the context window.
+    if text is None or "\x00" in text:
+        record["note"] = (
+            f"Content is not text ({record['media_type']}), so it isn't "
+            f"included. Only UTF-8 decodable attachments are returned as text."
+        )
+        return record
+
+    record["is_text"] = True
+    if len(text) > MAX_ATTACHMENT_TEXT_CHARS:
+        record["text"] = text[:MAX_ATTACHMENT_TEXT_CHARS]
+        record["truncated"] = True
+        record["note"] = (
+            f"Content was truncated to the first {MAX_ATTACHMENT_TEXT_CHARS} "
+            f"characters of {len(text)}."
+        )
+    else:
+        record["text"] = text
+    return record
+
+
+def _decoded_header_value(value: object) -> str:
+    """Render one header value as readable text, decoding RFC 2047 if needed.
+
+    Subjects and display names arrive as ``=?utf-8?B?...?=`` often enough
+    that leaving them encoded would push base64 decoding onto the model --
+    the same class of delegated correctness as returning UTC timestamps.
+    Falls back to ``str`` on anything ``email.header`` can't handle, since
+    a mangled header is still worth showing.
+    """
+    try:
+        return str(email.header.make_header(email.header.decode_header(str(value))))
+    except MALFORMED_DATA_ERRORS:
+        return str(value)
+
+
+def normalize_email_source(
+    message_id: str, content: object, *, include_raw: bool
+) -> dict:
+    """Parse an RFC 822 message source into a JSON record.
+
+    Zoho's ``originalmessage`` endpoint returns the entire source as one
+    string. That's the right thing for a mail client and the wrong thing
+    for a tool result, so it's parsed here: the headers worth reading come
+    back by value, the ``Received`` chain as an ordered list, and every
+    other header by name so nothing is hidden without being mentioned.
+
+    Args:
+        message_id: the message's id, echoed back.
+        content: the raw source from Zoho.
+        include_raw: also return the source text itself, capped at
+            ``MAX_RAW_MESSAGE_CHARS``. Off by default because a single
+            ordinary message ran ~28,000 characters.
+
+    Returns:
+        ``{"id", "headers", "received_chain", "other_header_names",
+        "size_chars", "raw", "raw_truncated"}``. ``headers`` omits absent
+        headers rather than setting them to null, and joins a repeated
+        header's values with a newline.
+
+    Raises:
+        ZohoAPIError: if ``content`` isn't parseable message source.
+    """
+    if not isinstance(content, str):
+        raise ZohoAPIError(
+            f"Malformed original message from Zoho: expected source text, "
+            f"got {type(content).__name__}"
+        )
+    try:
+        parsed = email.parser.HeaderParser().parsestr(content)
+        raw_headers = parsed.items()
+    except MALFORMED_DATA_ERRORS as e:
+        raise ZohoAPIError(f"Malformed original message from Zoho: {e}") from e
+
+    headers: dict[str, str] = {}
+    received_chain: list[str] = []
+    other_names: list[str] = []
+    for name, value in raw_headers:
+        lowered = name.lower()
+        if lowered == "received":
+            received_chain.append(" ".join(str(value).split()))
+            continue
+        key = _INTERESTING_HEADERS.get(lowered)
+        if key is None:
+            if name not in other_names:
+                other_names.append(name)
+            continue
+        decoded = _decoded_header_value(value)
+        # Authentication-Results legitimately repeats, once per relay --
+        # keeping only the first would drop the verdict that matters.
+        headers[key] = f"{headers[key]}\n{decoded}" if key in headers else decoded
+
+    raw: str | None = None
+    raw_truncated = False
+    if include_raw:
+        raw = content[:MAX_RAW_MESSAGE_CHARS]
+        raw_truncated = len(content) > MAX_RAW_MESSAGE_CHARS
+
+    return {
+        "id": message_id,
+        "headers": headers,
+        "received_chain": received_chain,
+        "other_header_names": other_names,
+        "size_chars": len(content),
+        "raw": raw,
+        "raw_truncated": raw_truncated,
+    }
 
 
 def normalize_calendar(raw: dict) -> dict:
@@ -723,6 +1032,71 @@ async def zoho_authenticated_get(
     )
 
 
+async def zoho_authenticated_get_bytes(
+    http_client: httpx.AsyncClient,
+    url: str,
+    access_token: str,
+    max_bytes: int,
+) -> tuple[bytes | None, int, str]:
+    """GET a Zoho endpoint that answers with a byte stream rather than JSON.
+
+    Only attachment content works this way; every other Zoho call goes
+    through ``zoho_authenticated_get``. Streamed rather than buffered so an
+    oversized attachment is refused on its ``Content-Length`` without ever
+    being read into memory -- the caller gets ``None`` for the body and the
+    declared size, and decides what to tell the model.
+
+    Returns:
+        ``(data, size_bytes, filename)``. ``data`` is ``None`` when the
+        response declares more than ``max_bytes``. ``filename`` comes from
+        ``Content-Disposition`` and is ``""`` when absent.
+
+    Raises:
+        ZohoAPIError: if the request fails or Zoho returns a non-2xx response.
+    """
+    headers = {
+        "Authorization": f"Zoho-oauthtoken {access_token}",
+        "Accept": "application/octet-stream",
+    }
+    try:
+        async with http_client.stream("GET", url, headers=headers) as response:
+            if response.status_code >= 400:
+                await response.aread()
+                response.raise_for_status()
+            filename = _filename_from_content_disposition(
+                response.headers.get("content-disposition", "")
+            )
+            declared = response.headers.get("content-length")
+            if declared is not None and int(declared) > max_bytes:
+                return None, int(declared), filename
+            data = await response.aread()
+    except httpx.HTTPStatusError as e:
+        raise ZohoAPIError(
+            f"Zoho API request to {url} failed with "
+            f"{e.response.status_code}: {e.response.text}"
+        ) from e
+    except httpx.HTTPError as e:
+        raise ZohoAPIError(f"Zoho API request to {url} failed: {e}") from e
+    except MALFORMED_DATA_ERRORS as e:
+        raise ZohoAPIError(f"Malformed attachment response from Zoho: {e}") from e
+    return data, len(data), filename
+
+
+def _filename_from_content_disposition(header: str) -> str:
+    """Pull the filename out of a ``Content-Disposition`` header.
+
+    Zoho writes it as ``attachment; filename = <name>`` -- note the spaces
+    around the ``=``, which the usual ``filename=`` split misses -- and
+    percent-encodes the name, so ``report!.csv`` arrives as
+    ``report%21.csv``.
+    """
+    for part in header.split(";"):
+        key, sep, value = part.partition("=")
+        if sep and key.strip().lower() == "filename":
+            return urllib.parse.unquote(value.strip().strip('"'))
+    return ""
+
+
 async def zoho_authenticated_post(
     http_client: httpx.AsyncClient,
     url: str,
@@ -801,7 +1175,10 @@ async def _get_default_mail_account(
 async def get_primary_account_id(
     token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
 ) -> str:
-    """Look up the user's default Zoho Mail account id (for the ``ZOHO_ACCOUNT_ID`` setting).
+    """Look up the user's default Zoho Mail account id.
+
+    Used by ``ZohoClient._get_account_id`` when ``ZOHO_ACCOUNT_ID`` isn't
+    configured, and by ``zoho-mcp-setup`` to print the value.
 
     Raises:
         ZohoAPIError: if the request fails, the response is malformed, or no
@@ -895,7 +1272,10 @@ async def get_folder_types(
 async def get_default_calendar_uid(
     token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
 ) -> str:
-    """Look up the user's default calendar uid (for the ``ZOHO_CALENDAR_UID`` setting).
+    """Look up the user's default calendar uid.
+
+    Used by ``ZohoClient._get_calendar_uid`` when ``ZOHO_CALENDAR_UID``
+    isn't configured, and by ``zoho-mcp-setup`` to print the value.
 
     Raises:
         ZohoAPIError: if the request fails, the response is malformed, or no
@@ -925,15 +1305,19 @@ class ZohoClient:
         self,
         token_manager: ZohoTokenManager,
         http_client: httpx.AsyncClient,
-        account_id: str,
-        calendar_uid: str,
+        account_id: str | None = None,
+        calendar_uid: str | None = None,
         strip_invisible_chars: bool = False,
         allow_auto_send: bool = False,
     ) -> None:
         self._token_manager = token_manager
         self._http_client = http_client
-        self._account_id = account_id
-        self._calendar_uid = calendar_uid
+        # Both are optional: they're derivable from the same endpoints setup
+        # calls, so an operator who never copied them into .env gets them
+        # looked up on first use instead of a KeyError. Supplying them skips
+        # the lookup -- see ``_get_account_id``/``_get_calendar_uid``.
+        self._account_id_cache = account_id
+        self._calendar_uid_cache = calendar_uid
         self._strip_invisible_chars = strip_invisible_chars
         # Gates send_email only. Drafting is never gated. Enforced here, in
         # the layer that actually issues the HTTP call, so no higher-level
@@ -974,6 +1358,33 @@ class ZohoClient:
         token = await self._token_manager.get_access_token()
         return await zoho_authenticated_delete(self._http_client, url, token, params)
 
+    async def _get_account_id(self) -> str:
+        """Return the mail account id, looked up once per client if unconfigured.
+
+        Unlike ``_get_mailbox_timezone``, this is a stable identifier, so
+        caching it forever would be safe -- it's fetched lazily rather than
+        eagerly only so a client that never touches Mail (calendar-only
+        usage) doesn't pay for a lookup it won't use.
+        """
+        if self._account_id_cache is None:
+            self._account_id_cache = await get_primary_account_id(
+                self._token_manager, self._http_client
+            )
+        return self._account_id_cache
+
+    async def _get_calendar_uid(self) -> str:
+        """Return the default calendar's uid, looked up once per client if unconfigured.
+
+        Every call site reaches this as ``calendar_id or await
+        self._get_calendar_uid()``, so an explicitly targeted calendar
+        short-circuits the lookup entirely.
+        """
+        if self._calendar_uid_cache is None:
+            self._calendar_uid_cache = await get_default_calendar_uid(
+                self._token_manager, self._http_client
+            )
+        return self._calendar_uid_cache
+
     async def _get_mailbox_timezone(self) -> str:
         """Return the mailbox's timezone, fetched once per client and cached.
 
@@ -1000,7 +1411,7 @@ class ZohoClient:
         """
         if self._excluded_folder_ids_cache is None:
             folder_types = await get_folder_types(
-                self._token_manager, self._http_client, self._account_id
+                self._token_manager, self._http_client, await self._get_account_id()
             )
             self._excluded_folder_ids_cache = frozenset(
                 folder_id
@@ -1054,8 +1465,9 @@ class ZohoClient:
             date_filter = f"fromDate:{cutoff.strftime('%d-%b-%Y')}"
             search_key = f"{search_key}::{date_filter}" if search_key else date_filter
 
+        account_id = await self._get_account_id()
         payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/search",
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages/search",
             params={"searchKey": search_key, "limit": limit},
         )
         raw_items = payload.get("data", [])
@@ -1125,8 +1537,9 @@ class ZohoClient:
         if folder_id is not None:
             params["folderId"] = folder_id
 
+        account_id = await self._get_account_id()
         payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/view",
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages/view",
             params=params,
         )
         raw_items = payload.get("data", [])
@@ -1196,8 +1609,9 @@ class ZohoClient:
         if bcc_addresses:
             body["bccAddress"] = ",".join(bcc_addresses)
 
+        account_id = await self._get_account_id()
         payload = await self._post(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages",
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages",
             json_body=body,
         )
         return {"id": (payload.get("data") or {}).get("messageId", "")}
@@ -1293,8 +1707,9 @@ class ZohoClient:
             "action": "replyall" if reply_all else "reply",
             "mode": "draft",  # never remove: without it Zoho sends the reply
         }
+        account_id = await self._get_account_id()
         payload = await self._post(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/{message_id}",
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages/{message_id}",
             json_body=body,
         )
         return {"id": (payload.get("data") or {}).get("messageId", "")}
@@ -1305,8 +1720,9 @@ class ZohoClient:
         Raises:
             ZohoAPIError: if the Zoho Mail API rejects or fails the request.
         """
+        account_id = await self._get_account_id()
         payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}"
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}"
             f"/folders/{folder_id}/messages/{message_id}/content"
         )
         try:
@@ -1320,18 +1736,93 @@ class ZohoClient:
     async def list_attachments(self, message_id: str, folder_id: str) -> list[dict]:
         """List attachment metadata (name, size) for one email.
 
-        Metadata only -- fetching/parsing actual attachment content is
-        out of scope, see ``normalize_attachment``.
+        Metadata only -- ``get_attachment`` reads one attachment's content.
 
         Raises:
             ZohoAPIError: if the Zoho Mail API rejects or fails the request.
         """
+        account_id = await self._get_account_id()
         payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}"
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}"
             f"/folders/{folder_id}/messages/{message_id}/attachmentinfo"
         )
         attachments = payload.get("data", {}).get("attachments", [])
         return [normalize_attachment(a) for a in attachments]
+
+    async def get_email_source(
+        self, message_id: str, include_raw: bool = False
+    ) -> dict:
+        """Fetch and parse one message's RFC 822 source.
+
+        Note the endpoint takes no ``folderId``, unlike every other
+        per-message call -- it's account-scoped only.
+
+        Args:
+            message_id: an email's ``id`` from ``search_emails``/``list_emails``.
+            include_raw: also return the source text, capped. Off by
+                default; see ``normalize_email_source``.
+
+        Returns:
+            The record described by ``normalize_email_source``.
+
+        Raises:
+            ZohoAPIError: if ``message_id`` is blank, the response has no
+                source in it, or the Zoho Mail API rejects the request.
+        """
+        if not message_id.strip():
+            raise ZohoAPIError("message_id must not be blank")
+        account_id = await self._get_account_id()
+        payload = await self._get(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}"
+            f"/messages/{message_id}/originalmessage"
+        )
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise ZohoAPIError(
+                "Malformed original message from Zoho: response has no data object"
+            )
+        return normalize_email_source(
+            message_id, data.get("content"), include_raw=include_raw
+        )
+
+    async def get_attachment(
+        self, message_id: str, folder_id: str, attachment_id: str
+    ) -> dict:
+        """Read one attachment's content, as a JSON record rather than a file.
+
+        Zoho answers this endpoint with a raw byte stream, but a tool result
+        goes into a context window, not onto a disk -- so the bytes stop
+        here and the caller gets a description plus, when the content is
+        UTF-8 text, the text. See ``normalize_attachment_content`` for how
+        text-vs-binary is decided and why the extension doesn't decide it.
+
+        Args:
+            message_id: an email's ``id`` from ``search_emails``/``list_emails``.
+            folder_id: that same email's ``folder_id``.
+            attachment_id: an ``id`` from ``list_attachments``.
+
+        Returns:
+            The record described by ``normalize_attachment_content``.
+
+        Raises:
+            ZohoAPIError: if ``attachment_id`` is blank, or the Zoho Mail
+                API rejects or fails the request.
+        """
+        if not attachment_id.strip():
+            raise ZohoAPIError("attachment_id must not be blank")
+        account_id = await self._get_account_id()
+        token = await self._token_manager.get_access_token()
+        data, size_bytes, filename = await zoho_authenticated_get_bytes(
+            self._http_client,
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}"
+            f"/folders/{folder_id}/messages/{message_id}"
+            f"/attachments/{attachment_id}",
+            token,
+            MAX_ATTACHMENT_FETCH_BYTES,
+        )
+        return normalize_attachment_content(
+            attachment_id, filename or attachment_id, size_bytes, data
+        )
 
     async def _update_message(
         self, mode: str, message_ids: list[str], **extra: object
@@ -1353,8 +1844,9 @@ class ZohoClient:
         ids = [message_id.strip() for message_id in message_ids if message_id.strip()]
         if not ids:
             raise ZohoAPIError("message_ids must contain at least one message id")
+        account_id = await self._get_account_id()
         await self._put(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/updatemessage",
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/updatemessage",
             json_body={"mode": mode, "messageId": ids, **extra},
         )
 
@@ -1421,9 +1913,8 @@ class ZohoClient:
         Raises:
             ZohoAPIError: if the Zoho Mail API rejects or fails the request.
         """
-        payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/folders"
-        )
+        account_id = await self._get_account_id()
+        payload = await self._get(f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/folders")
         return [normalize_folder(f) for f in payload.get("data", [])]
 
     async def list_labels(self) -> list[dict]:
@@ -1432,9 +1923,8 @@ class ZohoClient:
         Raises:
             ZohoAPIError: if the Zoho Mail API rejects or fails the request.
         """
-        payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/labels"
-        )
+        account_id = await self._get_account_id()
+        payload = await self._get(f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/labels")
         return [normalize_label(item) for item in payload.get("data", [])]
 
     async def list_signatures(self) -> list[dict]:
@@ -1453,7 +1943,7 @@ class ZohoClient:
 
         Args:
             calendar_id: which calendar to query -- defaults to the
-                configured ``ZOHO_CALENDAR_UID`` if omitted. Use
+                account's default calendar if omitted. Use
                 ``list_calendars`` to see what else is available.
 
         Raises:
@@ -1479,8 +1969,9 @@ class ZohoClient:
         # See search_emails: returned in the mailbox's own local offset, not
         # UTC, so the LLM never has to convert a timezone it doesn't know.
         mailbox_timezone = await self._get_mailbox_timezone()
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         payload = await self._get(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events",
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events",
             params={"range": range_param},
         )
         return [
@@ -1493,7 +1984,7 @@ class ZohoClient:
 
         Args:
             calendar_id: which calendar the event belongs to -- defaults
-                to the configured ``ZOHO_CALENDAR_UID`` if omitted.
+                to the account's default calendar if omitted.
 
         See ``normalize_event_detail`` for why this deliberately omits
         start/end -- get the occurrence's actual date/time from
@@ -1503,8 +1994,9 @@ class ZohoClient:
             ZohoAPIError: if no event is found for ``uid``, or the
                 Calendar API rejects or fails the request.
         """
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         payload = await self._get(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}"
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events/{uid}"
         )
         events = payload.get("events", [])
         if not events:
@@ -1617,8 +2109,9 @@ class ZohoClient:
             eventdata["attendees"] = [
                 {"email": email, "status": "NEEDS-ACTION"} for email in attendees
             ]
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         payload = await self._post(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events",
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events",
             params={"eventdata": json.dumps(eventdata)},
         )
         events = payload.get("events", [])
@@ -1638,8 +2131,9 @@ class ZohoClient:
             ZohoAPIError: if no event is found for ``uid``, or the
                 Calendar API rejects or fails the request.
         """
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         payload = await self._get(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}"
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events/{uid}"
         )
         events = payload.get("events", [])
         if not events:
@@ -1735,8 +2229,9 @@ class ZohoClient:
                 {"email": email, "status": "NEEDS-ACTION"} for email in attendees
             ]
 
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         payload = await self._put(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}",
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events/{uid}",
             params={"eventdata": json.dumps(eventdata)},
         )
         events = payload.get("events", [])
@@ -1758,8 +2253,9 @@ class ZohoClient:
                 Calendar API rejects or fails the request.
         """
         raw = await self._get_raw_event(uid, calendar_id)
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         await self._delete(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}",
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events/{uid}",
             params={"eventdata": json.dumps({"etag": raw["etag"]})},
         )
 

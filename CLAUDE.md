@@ -16,7 +16,14 @@ Nothing monolithic — each module has exactly one job:
 - `zoho/contacts_client.py` — the Zoho Contacts API and its normalization. Separate from `client.py` despite an identical pattern, because Contacts genuinely is a distinct product (own base URL, own scope family). The two share `zoho_authenticated_get` and `ZohoAPIError` rather than each rolling their own.
 - `zoho/auth.py` — OAuth flow, token refresh, and token storage. No knowledge of Mail/Calendar/Contacts payloads.
 - `tools/*.py` — thin MCP tool wrappers that call into a client and shape output for the LLM. No HTTP, no token logic; the client is injected, never constructed here. `tools/groups.py` is its own module because groups span Tasks/Notes/Bookmarks and belong to none of them.
+- `tools/auth.py` — the `authenticate` tool: composes `zoho/auth.py`'s consent flow so an unauthorized server can be authorized from inside a conversation. Needed because an MCPB bundle has a single entry point, which puts `zoho-mcp-setup` out of reach. Its browser round trip is injectable so everything around it is testable.
 - `server.py` — FastMCP instantiation and tool registration only. No business logic.
+
+## Put the gate where the traffic passes
+
+Twice now the right place for a check has been the one chokepoint rather than the callers. `send_email`'s gate lives in `ZohoClient`, the layer that issues the request. The unauthenticated-server error lives in `ZohoTokenManager.get_access_token`, which all 40 tools reach Zoho through — so one message covers every tool, no tool can route around it, and adding the 41st needs no thought about it.
+
+When a rule has to hold across many call sites, find the single line they all execute. If there isn't one, that's usually the finding.
 
 If a file starts accumulating more than one of these responsibilities, split it before adding to it. If a function is doing "fetch + parse + format + handle errors," break it apart.
 
@@ -85,9 +92,16 @@ Two design flaws in this project were invisible to a passing test suite and obvi
 
 Neither was a coverage gap. Every test passed, each exercising a single id. Periodically drive the tools at realistic scale and eyeball the real output.
 
+Installing the MCPB bundle in a real Claude Desktop added two more, both invisible to any test:
+
+- **The bundle installs disabled** when it has required config, and filling the config in doesn't enable it. The symptom isn't an error — the server never starts, so its tools simply aren't there and mail questions get answered by some other connector.
+- **Two clients meant two server processes.** `authenticate` in one wrote the token to the credential store and updated *its own* in-memory manager; the sibling, started unauthenticated seconds earlier, refused every call until restarted. `get_access_token` now re-reads the store before giving up. Anything cached in a process is per-process — when a value can be changed by something outside that process, decide what re-reads it and when.
+
 ## Config vs. live state
 
 Before writing a looked-up value to `.env`, ask whether it's a **stable identifier** (account id, calendar uid — essentially permanent) or a **mutable setting** (timezone, primary address, any preference a person can change). Only the former belongs in static config.
+
+"Belongs in static config" isn't the same as "required there". `ZOHO_ACCOUNT_ID` and `ZOHO_CALENDAR_UID` are both stable identifiers, so caching them in `.env` is safe — but requiring them made a fresh install fail with a `KeyError` until the user hand-copied two values out of setup's output. `ZohoClient` now discovers each one on first use when it's absent, so config is an optimization rather than a prerequisite. Reach for that shape whenever a required setting is something the code could just as well look up.
 
 Caught before shipping: `days_back` originally stored the mailbox timezone in `ZOHO_MAILBOX_TIMEZONE` at setup time. That goes stale the moment the user changes their Zoho timezone, and nothing signals the drift — it would silently misresolve "today" again, the exact bug the feature existed to fix. `ZohoClient` now fetches the timezone (and the outgoing address) live, cached in memory for the life of the instance. Staleness is bounded to "since this process started" rather than "since setup was last run", at the cost of one API call per client instance rather than per call.
 

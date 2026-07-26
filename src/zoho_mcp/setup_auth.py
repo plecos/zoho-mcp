@@ -8,69 +8,26 @@ to assert once the tested pieces are wired together, only real network I/O.
 """
 
 import asyncio
-import http.server
+import json
 import os
-import urllib.parse
+import sys
 import webbrowser
+from pathlib import Path
 
 import httpx
 
 from zoho_mcp.config import load_env
 from zoho_mcp.zoho.auth import (
+    DEFAULT_CALLBACK_PORT,
+    SCOPES,
     ZohoTokenManager,
     build_authorization_url,
     exchange_code_for_tokens,
     extract_authorization_code,
     store_refresh_token,
+    wait_for_callback,
 )
 from zoho_mcp.zoho.client import get_default_calendar_uid, get_primary_account_id
-
-SCOPES = [
-    "ZohoMail.messages.READ",
-    "ZohoMail.messages.ALL",  # write access: mark_as_read/unread, move_email, add/remove_label
-    "ZohoMail.accounts.READ",  # needed once, to look up the mail account id
-    "ZohoMail.folders.READ",  # used at runtime to filter out Sent/Drafts by folder type
-    "ZohoCalendar.event.READ",
-    "ZohoCalendar.event.ALL",  # write access: create_event/update_event/delete_event
-    "ZohoCalendar.calendar.READ",  # setup: calendar uid lookup; runtime: list_calendars
-    "zohocontacts.contactapi.READ",
-    "ZohoMail.tasks.READ",
-    "ZohoMail.tasks.CREATE",  # write access: create_task
-    "ZohoMail.notes.READ",
-    "ZohoMail.notes.CREATE",  # write access: create_note
-    "ZohoMail.links.READ",
-    "ZohoMail.links.CREATE",  # write access: create_bookmark
-    "ZohoCalendar.resources.READ",
-    "ZohoCalendar.branches.READ",
-    "ZohoMail.tags.READ",
-    "ZohoCalendar.freebusy.READ",
-]
-DEFAULT_CALLBACK_PORT = 8765
-
-
-class _CallbackHandler(http.server.BaseHTTPRequestHandler):
-    """Captures the OAuth redirect's query string, then serves a plain notice."""
-
-    def do_GET(self) -> None:  # noqa: N802 (http.server's required method name)
-        self.server.callback_query = urllib.parse.parse_qs(  # type: ignore[attr-defined]
-            urllib.parse.urlparse(self.path).query
-        )
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(
-            b"<html><body>Authorized. You can close this tab.</body></html>"
-        )
-
-    def log_message(self, format: str, *args: object) -> None:
-        pass  # suppress http.server's default request logging to stderr
-
-
-def _wait_for_callback(port: int) -> dict[str, list[str]]:
-    """Block until exactly one request hits the local callback, then return its query."""
-    server = http.server.HTTPServer(("localhost", port), _CallbackHandler)
-    server.handle_request()
-    return server.callback_query  # type: ignore[attr-defined]
 
 
 async def _exchange_store_and_lookup(
@@ -102,6 +59,31 @@ async def _exchange_store_and_lookup(
     return account_id, calendar_uid
 
 
+def zoho_mcp_executable() -> Path:
+    """Absolute path to this install's ``zoho-mcp`` entry point.
+
+    Derived from the running interpreter rather than ``PATH``: an MCP
+    client launches the server with its own environment, so a bare
+    ``zoho-mcp`` that happens to resolve in the developer's shell won't
+    resolve there.
+    """
+    name = "zoho-mcp.exe" if os.name == "nt" else "zoho-mcp"
+    return Path(sys.executable).parent / name
+
+
+def build_client_config_snippet(executable: Path) -> str:
+    """Render the MCP-client config entry for this install, ready to paste.
+
+    ``json.dumps`` rather than an f-string because Windows paths are full
+    of backslashes -- hand-formatting one produces a snippet the client
+    can't parse.
+    """
+    return json.dumps(
+        {"mcpServers": {"zoho-mcp": {"command": str(executable), "args": []}}},
+        indent=2,
+    )
+
+
 def main() -> None:
     load_env()
     client_id = os.environ["ZOHO_CLIENT_ID"]
@@ -116,7 +98,7 @@ def main() -> None:
     webbrowser.open(auth_url)
 
     print(f"Waiting for the OAuth redirect on {redirect_uri} ...")
-    query = _wait_for_callback(port)
+    query = wait_for_callback(port)
     code = extract_authorization_code(query)
 
     account_id, calendar_uid = asyncio.run(
@@ -127,11 +109,13 @@ def main() -> None:
             redirect_uri=redirect_uri,
         )
     )
-    print("Zoho refresh token stored.\n")
-    print("Add these to your .env:")
+    print("Zoho refresh token stored. Setup is complete.\n")
+    print("Point your MCP client at this server by adding:\n")
+    print(build_client_config_snippet(zoho_mcp_executable()))
+    print("\nOptional -- the server looks both of these up on startup if")
+    print("they're absent, so adding them to .env only saves two API calls:")
     print(f"ZOHO_ACCOUNT_ID={account_id}")
-    print(f"ZOHO_CALENDAR_UID={calendar_uid}\n")
-    print("Then run `uv run zoho-mcp`.")
+    print(f"ZOHO_CALENDAR_UID={calendar_uid}")
 
 
 if __name__ == "__main__":

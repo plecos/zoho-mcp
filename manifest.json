@@ -1,0 +1,116 @@
+{
+  "manifest_version": "0.4",
+  "name": "zoho-mcp",
+  "display_name": "Zoho Mail, Calendar & Contacts",
+  "version": "0.1.0",
+  "description": "Read and write Zoho Mail, Calendar, Contacts, Tasks, Notes, Bookmarks and Resource Booking. Sending email is off by default.",
+  "long_description": "Exposes a Zoho account as 40 MCP tools, covering Mail, Calendar, Contacts, and Zoho Mail's Tasks, Notes, Bookmarks and Groups, plus Calendar's Resource Booking.\n\nRuns locally over stdio: no listening socket, no hosted endpoint, and no third-party relay. The only outbound calls are to Zoho's own REST APIs.\n\nMail composition is draft-first. `create_draft` and `reply_draft` always work and always save to Drafts; `send_email` refuses before making any network call unless the operator sets `ZOHO_ALLOW_AUTO_SEND=true` in the server's environment. There is no send-a-reply tool at any setting, because replies quote incoming mail and incoming mail is untrusted input.\n\nEvery date and time is returned already converted to the mailbox's own local offset, fetched live rather than stored, so no caller has to get a timezone conversion right.\n\nAfter installing, run the `authenticate` tool once to authorize access. It opens Zoho's own consent page in your browser; the resulting token is stored in your OS credential store, never in this conversation or in a file.",
+  "author": {
+    "name": "Ken Salter",
+    "email": "plecos@thesalters.net",
+    "url": "https://github.com/plecos"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/plecos/zoho-mcp.git"
+  },
+  "homepage": "https://github.com/plecos/zoho-mcp",
+  "documentation": "https://github.com/plecos/zoho-mcp/blob/main/README.md",
+  "support": "https://github.com/plecos/zoho-mcp/issues",
+  "license": "Apache-2.0",
+  "keywords": ["zoho", "email", "calendar", "contacts", "productivity"],
+  "server": {
+    "type": "uv",
+    "entry_point": "src/zoho_mcp/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "src/zoho_mcp/server.py"],
+      "env": {
+        "ZOHO_CLIENT_ID": "${user_config.zoho_client_id}",
+        "ZOHO_CLIENT_SECRET": "${user_config.zoho_client_secret}",
+        "ZOHO_OAUTH_CALLBACK_PORT": "${user_config.zoho_oauth_callback_port}",
+        "ZOHO_STRIP_INVISIBLE_CHARS": "${user_config.zoho_strip_invisible_chars}"
+      }
+    }
+  },
+  "user_config": {
+    "zoho_client_id": {
+      "type": "string",
+      "title": "Zoho Client ID",
+      "description": "From the Server-based Application you registered at https://accounts.zoho.com/developerconsole with redirect URI http://localhost:8765/callback",
+      "required": true
+    },
+    "zoho_client_secret": {
+      "type": "string",
+      "title": "Zoho Client Secret",
+      "description": "The client secret for that same Zoho API Console application. Stored in your OS credential store.",
+      "sensitive": true,
+      "required": true
+    },
+    "zoho_oauth_callback_port": {
+      "type": "number",
+      "title": "OAuth Callback Port",
+      "description": "Local port the one-time authorization redirect listens on. Must match the redirect URI you registered. Only used while authorizing.",
+      "default": 8765,
+      "min": 1024,
+      "max": 65535,
+      "required": false
+    },
+    "zoho_strip_invisible_chars": {
+      "type": "boolean",
+      "title": "Strip invisible padding characters from email bodies",
+      "description": "Some marketing email pads its preview text with invisible Unicode. Turn this on to remove it when reading a message. Never touches zero-width joiners, which carry real meaning in emoji and several scripts.",
+      "default": false,
+      "required": false
+    }
+  },
+  "tools_generated": false,
+  "tools": [
+    { "name": "authenticate", "description": "Authorize this server to access your Zoho account" },
+    { "name": "search_emails", "description": "Search email by keyword, sender, or label" },
+    { "name": "list_emails", "description": "List email by read/unread status, with pagination" },
+    { "name": "get_email", "description": "Read one email's plain-text body" },
+    { "name": "get_email_source", "description": "Read one email's parsed RFC 822 headers" },
+    { "name": "list_attachments", "description": "List an email's attachment metadata" },
+    { "name": "get_attachment", "description": "Read one attachment's content" },
+    { "name": "list_folders", "description": "List mail folders" },
+    { "name": "list_labels", "description": "List mail labels" },
+    { "name": "list_signatures", "description": "List configured email signatures" },
+    { "name": "create_draft", "description": "Save a new email as a draft" },
+    { "name": "reply_draft", "description": "Save a reply as a draft" },
+    { "name": "send_email", "description": "Send an email; disabled unless explicitly enabled" },
+    { "name": "mark_as_read", "description": "Mark one or more emails as read" },
+    { "name": "mark_as_unread", "description": "Mark one or more emails as unread" },
+    { "name": "move_email", "description": "Move one or more emails to a folder" },
+    { "name": "add_label", "description": "Apply a label to one or more emails" },
+    { "name": "remove_label", "description": "Remove a label from one or more emails" },
+    { "name": "list_events", "description": "List calendar events in a time range" },
+    { "name": "get_event", "description": "Read one event's organizer, attendees and recurrence" },
+    { "name": "list_calendars", "description": "List accessible calendars" },
+    { "name": "get_freebusy", "description": "Check an address's busy time slots" },
+    { "name": "create_event", "description": "Create a calendar event" },
+    { "name": "update_event", "description": "Update a calendar event" },
+    { "name": "delete_event", "description": "Delete a calendar event" },
+    { "name": "list_tasks", "description": "List Zoho Mail tasks" },
+    { "name": "create_task", "description": "Create a Zoho Mail task" },
+    { "name": "get_task", "description": "Read one task's details" },
+    { "name": "list_notes", "description": "List Zoho Mail notes" },
+    { "name": "create_note", "description": "Create a Zoho Mail note" },
+    { "name": "get_note", "description": "Read one note's details" },
+    { "name": "list_bookmarks", "description": "List Zoho Mail bookmarks" },
+    { "name": "create_bookmark", "description": "Create a Zoho Mail bookmark" },
+    { "name": "get_bookmark", "description": "Read one bookmark's details" },
+    { "name": "list_groups", "description": "List shared groups you belong to" },
+    { "name": "list_branches", "description": "List Resource Booking office branches" },
+    { "name": "list_resources", "description": "List bookable rooms and equipment" },
+    { "name": "search_contacts", "description": "Search contacts by name, email or phone" },
+    { "name": "get_contact", "description": "Read one contact's details" },
+    { "name": "count_contacts", "description": "Count contacts per scope" }
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.12"
+    }
+  }
+}

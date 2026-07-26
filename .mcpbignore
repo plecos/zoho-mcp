@@ -1,0 +1,22 @@
+# The `uv` server type requires that no virtualenv or vendored packages be
+# bundled -- the host installs from pyproject.toml instead. Shipping either
+# would break the bundle, not just bloat it.
+.venv/
+server/lib/
+server/venv/
+**/__pycache__/
+*.pyc
+
+# Never ship a real credential or a real account's identifiers.
+.env
+
+# Not needed at runtime.
+tests/
+docs/
+.github/
+.git/
+.gitignore
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.mcpb

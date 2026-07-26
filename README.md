@@ -2,7 +2,7 @@
 
 An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contacts, Tasks, Notes, Bookmarks, Groups, and Resource Booking as tools to any MCP-compatible LLM client — Claude, ChatGPT, Gemini, or anything else that speaks MCP.
 
-37 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
+40 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
 
 **Sending email is disabled by default.** The server saves drafts instead, and only sends if you explicitly opt in. See [Composing email](#composing-email).
 
@@ -26,9 +26,9 @@ This one is narrow on purpose: local stdio with no third-party relay, draft-firs
 
 ## Setup
 
-1. **Register a Server-based Application** in the Zoho API Console with redirect URI `http://localhost:8765/callback` (change the port with `ZOHO_OAUTH_CALLBACK_PORT` if 8765 is taken).
+1. **Register a Server-based Application** in the [Zoho API Console](https://accounts.zoho.com/developerconsole) with redirect URI `http://localhost:8765/callback` (change the port with `ZOHO_OAUTH_CALLBACK_PORT` if 8765 is taken). The redirect URI is the only thing you configure there — scopes are not a console setting.
 
-   Request these scopes:
+   Scopes are sent in the authorization request instead, from the `SCOPES` list in [src/zoho_mcp/setup_auth.py](src/zoho_mcp/setup_auth.py). These are what step 3 will ask you to consent to:
 
    ```
    ZohoMail.messages.READ      ZohoMail.messages.ALL
@@ -45,9 +45,9 @@ This one is narrow on purpose: local stdio with no third-party relay, draft-firs
 
    Several are needed at runtime, not just during setup: `accounts.READ` for the live timezone and outgoing-address lookups, `folders.READ` for filtering Sent/Drafts/Templates out of search results, and `calendar.READ` for `list_calendars` (it's also what finds your calendar's UID during setup).
 
-   If you only want read-only access, omit the `.ALL` and `.CREATE` scopes — the read tools work fine without them, and the write tools will fail with a clear scope error.
+   If you only want read-only access, delete the `.ALL` and `.CREATE` entries from that `SCOPES` list before running setup — the read tools work fine without them, and the write tools will fail with a clear scope error.
 
-2. **Copy `.env.example` to `.env`** and fill in `ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET`.
+2. **Copy `.env.example` to `.env`** and fill in `ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET`. Nothing else in that file is required.
 
 3. **Run the one-time auth flow:**
 
@@ -55,19 +55,51 @@ This one is narrow on purpose: local stdio with no third-party relay, draft-firs
    uv run zoho-mcp-setup
    ```
 
-   This opens your browser to approve access, stores the refresh token in your OS credential store (via `keyring`), and prints your `ZOHO_ACCOUNT_ID` and `ZOHO_CALENDAR_UID`. Add both to `.env`.
+   This opens your browser to approve access, stores the refresh token in your OS credential store (via `keyring`), and prints a ready-to-paste MCP client config block with the absolute path to this install's `zoho-mcp` executable.
 
-4. **Start the server:**
+4. **Paste that block into your MCP client's config** and restart it. The server speaks MCP over stdio; the client launches it.
+
+   To run it yourself instead — to check setup worked, or for a client that wants a command rather than a config file:
 
    ```bash
    uv run zoho-mcp
    ```
 
-   It speaks MCP over stdio. Point your client at the `zoho-mcp` executable in `.venv/Scripts/` (Windows) or `.venv/bin/` (macOS/Linux).
+If you later add scopes, re-run `zoho-mcp-setup` — or just call the `authenticate` tool, which does the same thing from inside a conversation. The stored token carries whatever scopes it was granted, so new ones need fresh consent.
 
-If you later add scopes, re-run `zoho-mcp-setup` — the stored token carries whatever scopes it was granted, so new ones need fresh consent.
+### Installing as a Claude Desktop extension
+
+The repo also packages as an [MCP Bundle](https://github.com/anthropics/mcpb), which replaces steps 2–4 with a settings form. Build one with [the MCPB CLI](https://github.com/anthropics/mcpb):
+
+```bash
+npx @anthropic-ai/mcpb pack
+```
+
+That produces a `zoho-mcp.mcpb` you can install from Claude Desktop's Extensions pane. It declares `server.type: "uv"`, so the host supplies the Python runtime and resolves dependencies from `pyproject.toml` — nothing is vendored into the bundle and the user needs no Python install of their own.
+
+You still register an application in the Zoho API Console (step 1) and paste its client id and secret into the extension's settings, where the secret is stored in your OS credential store. Then call the **`authenticate`** tool once: it opens Zoho's own consent page in your browser, and the resulting token goes to the credential store too. Nothing is typed into the conversation.
+
+Two lifecycle quirks of the host, both worth knowing before you install:
+
+**You have to enable it manually.** Because the extension has required configuration, Claude Desktop installs it *disabled* and logs `has missing required configuration, not enabling automatically`. Filling the fields in afterwards does not flip the toggle — you have to switch it on yourself. Until you do, the server never launches, none of its tools appear, and requests about your mail silently go to whatever other mail connector you have enabled.
+
+**To uninstall or replace it, disable it and restart first.** Uninstalling a running extension can fail — on Windows the live server holds files inside its own directory open (`.venv\Scripts\*.exe`, loaded extension modules), and the host does not appear to retry the delete. Disable the extension, restart Claude, then uninstall.
+
+The server itself exits promptly when the host closes its stdin, which is the only shutdown signal MCP defines — measured at 0.08 s for the whole process tree, with no orphans — so there's nothing to wait for on this side.
+
+**Uninstalling clears your settings.** The client id, secret, port and toggle live in the host's per-extension settings file, which is deleted with the extension; reinstalling means re-entering them. The refresh token is separate — it's in your OS credential store — so it survives an uninstall and you won't need to run `authenticate` again.
+
+`ZOHO_ALLOW_AUTO_SEND` is deliberately *not* a setting in that form. It stays an environment variable you set by hand, because a labelled toggle is a much smaller act than editing a server's environment, and the friction is the point.
 
 ## Tools
+
+### Authorization
+
+| Tool | |
+| --- | --- |
+| `authenticate` | Run the Zoho consent flow and store the token *(write)* |
+
+Only needed if the server was started without a stored token — the case for a bundle install, where `zoho-mcp-setup` isn't reachable. Every other tool fails with a message naming this one until it has run. The check lives in the token manager, which every Zoho call passes through, so no tool can route around it.
 
 ### Mail
 
@@ -76,7 +108,9 @@ If you later add scopes, re-run `zoho-mcp-setup` — the stored token carries wh
 | `search_emails` | Keyword/sender/label search using Zoho's search syntax, optionally limited to the last N days |
 | `list_emails` | Enumerate mail by read/unread status, with real pagination |
 | `get_email` | Full plain-text body of one message |
+| `get_email_source` | Parsed RFC 822 headers: sender, SPF/DKIM/DMARC, `Received` chain |
 | `list_attachments` | Attachment metadata (name, size) for one message |
+| `get_attachment` | One attachment's content, as text when it is text |
 | `list_folders` | All folders, with paths |
 | `list_labels` | All labels/tags |
 | `list_signatures` | Configured signatures, as plain text |
@@ -90,6 +124,12 @@ If you later add scopes, re-run `zoho-mcp-setup` — the stored token carries wh
 `search_emails` and `list_emails` do different jobs and aren't interchangeable. Zoho's search API has no read/unread filter and can't page past its first batch of results by recency, so it will miss older mail. Use `list_emails` whenever you need to reliably act on *every* matching message ("mark all my unread email as read"); use `search_emails` for actual searching.
 
 The write tools take lists, and one call handles the whole batch.
+
+`search_emails` and `list_emails` return 13 fields per message — id, from, from_name, subject, date, snippet, folder_id, read, to, cc, has_attachment, size_bytes, label_ids. Zoho sends 21; the eight left out are left out for stated reasons ([the notes](docs/zoho-api-notes.md#flagid-priority-and-the-thread-fields-could-not-be-verified)), chiefly that a real mailbox couldn't distinguish their values.
+
+`get_email_source` answers the questions `get_email` can't: who really sent this, did it pass SPF/DKIM/DMARC, what path did it take. Zoho returns the whole message source — 28,000 to 82,000 characters for ordinary mail — so it's parsed here into headers, an ordered `Received` chain, and the names of the headers not returned by value. RFC 2047 encoded-words are decoded. `include_raw=true` adds the source text itself, capped.
+
+`get_attachment` returns a JSON record, never a file or a blob — a tool result goes into a context window, so the bytes stop at the server. Content comes back as `text` only when it actually decodes as UTF-8; for a PDF, image, or archive you get `is_text: false` and a `note` saying what it is. Nothing here decodes or extracts text from binary formats. Zoho gives no media type on either attachment endpoint (see [the notes](docs/zoho-api-notes.md#nothing-in-the-attachment-apis-tells-you-an-attachments-type)), so `media_type` is inferred from the filename and is a hint; the decode is the fact. Text over 100,000 characters is truncated with `truncated: true`, and anything over 5 MB isn't downloaded at all.
 
 ### Calendar
 
@@ -161,10 +201,12 @@ One practical note: drafts don't show up in `search_emails` at all (a Zoho quirk
 
 ## Configuration
 
-All optional, in `.env`:
+`ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET` are required (a bundle install collects them in its settings form instead of `.env`). Everything else is optional:
 
 | Variable | Default | |
 | --- | --- | --- |
+| `ZOHO_ACCOUNT_ID` | *discovered* | Your Zoho Mail account id. Left unset, the server looks it up on first use and caches it for the life of the process. Setting it saves one API call per start. |
+| `ZOHO_CALENDAR_UID` | *discovered* | Your default calendar's uid, same story — looked up only when a calendar tool is called without an explicit `calendar_id`. |
 | `ZOHO_ALLOW_AUTO_SEND` | `false` | Allow `send_email` to actually send. See above. |
 | `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Have `get_email` strip invisible Unicode padding some marketing mail uses to inflate preview text. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
 | `ZOHO_OAUTH_CALLBACK_PORT` | `8765` | Local port for the one-time OAuth redirect. |

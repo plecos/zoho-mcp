@@ -154,3 +154,63 @@ async def test_credentials_are_checked_before_the_missing_token(http_client):
 
     with pytest.raises(ZohoAuthError, match="ZOHO_CLIENT_ID"):
         await token_manager.get_access_token()
+
+
+# Found in a real host: two clients were connected, so two server processes
+# were running. `authenticate` in one wrote the token to the credential store
+# and updated *its own* in-memory manager; the sibling process, started
+# unauthenticated moments earlier, went on refusing every call until it was
+# restarted. Re-reading the store before giving up costs one keyring lookup
+# on a path that was about to fail anyway.
+async def test_a_token_stored_by_another_process_is_picked_up(
+    respx_mock, http_client, monkeypatch
+):
+    mock_token_endpoint(respx_mock)
+    monkeypatch.setattr(
+        "zoho_mcp.zoho.auth.load_refresh_token", lambda: "refresh-from-sibling"
+    )
+    token_manager = manager(http_client)
+
+    assert await token_manager.get_access_token() == "access-1"
+    assert token_manager.is_authenticated is True
+
+
+async def test_the_store_is_only_consulted_when_there_is_no_token(
+    respx_mock, http_client, monkeypatch
+):
+    # The stored token must not override one already in hand -- that would
+    # undo `set_refresh_token` after a re-authentication granting new scopes.
+    mock_token_endpoint(respx_mock)
+    calls: list[int] = []
+    monkeypatch.setattr(
+        "zoho_mcp.zoho.auth.load_refresh_token",
+        lambda: calls.append(1) or "refresh-stale",
+    )
+    token_manager = manager(http_client, "refresh-current")
+
+    await token_manager.get_access_token()
+
+    assert calls == []
+
+
+async def test_an_empty_store_still_names_the_authenticate_tool(
+    http_client, monkeypatch
+):
+    monkeypatch.setattr("zoho_mcp.zoho.auth.load_refresh_token", lambda: None)
+
+    with pytest.raises(ZohoAuthError, match="authenticate"):
+        await manager(http_client).get_access_token()
+
+
+async def test_a_broken_credential_store_does_not_mask_the_real_advice(
+    http_client, monkeypatch
+):
+    # keyring raises on some locked/unavailable backends. That's still "not
+    # authenticated", and the actionable message beats a keyring traceback.
+    def boom():
+        raise RuntimeError("no usable keyring backend")
+
+    monkeypatch.setattr("zoho_mcp.zoho.auth.load_refresh_token", boom)
+
+    with pytest.raises(ZohoAuthError, match="authenticate"):
+        await manager(http_client).get_access_token()

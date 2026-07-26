@@ -92,6 +92,11 @@ Two design flaws in this project were invisible to a passing test suite and obvi
 
 Neither was a coverage gap. Every test passed, each exercising a single id. Periodically drive the tools at realistic scale and eyeball the real output.
 
+Installing the MCPB bundle in a real Claude Desktop added two more, both invisible to any test:
+
+- **The bundle installs disabled** when it has required config, and filling the config in doesn't enable it. The symptom isn't an error — the server never starts, so its tools simply aren't there and mail questions get answered by some other connector.
+- **Two clients meant two server processes.** `authenticate` in one wrote the token to the credential store and updated *its own* in-memory manager; the sibling, started unauthenticated seconds earlier, refused every call until restarted. `get_access_token` now re-reads the store before giving up. Anything cached in a process is per-process — when a value can be changed by something outside that process, decide what re-reads it and when.
+
 ## Config vs. live state
 
 Before writing a looked-up value to `.env`, ask whether it's a **stable identifier** (account id, calendar uid — essentially permanent) or a **mutable setting** (timezone, primary address, any preference a person can change). Only the former belongs in static config.

@@ -79,6 +79,8 @@ That produces a `zoho-mcp.mcpb` you can install from Claude Desktop's Extensions
 
 You still register an application in the Zoho API Console (step 1) and paste its client id and secret into the extension's settings, where the secret is stored in your OS credential store. Then call the **`authenticate`** tool once: it opens Zoho's own consent page in your browser, and the resulting token goes to the credential store too. Nothing is typed into the conversation.
 
+**Enable it manually after installing.** Because the extension has required configuration, Claude Desktop installs it *disabled* and logs `has missing required configuration, not enabling automatically`. Filling the fields in afterwards does not flip the toggle — you have to switch it on yourself. Until you do, the server never launches, none of its tools appear, and requests about your mail silently go to whatever other mail connector you have enabled.
+
 `ZOHO_ALLOW_AUTO_SEND` is deliberately *not* a setting in that form. It stays an environment variable you set by hand, because a labelled toggle is a much smaller act than editing a server's environment, and the friction is the point.
 
 ## Tools

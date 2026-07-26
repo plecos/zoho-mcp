@@ -163,6 +163,8 @@ class ZohoTokenManager:
                     f"its credentials, then authenticate."
                 )
         if self._refresh_token is None:
+            self._adopt_any_stored_token()
+        if self._refresh_token is None:
             raise ZohoAuthError(
                 "This server has no Zoho authorization yet. Call the "
                 "authenticate tool to grant it access, then retry."
@@ -171,6 +173,29 @@ class ZohoTokenManager:
             await self._refresh()
         assert self._access_token is not None
         return self._access_token
+
+    def _adopt_any_stored_token(self) -> None:
+        """Re-read the credential store, in case another process authorized us.
+
+        Found in a real host: two clients were connected, so two server
+        processes were running. ``authenticate`` in one wrote the token to the
+        credential store and updated its own in-memory manager, while the
+        sibling -- started unauthenticated moments earlier -- went on refusing
+        every call until it was restarted.
+
+        Only reached when no token is held, so it never overrides a live one;
+        overriding would undo a ``set_refresh_token`` that had just granted
+        wider scopes. A failing credential store is swallowed on purpose:
+        ``keyring`` raises on locked or unavailable backends, and that is
+        still just "not authenticated", where the caller is better served by
+        the message naming ``authenticate`` than by a keyring traceback.
+        """
+        try:
+            stored = load_refresh_token()
+        except Exception:  # noqa: BLE001 -- any backend failure means "no token"
+            return
+        if stored and stored.strip():
+            self.set_refresh_token(stored)
 
     def _is_expired(self) -> bool:
         assert self._expires_at is not None

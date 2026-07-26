@@ -83,7 +83,11 @@ Two lifecycle quirks of the host, both worth knowing before you install:
 
 **You have to enable it manually.** Because the extension has required configuration, Claude Desktop installs it *disabled* and logs `has missing required configuration, not enabling automatically`. Filling the fields in afterwards does not flip the toggle — you have to switch it on yourself. Until you do, the server never launches, none of its tools appear, and requests about your mail silently go to whatever other mail connector you have enabled.
 
-**To uninstall or replace it, disable it and restart first.** A running server holds files inside its own extension directory open — on Windows, `.venv\Scripts\*.exe` and loaded extension modules — so the uninstall fails while it's live. Disable the extension, restart Claude, then uninstall. Your settings and stored token survive either way; both live outside the bundle.
+**To uninstall or replace it, disable it and restart first.** Uninstalling a running extension can fail — on Windows the live server holds files inside its own directory open (`.venv\Scripts\*.exe`, loaded extension modules), and the host does not appear to retry the delete. Disable the extension, restart Claude, then uninstall.
+
+The server itself exits promptly when the host closes its stdin, which is the only shutdown signal MCP defines — measured at 0.08 s for the whole process tree, with no orphans — so there's nothing to wait for on this side.
+
+**Uninstalling clears your settings.** The client id, secret, port and toggle live in the host's per-extension settings file, which is deleted with the extension; reinstalling means re-entering them. The refresh token is separate — it's in your OS credential store — so it survives an uninstall and you won't need to run `authenticate` again.
 
 `ZOHO_ALLOW_AUTO_SEND` is deliberately *not* a setting in that form. It stays an environment variable you set by hand, because a labelled toggle is a much smaller act than editing a server's environment, and the friction is the point.
 

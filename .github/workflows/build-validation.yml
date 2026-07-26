@@ -9,6 +9,13 @@ on:
     branches: [main]
     tags: ["v*"]
 
+# Least privilege, declared rather than inherited. These jobs only read the
+# repo -- no job needs write access to anything. The repo-wide default is
+# currently read too, but that is one API call away from becoming write, and
+# nothing here would record that these workflows never needed it.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest

@@ -1,0 +1,157 @@
+name: Release
+
+# Builds the MCPB bundle, proves it runs on every platform the manifest
+# claims, and publishes it to a GitHub release.
+#
+# One bundle serves all three platforms, and that is not a shortcut. With
+# `server.type: "uv"` the archive holds only Python source, a manifest and a
+# universal `uv.lock` -- no compiled anything -- and the host resolves
+# dependencies for its own platform at install time. Emitting three
+# per-platform files would produce three identical archives under names
+# implying otherwise.
+#
+# So cross-platform support is demonstrated rather than declared: the same
+# artifact is unpacked and actually launched on Windows, Apple Silicon macOS
+# and Linux, and the release only happens if all three answer an MCP
+# handshake.
+
+on:
+  push:
+    tags: ["v*"]
+  # Manual runs build and verify without publishing, so the pipeline can be
+  # exercised without minting a release.
+  workflow_dispatch:
+
+# Least privilege, declared rather than inherited. Only the publish job needs
+# write access, and it asks for it itself.
+permissions:
+  contents: read
+
+env:
+  # Pinned rather than @latest: a release should be reproducible, and the
+  # packer decides what ends up in the artifact.
+  MCPB_VERSION: 2.1.2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      bundle: ${{ steps.pack.outputs.bundle }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the manifest against its schema
+        run: npx -y "@anthropic-ai/mcpb@${MCPB_VERSION}" validate manifest.json
+
+      - name: Check the manifest version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest="$(python -c 'import json;print(json.load(open("manifest.json"))["version"])')"
+          if [ "$tag" != "$manifest" ]; then
+            echo "tag $GITHUB_REF_NAME implies version $tag, but manifest.json says $manifest" >&2
+            echo "bump manifest.json and pyproject.toml, or retag" >&2
+            exit 1
+          fi
+          echo "version $manifest matches tag $GITHUB_REF_NAME"
+
+      - name: Pack
+        id: pack
+        run: |
+          version="$(python -c 'import json;print(json.load(open("manifest.json"))["version"])')"
+          bundle="zoho-mcp-${version}.mcpb"
+          mkdir -p dist
+          npx -y "@anthropic-ai/mcpb@${MCPB_VERSION}" pack . "dist/${bundle}"
+          echo "bundle=${bundle}" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to ship a bundle containing secrets or a virtualenv
+        run: |
+          python - <<'PY'
+          import pathlib, sys, zipfile
+          bundle = next(pathlib.Path("dist").glob("*.mcpb"))
+          names = zipfile.ZipFile(bundle).namelist()
+          # .env carries a real client secret; a bundled venv both leaks the
+          # builder's machine and breaks the `uv` server type outright.
+          bad = [
+              n for n in names
+              if n == ".env" or n.startswith((".venv/", "server/lib/", "server/venv/"))
+          ]
+          if bad:
+              sys.exit(f"bundle contains files that must never ship: {bad}")
+          print(f"{bundle.name}: {len(names)} files, none of them excluded content")
+          PY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mcpb-bundle
+          path: dist/*.mcpb
+          if-no-files-found: error
+
+  verify:
+    needs: build
+    # One platform failing shouldn't hide the others -- knowing it's broken
+    # only on Windows is more useful than knowing it's broken.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Confirm the macOS runner is Apple Silicon, not Intel
+        if: runner.os == 'macOS'
+        run: |
+          arch="$(uname -m)"
+          echo "macOS runner architecture: $arch"
+          [ "$arch" = "arm64" ] || {
+            echo "expected an arm64 runner; GitHub's macos-latest has moved" >&2
+            exit 1
+          }
+
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-suffix: verify
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: mcpb-bundle
+          path: dist
+
+      # Launches the bundle using the command its own manifest declares and
+      # drives an MCP handshake. `--no-project` keeps the repo's own
+      # environment out of it, so this tests the bundle rather than the
+      # checkout it happens to sit next to.
+      - name: Smoke-test the bundle
+        shell: bash
+        run: |
+          bundle="$(ls dist/*.mcpb | head -1)"
+          uv run --no-project --python 3.12 python scripts/smoke_bundle.py "$bundle"
+
+  release:
+    needs: [build, verify]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # The only job that writes anything, and the only one granted it.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: mcpb-bundle
+          path: dist
+
+      # --generate-notes works out the previous tag itself, which a shallow
+      # checkout couldn't tell it anyway. --verify-tag refuses to invent a tag
+      # that doesn't exist, so a typo fails instead of publishing.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.mcpb \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

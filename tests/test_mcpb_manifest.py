@@ -59,8 +59,9 @@ def test_the_uv_server_type_requirements_are_met(manifest):
 def test_the_ignore_file_excludes_what_must_not_ship():
     ignored = (REPO_ROOT / ".mcpbignore").read_text(encoding="utf-8")
 
-    # .env holds a real client secret; .venv would break the uv server type.
-    for pattern in (".env", ".venv/", "server/lib/", "server/venv/"):
+    # .env holds a real client secret; .venv would break the uv server type;
+    # scripts/ is CI tooling that has no business in a user's install.
+    for pattern in (".env", ".venv/", "server/lib/", "server/venv/", "scripts/"):
         assert pattern in ignored, pattern
 
 

@@ -860,11 +860,21 @@ def create_server(
 
 
 def _callback_port() -> int:
-    """Local port the one-time OAuth redirect listens on."""
+    """Local port the one-time OAuth redirect listens on.
+
+    Coerced through ``float`` because an MCPB host substitutes a ``number``
+    user_config value into the environment and may render it as ``"8765.0"``.
+    A plain ``int()`` would reject that and silently fall back to the
+    default -- i.e. listen on the wrong port for anyone who changed it, then
+    fail with a timeout that points nowhere near the cause. Same coercion
+    the token manager applies to ``expires_in``, for the same reason.
+    """
     raw = os.environ.get("ZOHO_OAUTH_CALLBACK_PORT", "").strip()
+    if not raw:
+        return DEFAULT_CALLBACK_PORT
     try:
-        return int(raw) if raw else DEFAULT_CALLBACK_PORT
-    except ValueError:
+        return int(float(raw))
+    except (TypeError, ValueError):
         return DEFAULT_CALLBACK_PORT
 
 

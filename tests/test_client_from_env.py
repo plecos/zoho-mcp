@@ -134,3 +134,31 @@ async def test_blank_ids_are_treated_as_unconfigured(env, blank):
 
     assert client._account_id_cache is None
     assert client._calendar_uid_cache is None
+
+
+# An MCPB host substitutes a `number` user_config value into the environment,
+# and the rendering isn't pinned by the spec -- "8765" and "8765.0" are both
+# plausible. Getting this wrong means listening on the default port while the
+# registered redirect points elsewhere, which fails as a timeout with nothing
+# pointing back here.
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("9000", 9000),
+        ("9000.0", 9000),
+        (" 9000 ", 9000),
+        ("", 8765),
+        ("   ", 8765),
+        ("not-a-port", 8765),
+    ],
+)
+async def test_callback_port_parsing(env, value, expected):
+    env.setenv("ZOHO_OAUTH_CALLBACK_PORT", value)
+
+    assert server._callback_port() == expected
+
+
+async def test_callback_port_defaults_when_unset(env):
+    env.delenv("ZOHO_OAUTH_CALLBACK_PORT", raising=False)
+
+    assert server._callback_port() == 8765

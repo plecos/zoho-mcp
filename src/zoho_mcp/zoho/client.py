@@ -267,6 +267,25 @@ def _strip_invisible_padding(text: str) -> str:
     return "".join(c for c in text if c not in _INVISIBLE_PADDING_CHARS)
 
 
+def _collapse_whitespace(text: str) -> str:
+    """Collapse every run of whitespace to a single space, and trim the ends.
+
+    Applied to snippets unconditionally, unlike ``_strip_invisible_padding``.
+    Deleting invisible characters changes content, so that stays opt-in; a run
+    of spaces inside a generated preview carries no information -- every mail
+    client collapses it visually -- so there's nothing to protect.
+
+    It also catches the padding variants that have *width*, which the
+    codepoint set deliberately won't touch. Measured on a real message: after
+    removing its U+034F, the snippet was still ~139 characters of U+2007
+    FIGURE SPACE wrapped around 40 characters of text. `split` treats every
+    Unicode space separator as whitespace, so one call handles figure space,
+    no-break space, en/em/hair/ideographic space and plain runs alike, with no
+    list to keep up to date.
+    """
+    return " ".join(text.split())
+
+
 def _split_address_field(value: object) -> list[str]:
     """Turn one of Zoho's address strings into a list of addresses.
 
@@ -312,9 +331,12 @@ def normalize_email_summary(
     is wrong, and ``flagid``/``priority``/``threadId``/``threadCount``
     could not be distinguished from a real mailbox's data.
 
-    ``strip_invisible_chars`` applies to ``snippet`` only, not ``subject``.
-    The padding is a preview-text trick, and a padded subject would look
-    broken to a human in any mail client, so senders don't use it there.
+    ``snippet`` always has runs of whitespace collapsed to a single space
+    (see ``_collapse_whitespace``). ``strip_invisible_chars`` additionally
+    removes invisible padding characters from it. Both apply to ``snippet``
+    only, never ``subject``: the padding is a preview-text trick, a padded
+    subject would look broken to a human in any mail client, and a subject's
+    exact spacing is more plausibly deliberate than a generated preview's.
 
     Every field beyond the core degrades to a default rather than raising,
     because Zoho's key set genuinely varies per message -- ``toAddress``
@@ -329,6 +351,10 @@ def normalize_email_summary(
         snippet = html.unescape(raw["summary"])
         if strip_invisible_chars:
             snippet = _strip_invisible_padding(snippet)
+        # Stripping first, then collapsing. The other order leaves the double
+        # spaces that the removed characters were separating, because an
+        # invisible character is a non-space token to `split`.
+        snippet = _collapse_whitespace(snippet)
         sender = html.unescape(str(raw.get("sender") or ""))
         from_address = raw["fromAddress"]
         try:

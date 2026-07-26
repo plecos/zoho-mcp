@@ -125,6 +125,8 @@ Only needed if the server was started without a stored token — the case for a 
 
 The write tools take lists, and one call handles the whole batch.
 
+`snippet` always comes back with runs of whitespace collapsed to a single space. Marketing mail pads preview text heavily, and a real example measured 249 characters of which ~200 were padding — some invisible, some `U+2007` FIGURE SPACE and similar width-having variants that no list of codepoints keeps up with. Collapsing runs discards nothing (every mail client does it visually) and catches all of them. Removing the *invisible* characters does change content, so that part stays opt-in via `ZOHO_STRIP_INVISIBLE_CHARS`. Neither touches `subject`.
+
 `search_emails` and `list_emails` return 13 fields per message — id, from, from_name, subject, date, snippet, folder_id, read, to, cc, has_attachment, size_bytes, label_ids. Zoho sends 21; the eight left out are left out for stated reasons ([the notes](docs/zoho-api-notes.md#flagid-priority-and-the-thread-fields-could-not-be-verified)), chiefly that a real mailbox couldn't distinguish their values.
 
 `get_email_source` answers the questions `get_email` can't: who really sent this, did it pass SPF/DKIM/DMARC, what path did it take. Zoho returns the whole message source — 28,000 to 82,000 characters for ordinary mail — so it's parsed here into headers, an ordered `Received` chain, and the names of the headers not returned by value. RFC 2047 encoded-words are decoded. `include_raw=true` adds the source text itself, capped.

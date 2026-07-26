@@ -64,6 +64,9 @@ _EVENT_WRITABLE_FIELDS = frozenset(
         "dateandtime",
     }
 )
+# timedelta rejects magnitudes over 999999999 days; anything near that is
+# nonsense as a mail filter anyway, and 100 years is generous for a mailbox.
+MAX_DAYS_BACK = 36525
 MIN_SEARCH_LIMIT = 1
 MAX_SEARCH_LIMIT = 200
 _VALID_EMAIL_STATUSES = frozenset({"read", "unread", "all"})
@@ -585,7 +588,13 @@ def _scoped_url(root: str, group_id: str | None) -> str:
     than by a query param: ``/me`` for the caller's own items,
     ``/groups/{id}`` for a shared group's.
     """
-    return f"{root}/groups/{group_id}" if group_id is not None else f"{root}/me"
+    # A blank string is treated as "not given" rather than building
+    # ".../groups/": an LLM passing group_id="" instead of omitting the
+    # argument is realistic, and a wrong URL is a worse outcome than
+    # defaulting to the caller's own items.
+    return (
+        f"{root}/groups/{group_id}" if group_id and group_id.strip() else f"{root}/me"
+    )
 
 
 def normalize_floor(raw: dict) -> dict:
@@ -867,9 +876,20 @@ async def get_folder_types(
         http_client, f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/folders", token
     )
     try:
-        return {folder["folderId"]: folder["folderType"] for folder in payload["data"]}
+        folders = payload["data"]
     except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed folders response from Zoho: {e}") from e
+
+    # Individual folders are skipped rather than fatal. This map only drives the
+    # Sent/Drafts/Templates convenience filter, and it feeds both search_emails
+    # and list_emails -- so one folder missing folderType used to make the
+    # entire mailbox unreadable. An unclassifiable folder simply doesn't get
+    # excluded, which is the safe direction to fail in.
+    return {
+        folder["folderId"]: folder["folderType"]
+        for folder in folders
+        if isinstance(folder, dict) and "folderId" in folder and "folderType" in folder
+    }
 
 
 async def get_default_calendar_uid(
@@ -1013,8 +1033,10 @@ class ZohoClient:
                 f"limit must be between {MIN_SEARCH_LIMIT} and "
                 f"{MAX_SEARCH_LIMIT} (got {limit})"
             )
-        if days_back is not None and days_back < 0:
-            raise ZohoAPIError(f"days_back must be >= 0 (got {days_back})")
+        if days_back is not None and not (0 <= days_back <= MAX_DAYS_BACK):
+            raise ZohoAPIError(
+                f"days_back must be between 0 and {MAX_DAYS_BACK} (got {days_back})"
+            )
         if not query and days_back is None:
             raise ZohoAPIError(
                 "search_emails requires a query, a days_back filter, or both"
@@ -1165,10 +1187,14 @@ class ZohoClient:
         }
         if as_draft:
             body["mode"] = "draft"
-        if cc:
-            body["ccAddress"] = ",".join(a.strip() for a in cc if a.strip())
-        if bcc:
-            body["bccAddress"] = ",".join(a.strip() for a in bcc if a.strip())
+        # Filtered before the truthiness check: cc=[""] is truthy, so it used
+        # to produce an empty ccAddress header instead of being omitted.
+        cc_addresses = [a.strip() for a in (cc or []) if a.strip()]
+        bcc_addresses = [a.strip() for a in (bcc or []) if a.strip()]
+        if cc_addresses:
+            body["ccAddress"] = ",".join(cc_addresses)
+        if bcc_addresses:
+            body["bccAddress"] = ",".join(bcc_addresses)
 
         payload = await self._post(
             f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages",
@@ -1324,11 +1350,12 @@ class ZohoClient:
             ZohoAPIError: if ``message_ids`` is empty, or the Zoho Mail
                 API rejects or fails the request.
         """
-        if not message_ids:
+        ids = [message_id.strip() for message_id in message_ids if message_id.strip()]
+        if not ids:
             raise ZohoAPIError("message_ids must contain at least one message id")
         await self._put(
             f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/updatemessage",
-            json_body={"mode": mode, "messageId": message_ids, **extra},
+            json_body={"mode": mode, "messageId": ids, **extra},
         )
 
     async def mark_as_read(self, message_ids: list[str]) -> None:

@@ -16,6 +16,9 @@ ZOHO_AUTHORIZATION_URL = "https://accounts.zoho.com/oauth/v2/auth"
 
 # Refresh this many seconds early so a request never races an in-flight expiry.
 REFRESH_SAFETY_MARGIN_SECONDS = 60
+# Floor for a token's usable lifetime, so an unexpectedly short
+# expires_in can't collapse into a refresh-per-request loop.
+MIN_TOKEN_LIFETIME_SECONDS = 30
 
 _KEYRING_SERVICE = "zoho-mcp"
 _KEYRING_REFRESH_TOKEN_KEY = "zoho_refresh_token"
@@ -85,10 +88,25 @@ class ZohoTokenManager:
                 payload.get("error", "unknown error refreshing Zoho access token")
             )
         self._access_token = payload["access_token"]
-        expires_in = payload.get("expires_in", 3600)
-        self._expires_at = datetime.now(timezone.utc) + timedelta(
-            seconds=expires_in - REFRESH_SAFETY_MARGIN_SECONDS
+
+        # Coerced rather than trusted: Zoho sends strings where numbers are
+        # documented elsewhere (status "1", isFavorite "false", color "-1"), and
+        # an un-coerced string here raised TypeError out of every tool call.
+        raw_expires_in = payload.get("expires_in", 3600)
+        try:
+            expires_in = int(float(str(raw_expires_in).strip()))
+        except (TypeError, ValueError) as e:
+            raise ZohoAuthError(
+                f"Zoho returned an unusable expires_in ({raw_expires_in!r})"
+            ) from e
+
+        # Floor the lifetime at the margin. Without this a short-lived token
+        # puts expires_at in the past, so every call re-refreshes -- one token
+        # POST per API call, which is a direct route to being rate-limited.
+        lifetime = max(
+            expires_in - REFRESH_SAFETY_MARGIN_SECONDS, MIN_TOKEN_LIFETIME_SECONDS
         )
+        self._expires_at = datetime.now(timezone.utc) + timedelta(seconds=lifetime)
 
 
 def build_authorization_url(

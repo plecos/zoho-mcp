@@ -69,10 +69,11 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         be left empty if days_back is given.
 
         days_back (optional): only return emails from the last N days --
-        0 for today only, 1 for today and yesterday, etc. This is resolved
-        using the mailbox's real timezone; do not try to compute or pass an
-        explicit date yourself, since you don't know the mailbox's
-        timezone and getting it wrong silently returns the wrong day.
+        0 for today only, 1 for today and yesterday, and so on, up to
+        36525 (a century). This is resolved using the mailbox's real
+        timezone; do not try to compute or pass an explicit date
+        yourself, since you don't know the mailbox's timezone and
+        getting it wrong silently returns the wrong day.
 
         Each result includes a read (bool) field, but this search has no
         way to filter by it and only returns the top `limit` results by

@@ -42,6 +42,7 @@ That token is the asset an attacker wants. Anything that exposes it, or that cau
 
 Not a guarantee — context for judging whether something is a real finding:
 
+- **Nothing is relayed through a third party.** The server runs locally over stdio — no listening socket, no hosted endpoint. The only outbound calls are to Zoho's own REST APIs; mail bodies and tool arguments don't traverse any intermediary. Worth knowing if you're weighing this against a hosted MCP option (see [docs/vs-zoho-mcp.md](docs/vs-zoho-mcp.md)).
 - **The refresh token lives in the OS credential store** via `keyring` (Windows Credential Manager, macOS Keychain, Secret Service), never in a file in the repo or working directory.
 - **Tokens never appear in errors.** The access token is used only to build the `Authorization` header. Auth failures surface Zoho's own error field, not the credential.
 - **`.env` is gitignored**, with `.env.example` explicitly excepted so the template stays tracked and real secrets don't.

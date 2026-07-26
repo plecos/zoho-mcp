@@ -46,6 +46,8 @@ def raw_email(**overrides) -> dict:
         "hasAttachment": "0",
         "size": "24825",
         "labelId": ["555444555"],
+        "flagid": "flag_not_set",
+        "priority": "3",
     }
     return {**base, **overrides}
 
@@ -70,6 +72,8 @@ def test_the_record_has_exactly_the_intended_fields():
         "has_attachment",
         "size_bytes",
         "label_ids",
+        "flag",
+        "priority",
     }
 
 
@@ -356,3 +360,94 @@ def test_subject_whitespace_is_left_alone():
     record = normalize_email_summary(raw_email(subject="Big   Sale"), TIMEZONE)
 
     assert record["subject"] == "Big   Sale"
+
+
+# flagid and priority were withheld until now because a real mailbox couldn't
+# distinguish their values -- flagid was `flag_not_set` on all 120 messages
+# sampled and priority was "3" on all of them. With deliberate test data they
+# resolve:
+#
+#   priority "2" <-> `Importance: High`   header on the same message
+#   priority "3" <-> `Importance: Medium` header on the same message
+#
+# read out of the message source, which pins Zoho's `priority` to the
+# X-Priority convention where lower means more important. flagid came back as
+# 'important' -- a flag *type name*, not a boolean.
+def test_priority_is_a_label_not_a_number():
+    assert normalize_email_summary(raw_email(priority="2"), TIMEZONE)["priority"] == (
+        "high"
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1", "highest"),
+        ("2", "high"),  # verified live against `Importance: High`
+        ("3", "normal"),  # verified live against `Importance: Medium`
+        ("4", "low"),  # verified live against `Importance: Low`
+        ("5", "lowest"),
+    ],
+)
+def test_the_priority_scale(value, expected):
+    record = normalize_email_summary(raw_email(priority=value), TIMEZONE)
+
+    assert record["priority"] == expected
+
+
+def test_an_absent_priority_reads_as_normal():
+    raw = raw_email()
+    del raw["priority"]
+
+    assert normalize_email_summary(raw, TIMEZONE)["priority"] == "normal"
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_a_blank_priority_reads_as_normal(blank):
+    # Blank is absent, not unrecognized -- there's nothing to pass through.
+    record = normalize_email_summary(raw_email(priority=blank), TIMEZONE)
+
+    assert record["priority"] == "normal"
+
+
+@pytest.mark.parametrize("value", ["7", "urgent", "0"])
+def test_an_unrecognized_priority_is_passed_through_not_guessed(value):
+    # Calling an unknown value "normal" would hide it. Anything outside the
+    # documented scale comes through as-is, so it's visible rather than
+    # silently flattened into a wrong answer.
+    record = normalize_email_summary(raw_email(priority=value), TIMEZONE)
+
+    assert record["priority"] == value
+
+
+def test_the_flag_name_is_surfaced():
+    record = normalize_email_summary(raw_email(flagid="important"), TIMEZONE)
+
+    assert record["flag"] == "important"
+
+
+@pytest.mark.parametrize("value", ["flag_not_set", "", "   "])
+def test_an_unflagged_message_has_an_empty_flag(value):
+    assert normalize_email_summary(raw_email(flagid=value), TIMEZONE)["flag"] == ""
+
+
+def test_an_absent_flagid_reads_as_unflagged():
+    raw = raw_email()
+    del raw["flagid"]
+
+    assert normalize_email_summary(raw, TIMEZONE)["flag"] == ""
+
+
+# All three of Zoho's own flag types, observed live: lowercase, no separator.
+OBSERVED_FLAG_NAMES = ["important", "followup", "info"]
+
+
+@pytest.mark.parametrize("name", [*OBSERVED_FLAG_NAMES, "someflagnobodyhasseen"])
+def test_flag_names_pass_through_unchanged(name):
+    # The last case is the point of the design, and it isn't hypothetical:
+    # this test originally guessed "follow_up" for the second flag, and the
+    # real value has no separator. An enumeration built from that guess would
+    # have reported a flag the user had deliberately set as "unflagged".
+    record = normalize_email_summary(raw_email(flagid=name), TIMEZONE)
+
+    assert record["flag"] == name

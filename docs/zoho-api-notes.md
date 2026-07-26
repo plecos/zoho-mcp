@@ -146,14 +146,54 @@ other 35 it simply repeated `fromAddress` verbatim. It's the display name
 when there is one, and a copy of the address when there isn't — surfaced
 here as `from_name`, blank when it would only duplicate.
 
-### `flagid`, `priority`, and the thread fields could not be verified
+### `priority` is X-Priority, confirmed against the `Importance` header
 
-Recorded as *unknown*, not as absent. On a real mailbox: `flagid` was
-`flag_not_set` on all 120 messages, `priority` was `"3"` on all 120, and
-the two messages carrying `threadCount` reported `"0"` with
-`threadId == messageId`. None of those distinguishes anything, so none is
-surfaced. If a future account has flagged mail or real threads, this is the
-first thing to re-derive.
+Lower means more important. Established by sending a high-importance message
+and reading its own source back:
+
+| `priority` | `Importance` header on the same message |
+| --- | --- |
+| `"2"` | `High` |
+| `"3"` | `Medium` |
+| `"4"` | `Low` |
+
+So Zoho's numeric field follows the X-Priority convention, and `"3"` is the
+default — it was `"3"` on 48 of 50 real messages. Those three are the range
+Zoho's own compose UI can produce. `1` and `5` are highest and lowest under
+the same convention but have **not** been observed here; they'd have to come
+from a sender using another client.
+
+This was recorded as unverifiable for weeks, because a real mailbox with no
+prioritized mail in it gives you a column of `"3"` and no way to read it. The
+fix was to create the data, then check the answer against the message's own
+headers rather than against a guess.
+
+### `flagid` is a flag *type name*, not a boolean
+
+`flag_not_set` when unflagged; a name otherwise. All three of Zoho's own flag
+types have now been set on real messages, and every one is lowercase with **no
+separator**:
+
+| Zoho's UI | `flagid` |
+| --- | --- |
+| Important | `important` |
+| Follow Up | `followup` |
+| Info | `info` |
+
+That second one is why `normalize_email_summary` passes any name through
+unchanged rather than matching against a list. The first draft of its test
+guessed `follow_up`, and the real value has no underscore — so an enumeration
+built from that guess would have silently dropped a flag the user had actually
+set. These three appear to be the complete set Zoho's UI offers, but a
+message from another client could carry something else, so names still pass
+through rather than being validated against the table.
+
+### The thread fields still could not be verified
+
+`threadId`/`threadCount` appeared on 2 of 60 messages, reporting
+`threadCount: "0"` with `threadId == messageId`. That distinguishes nothing,
+so neither is surfaced. Unlike flag and priority, this one has no obvious
+test to construct — it would need a genuinely threaded conversation.
 
 ### `originalmessage` is account-scoped and types its id differently
 

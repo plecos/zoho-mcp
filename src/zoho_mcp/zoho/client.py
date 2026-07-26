@@ -178,6 +178,26 @@ EXCLUDED_FOLDER_TYPES = frozenset({"Sent", "Drafts", "Templates"})
 # ccAddress.
 ZOHO_EMPTY_ADDRESS_SENTINEL = "Not Provided"
 
+# What Zoho puts in `flagid` when a message carries no flag. Any other value
+# is a flag *type* name -- 'important' is the one observed -- so names pass
+# through rather than being matched against a list.
+ZOHO_UNFLAGGED_SENTINEL = "flag_not_set"
+
+# Zoho's numeric `priority`, rendered as words. Confirmed against the
+# `Importance` header on the same messages: priority "2" carried
+# `Importance: High` and "3" carried `Importance: Medium`, which pins this to
+# the X-Priority convention where lower means more important. "2" and "3" are
+# verified; 1/4/5 follow that convention and are not yet observed here.
+_PRIORITY_LABELS = {
+    "1": "highest",
+    "2": "high",
+    "3": "normal",
+    "4": "low",
+    "5": "lowest",
+}
+# Zoho reported "3" on 99 of 100 real messages, so a missing value means this.
+_DEFAULT_PRIORITY = "normal"
+
 # Characters with no legitimate visible meaning, used by some marketing
 # emails purely to pad preview text. Deliberately excludes ZWJ (U+200D) and
 # ZWNJ (U+200C), which are load-bearing for emoji sequences and some scripts.
@@ -355,6 +375,17 @@ def normalize_email_summary(
         # spaces that the removed characters were separating, because an
         # invisible character is a non-space token to `split`.
         snippet = _collapse_whitespace(snippet)
+        flag = str(raw.get("flagid") or "").strip()
+        if flag == ZOHO_UNFLAGGED_SENTINEL:
+            flag = ""
+        raw_priority = str(raw.get("priority") or "").strip()
+        # Unrecognized values pass through rather than being flattened to
+        # "normal", which would hide them behind a confident wrong answer.
+        priority = (
+            _DEFAULT_PRIORITY
+            if not raw_priority
+            else _PRIORITY_LABELS.get(raw_priority, str(raw.get("priority")))
+        )
         sender = html.unescape(str(raw.get("sender") or ""))
         from_address = raw["fromAddress"]
         try:
@@ -385,6 +416,8 @@ def normalize_email_summary(
             "to": _split_address_field(raw.get("toAddress")),
             "cc": _split_address_field(raw.get("ccAddress")),
             "has_attachment": raw.get("hasAttachment") == "1",
+            "flag": flag,
+            "priority": priority,
             "size_bytes": size_bytes,
             # Wrapped rather than iterated if it ever arrives as a bare
             # string: splitting one into characters is the worst outcome.

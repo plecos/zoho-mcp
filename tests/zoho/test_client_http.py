@@ -176,6 +176,8 @@ async def test_search_emails_calls_search_endpoint_with_auth_header(
             "has_attachment": False,
             "size_bytes": None,
             "label_ids": [],
+            "flag": "",
+            "priority": "normal",
         }
     ]
 
@@ -606,6 +608,8 @@ async def test_list_emails_calls_view_endpoint_with_correct_params(
             "has_attachment": False,
             "size_bytes": None,
             "label_ids": [],
+            "flag": "",
+            "priority": "normal",
         }
     ]
 

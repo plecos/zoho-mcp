@@ -16,7 +16,14 @@ Nothing monolithic — each module has exactly one job:
 - `zoho/contacts_client.py` — the Zoho Contacts API and its normalization. Separate from `client.py` despite an identical pattern, because Contacts genuinely is a distinct product (own base URL, own scope family). The two share `zoho_authenticated_get` and `ZohoAPIError` rather than each rolling their own.
 - `zoho/auth.py` — OAuth flow, token refresh, and token storage. No knowledge of Mail/Calendar/Contacts payloads.
 - `tools/*.py` — thin MCP tool wrappers that call into a client and shape output for the LLM. No HTTP, no token logic; the client is injected, never constructed here. `tools/groups.py` is its own module because groups span Tasks/Notes/Bookmarks and belong to none of them.
+- `tools/auth.py` — the `authenticate` tool: composes `zoho/auth.py`'s consent flow so an unauthorized server can be authorized from inside a conversation. Needed because an MCPB bundle has a single entry point, which puts `zoho-mcp-setup` out of reach. Its browser round trip is injectable so everything around it is testable.
 - `server.py` — FastMCP instantiation and tool registration only. No business logic.
+
+## Put the gate where the traffic passes
+
+Twice now the right place for a check has been the one chokepoint rather than the callers. `send_email`'s gate lives in `ZohoClient`, the layer that issues the request. The unauthenticated-server error lives in `ZohoTokenManager.get_access_token`, which all 40 tools reach Zoho through — so one message covers every tool, no tool can route around it, and adding the 41st needs no thought about it.
+
+When a rule has to hold across many call sites, find the single line they all execute. If there isn't one, that's usually the finding.
 
 If a file starts accumulating more than one of these responsibilities, split it before adding to it. If a function is doing "fetch + parse + format + handle errors," break it apart.
 

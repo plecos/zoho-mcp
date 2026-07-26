@@ -2,7 +2,7 @@
 
 An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contacts, Tasks, Notes, Bookmarks, Groups, and Resource Booking as tools to any MCP-compatible LLM client — Claude, ChatGPT, Gemini, or anything else that speaks MCP.
 
-39 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
+40 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
 
 **Sending email is disabled by default.** The server saves drafts instead, and only sends if you explicitly opt in. See [Composing email](#composing-email).
 
@@ -65,9 +65,31 @@ This one is narrow on purpose: local stdio with no third-party relay, draft-firs
    uv run zoho-mcp
    ```
 
-If you later add scopes, re-run `zoho-mcp-setup` — the stored token carries whatever scopes it was granted, so new ones need fresh consent.
+If you later add scopes, re-run `zoho-mcp-setup` — or just call the `authenticate` tool, which does the same thing from inside a conversation. The stored token carries whatever scopes it was granted, so new ones need fresh consent.
+
+### Installing as a Claude Desktop extension
+
+The repo also packages as an [MCP Bundle](https://github.com/anthropics/mcpb), which replaces steps 2–4 with a settings form. Build one with [the MCPB CLI](https://github.com/anthropics/mcpb):
+
+```bash
+npx @anthropic-ai/mcpb pack
+```
+
+That produces a `zoho-mcp.mcpb` you can install from Claude Desktop's Extensions pane. It declares `server.type: "uv"`, so the host supplies the Python runtime and resolves dependencies from `pyproject.toml` — nothing is vendored into the bundle and the user needs no Python install of their own.
+
+You still register an application in the Zoho API Console (step 1) and paste its client id and secret into the extension's settings, where the secret is stored in your OS credential store. Then call the **`authenticate`** tool once: it opens Zoho's own consent page in your browser, and the resulting token goes to the credential store too. Nothing is typed into the conversation.
+
+`ZOHO_ALLOW_AUTO_SEND` is deliberately *not* a setting in that form. It stays an environment variable you set by hand, because a labelled toggle is a much smaller act than editing a server's environment, and the friction is the point.
 
 ## Tools
+
+### Authorization
+
+| Tool | |
+| --- | --- |
+| `authenticate` | Run the Zoho consent flow and store the token *(write)* |
+
+Only needed if the server was started without a stored token — the case for a bundle install, where `zoho-mcp-setup` isn't reachable. Every other tool fails with a message naming this one until it has run. The check lives in the token manager, which every Zoho call passes through, so no tool can route around it.
 
 ### Mail
 
@@ -169,7 +191,7 @@ One practical note: drafts don't show up in `search_emails` at all (a Zoho quirk
 
 ## Configuration
 
-`ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET` are required. Everything else in `.env` is optional:
+`ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET` are required (a bundle install collects them in its settings form instead of `.env`). Everything else is optional:
 
 | Variable | Default | |
 | --- | --- | --- |

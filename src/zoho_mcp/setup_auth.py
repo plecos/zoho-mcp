@@ -8,11 +8,9 @@ to assert once the tested pieces are wired together, only real network I/O.
 """
 
 import asyncio
-import http.server
 import json
 import os
 import sys
-import urllib.parse
 import webbrowser
 from pathlib import Path
 
@@ -20,60 +18,16 @@ import httpx
 
 from zoho_mcp.config import load_env
 from zoho_mcp.zoho.auth import (
+    DEFAULT_CALLBACK_PORT,
+    SCOPES,
     ZohoTokenManager,
     build_authorization_url,
     exchange_code_for_tokens,
     extract_authorization_code,
     store_refresh_token,
+    wait_for_callback,
 )
 from zoho_mcp.zoho.client import get_default_calendar_uid, get_primary_account_id
-
-SCOPES = [
-    "ZohoMail.messages.READ",
-    "ZohoMail.messages.ALL",  # write access: mark_as_read/unread, move_email, add/remove_label
-    "ZohoMail.accounts.READ",  # needed once, to look up the mail account id
-    "ZohoMail.folders.READ",  # used at runtime to filter out Sent/Drafts by folder type
-    "ZohoCalendar.event.READ",
-    "ZohoCalendar.event.ALL",  # write access: create_event/update_event/delete_event
-    "ZohoCalendar.calendar.READ",  # setup: calendar uid lookup; runtime: list_calendars
-    "zohocontacts.contactapi.READ",
-    "ZohoMail.tasks.READ",
-    "ZohoMail.tasks.CREATE",  # write access: create_task
-    "ZohoMail.notes.READ",
-    "ZohoMail.notes.CREATE",  # write access: create_note
-    "ZohoMail.links.READ",
-    "ZohoMail.links.CREATE",  # write access: create_bookmark
-    "ZohoCalendar.resources.READ",
-    "ZohoCalendar.branches.READ",
-    "ZohoMail.tags.READ",
-    "ZohoCalendar.freebusy.READ",
-]
-DEFAULT_CALLBACK_PORT = 8765
-
-
-class _CallbackHandler(http.server.BaseHTTPRequestHandler):
-    """Captures the OAuth redirect's query string, then serves a plain notice."""
-
-    def do_GET(self) -> None:  # noqa: N802 (http.server's required method name)
-        self.server.callback_query = urllib.parse.parse_qs(  # type: ignore[attr-defined]
-            urllib.parse.urlparse(self.path).query
-        )
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.end_headers()
-        self.wfile.write(
-            b"<html><body>Authorized. You can close this tab.</body></html>"
-        )
-
-    def log_message(self, format: str, *args: object) -> None:
-        pass  # suppress http.server's default request logging to stderr
-
-
-def _wait_for_callback(port: int) -> dict[str, list[str]]:
-    """Block until exactly one request hits the local callback, then return its query."""
-    server = http.server.HTTPServer(("localhost", port), _CallbackHandler)
-    server.handle_request()
-    return server.callback_query  # type: ignore[attr-defined]
 
 
 async def _exchange_store_and_lookup(
@@ -144,7 +98,7 @@ def main() -> None:
     webbrowser.open(auth_url)
 
     print(f"Waiting for the OAuth redirect on {redirect_uri} ...")
-    query = _wait_for_callback(port)
+    query = wait_for_callback(port)
     code = extract_authorization_code(query)
 
     account_id, calendar_uid = asyncio.run(

@@ -26,11 +26,18 @@ Two things make this stronger than a hand-written fake:
 import inspect
 from unittest.mock import AsyncMock, create_autospec
 
+import httpx
 import pytest
 
 from zoho_mcp.server import create_server
+from zoho_mcp.zoho.auth import ZohoTokenManager
 from zoho_mcp.zoho.client import ZohoClient
 from zoho_mcp.zoho.contacts_client import ZohoContactsClient
+
+# `authenticate` is the one registered tool that doesn't forward to a client:
+# it mutates the token manager and runs a browser flow, covered by
+# tests/tools/test_authenticate.py instead.
+UNFORWARDED_TOOLS = {"authenticate"}
 
 # (tool name, arguments in, expected client method, expected forwarded kwargs).
 #
@@ -290,7 +297,14 @@ def clients():
 
 @pytest.fixture
 def server(clients):
-    return create_server(*clients)
+    http_client = httpx.AsyncClient()
+    token_manager = ZohoTokenManager(
+        client_id="id",
+        client_secret="secret",
+        refresh_token="refresh",
+        http_client=http_client,
+    )
+    return create_server(*clients, token_manager, http_client)
 
 
 def _awaited(mock_client) -> list[str]:
@@ -376,7 +390,7 @@ async def test_every_registered_tool_is_covered_by_a_case(server):
     Without this, the next tool added silently reverts this file to partial
     coverage -- the same way `create_server` went 37 closures deep untested.
     """
-    registered = {t.name for t in await server.list_tools()}
+    registered = {t.name for t in await server.list_tools()} - UNFORWARDED_TOOLS
     covered = {case[0] for case in ZOHO_CASES + CONTACTS_CASES}
 
     assert registered == covered, (

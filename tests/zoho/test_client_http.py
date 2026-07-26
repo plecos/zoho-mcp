@@ -3148,3 +3148,151 @@ async def test_reply_draft_still_sets_mode_draft_when_auto_send_enabled(
 
     sent = json.loads(route.calls.last.request.content)
     assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS
+
+
+# _compose already strips and rejects blank recipients; _update_message did
+# not, so a blank id assembled by an LLM from a partial parse went straight to
+# Zoho. Given this vendor's documented habit of accepting bad input silently,
+# that risks the operation applying to a subset while returning 200.
+async def test_batch_write_strips_blank_message_ids(respx_mock, zoho_client):
+    route = respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    await zoho_client.mark_as_read(message_ids=["111", "", "  ", "222"])
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["messageId"] == ["111", "222"]
+
+
+@pytest.mark.parametrize("blank_ids", [[""], ["   "], ["", "  ", "\t"]])
+async def test_batch_write_rejects_all_blank_message_ids_without_a_request(
+    respx_mock, zoho_client, blank_ids
+):
+    route = respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    )
+
+    with pytest.raises(ZohoAPIError, match="message_ids"):
+        await zoho_client.mark_as_read(message_ids=blank_ids)
+
+    assert not route.called
+
+
+# The 31-day cap only had reject-side coverage, so flipping > to >= would have
+# broken nothing. search_emails already has this counterpart for its limit.
+async def test_list_events_accepts_a_range_of_exactly_31_days(respx_mock, zoho_client):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
+    ).mock(return_value=httpx.Response(200, json={"events": []}))
+    start = datetime(2026, 7, 1, tzinfo=timezone.utc)
+
+    await zoho_client.list_events(start=start, end=start + timedelta(days=31))
+
+    assert route.called
+
+
+@pytest.mark.parametrize(("limit", "start"), [(1, 1), (200, 1), (20, 999)])
+async def test_list_emails_accepts_boundary_limit_and_start(
+    respx_mock, zoho_client, limit, start
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(return_value=httpx.Response(200, json={"data": []}))
+
+    await zoho_client.list_emails(limit=limit, start=start)
+
+    assert route.called
+
+
+# One folder missing folderType used to fail the whole call, and the folder map
+# feeds both search_emails and list_emails -- so a single odd folder made the
+# entire mailbox unreadable. The map only drives a convenience filter, so an
+# unclassifiable folder should be skipped, not fatal.
+async def test_search_emails_survives_one_malformed_folder(respx_mock, zoho_client):
+    mock_pacific_accounts_endpoint(respx_mock)
+    respx_mock.get(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/folders").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"folderId": "1122334455", "folderType": "Inbox"},
+                    {"folderId": "broken"},  # no folderType
+                    {"folderId": "sent-folder-id", "folderType": "Sent"},
+                ]
+            },
+        )
+    )
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    _raw_email(message_id="1", folder_id="1122334455"),
+                    _raw_email(message_id="2", folder_id="sent-folder-id"),
+                ]
+            },
+        )
+    )
+
+    results = await zoho_client.search_emails(query="x")
+
+    # Inbox kept, Sent still excluded -- the unclassifiable folder didn't
+    # prevent either decision.
+    assert {r["id"] for r in results} == {"1"}
+
+
+# An LLM passing group_id="" instead of omitting the argument is realistic
+# client behavior, and it used to build ".../groups/" -- a wrong URL rather
+# than personal scope or a clear error.
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_blank_group_id_is_treated_as_personal_scope(
+    respx_mock, zoho_client, blank
+):
+    route = respx_mock.get("https://mail.zoho.com/api/tasks/me").mock(
+        return_value=httpx.Response(200, json={"data": {"tasks": []}})
+    )
+
+    await zoho_client.list_tasks(group_id=blank)
+
+    assert route.called
+
+
+# timedelta rejects magnitudes over 999999999 days, so a huge days_back leaked
+# a raw OverflowError instead of a usable message.
+@pytest.mark.parametrize("huge", [10**9, 10**12])
+async def test_search_emails_rejects_absurd_days_back_without_a_request(
+    respx_mock, zoho_client, huge
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    route = respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    )
+
+    with pytest.raises(ZohoAPIError, match="days_back"):
+        await zoho_client.search_emails(query="", days_back=huge)
+
+    assert not route.called
+
+
+# cc=[""] is truthy, so it produced an empty ccAddress header rather than
+# being omitted. Recipients in `to` are already stripped; cc/bcc weren't.
+async def test_blank_cc_and_bcc_entries_are_dropped(respx_mock, zoho_client):
+    route = mock_compose_endpoints(respx_mock)
+
+    await zoho_client.create_draft(
+        to=["a@example.com", "  ", ""],
+        subject="S",
+        content="B",
+        cc=[""],
+        bcc=["  ", "d@example.com"],
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["toAddress"] == "a@example.com"
+    assert "ccAddress" not in sent
+    assert sent["bccAddress"] == "d@example.com"

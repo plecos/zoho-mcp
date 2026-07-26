@@ -164,3 +164,90 @@ def test_load_refresh_token_reads_via_keyring(monkeypatch):
     )
 
     assert load_refresh_token() == "abc123"
+
+
+def _manager(http_client):
+    return ZohoTokenManager(
+        client_id="id",
+        client_secret="secret",
+        refresh_token="refresh",
+        http_client=http_client,
+    )
+
+
+# expires_in was trusted to be an int. Zoho is documented to send strings where
+# numbers are expected elsewhere (status "1", isFavorite "false", color "-1"),
+# and a string here leaked a bare TypeError out of every tool call rather than
+# a ZohoAuthError the server can report.
+@pytest.mark.parametrize("value", ["3600", 3600.0, " 3600 "])
+async def test_numeric_expires_in_is_accepted_whatever_its_type(
+    respx_mock, http_client, value
+):
+    respx_mock.post(TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "t", "expires_in": value}
+        )
+    )
+
+    assert await _manager(http_client).get_access_token() == "t"
+
+
+@pytest.mark.parametrize("value", [None, "soon", "", [], {}])
+async def test_unparseable_expires_in_raises_auth_error(respx_mock, http_client, value):
+    respx_mock.post(TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "t", "expires_in": value}
+        )
+    )
+
+    with pytest.raises(ZohoAuthError, match="expires_in"):
+        await _manager(http_client).get_access_token()
+
+
+# A lifetime shorter than the safety margin used to push expires_at into the
+# past, so every single call re-refreshed -- one token POST per API call, which
+# is a straight path to being rate-limited into an outage.
+@pytest.mark.parametrize("short_lifetime", [0, 1, 30, 60])
+async def test_short_lifetime_does_not_cause_a_refresh_on_every_call(
+    respx_mock, http_client, short_lifetime
+):
+    route = respx_mock.post(TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200, json={"access_token": "t", "expires_in": short_lifetime}
+        )
+    )
+    manager = _manager(http_client)
+
+    for _ in range(3):
+        await manager.get_access_token()
+
+    assert route.call_count == 1
+
+
+# The safety margin itself was never exercised: the existing expiry test jumps
+# two hours, so deleting REFRESH_SAFETY_MARGIN_SECONDS entirely broke nothing.
+async def test_token_is_refreshed_inside_the_safety_margin(respx_mock, http_client):
+    route = respx_mock.post(TOKEN_URL).mock(return_value=_success_response())
+    manager = _manager(http_client)
+    await manager.get_access_token()
+
+    # 3570s in: past 3600-60, so the token is treated as expiring imminently.
+    with time_machine.travel(
+        datetime.now(timezone.utc) + timedelta(seconds=3570), tick=False
+    ):
+        await manager.get_access_token()
+
+    assert route.call_count == 2
+
+
+async def test_token_is_not_refreshed_before_the_safety_margin(respx_mock, http_client):
+    route = respx_mock.post(TOKEN_URL).mock(return_value=_success_response())
+    manager = _manager(http_client)
+    await manager.get_access_token()
+
+    with time_machine.travel(
+        datetime.now(timezone.utc) + timedelta(seconds=3000), tick=False
+    ):
+        await manager.get_access_token()
+
+    assert route.call_count == 1

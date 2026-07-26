@@ -10,6 +10,14 @@ An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contact
 
 Single-user, local stdio transport, personal-scale. It works and is in daily use, but there's no hosting, no multi-tenancy, and no auth beyond one account's OAuth token.
 
+## Why not Zoho's own MCP?
+
+Zoho ships a [first-party MCP offering](https://www.zoho.com/mcp/) covering Mail, Calendar, and ~45 other products. It's hosted, org-oriented, and broad. If you need CRM or Desk, or need several people on one shared server, use theirs.
+
+This one is narrow on purpose: local stdio with no third-party relay, draft-first mail composition with sending off by default and no send-a-reply tool at any setting, and every date already converted to the mailbox's own local offset so no caller has to get it right. It also covers ground their pre-configured servers don't — Zoho Contacts, and Mail's Tasks, Notes, and Bookmarks.
+
+[docs/vs-zoho-mcp.md](docs/vs-zoho-mcp.md) has the full comparison, including where theirs is the better choice and what couldn't be verified about it.
+
 ## Requirements
 
 - Python 3.12+

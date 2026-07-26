@@ -170,15 +170,23 @@ headers rather than against a guess.
 
 ### `flagid` is a flag *type name*, not a boolean
 
-`flag_not_set` when unflagged; a name otherwise. Two observed so far, both
-lowercase with **no separator**: `important` and `followup`.
+`flag_not_set` when unflagged; a name otherwise. All three of Zoho's own flag
+types have now been set on real messages, and every one is lowercase with **no
+separator**:
+
+| Zoho's UI | `flagid` |
+| --- | --- |
+| Important | `important` |
+| Follow Up | `followup` |
+| Info | `info` |
 
 That second one is why `normalize_email_summary` passes any name through
 unchanged rather than matching against a list. The first draft of its test
 guessed `follow_up`, and the real value has no underscore — so an enumeration
 built from that guess would have silently dropped a flag the user had actually
-set. Zoho's UI offers more flag types than these two; assume the same shape
-and don't try to enumerate them.
+set. These three appear to be the complete set Zoho's UI offers, but a
+message from another client could carry something else, so names still pass
+through rather than being validated against the table.
 
 ### The thread fields still could not be verified
 

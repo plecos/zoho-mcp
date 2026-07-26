@@ -438,12 +438,16 @@ def test_an_absent_flagid_reads_as_unflagged():
     assert normalize_email_summary(raw, TIMEZONE)["flag"] == ""
 
 
-@pytest.mark.parametrize("name", ["important", "followup", "someflagnobodyhasseen"])
+# All three of Zoho's own flag types, observed live: lowercase, no separator.
+OBSERVED_FLAG_NAMES = ["important", "followup", "info"]
+
+
+@pytest.mark.parametrize("name", [*OBSERVED_FLAG_NAMES, "someflagnobodyhasseen"])
 def test_flag_names_pass_through_unchanged(name):
-    # 'important' and 'followup' are both observed live. The third is the
-    # point of the design: this originally guessed "follow_up", and the real
-    # value has no separator -- so an enumeration built from that guess would
-    # have silently dropped a flag the user had actually set.
+    # The last case is the point of the design, and it isn't hypothetical:
+    # this test originally guessed "follow_up" for the second flag, and the
+    # real value has no separator. An enumeration built from that guess would
+    # have reported a flag the user had deliberately set as "unflagged".
     record = normalize_email_summary(raw_email(flagid=name), TIMEZONE)
 
     assert record["flag"] == name

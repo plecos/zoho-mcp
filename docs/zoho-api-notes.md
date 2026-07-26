@@ -155,12 +155,13 @@ and reading its own source back:
 | --- | --- |
 | `"2"` | `High` |
 | `"3"` | `Medium` |
+| `"4"` | `Low` |
 
 So Zoho's numeric field follows the X-Priority convention, and `"3"` is the
-default — it was `"3"` on 99 of 100 real messages. `1`/`4`/`5` follow that
-same convention as highest/low/lowest but have **not** been observed on this
-account; Zoho's compose UI appears to offer only High/Normal/Low, which would
-produce 2/3/4.
+default — it was `"3"` on 48 of 50 real messages. Those three are the range
+Zoho's own compose UI can produce. `1` and `5` are highest and lowest under
+the same convention but have **not** been observed here; they'd have to come
+from a sender using another client.
 
 This was recorded as unverifiable for weeks, because a real mailbox with no
 prioritized mail in it gives you a column of `"3"` and no way to read it. The
@@ -169,10 +170,15 @@ headers rather than against a guess.
 
 ### `flagid` is a flag *type name*, not a boolean
 
-`flag_not_set` when unflagged; a name otherwise. Flagging a message in Zoho's
-UI produced `flagid: "important"`. Only that one value has been seen, so
-`normalize_email_summary` passes any other name through unchanged rather than
-matching against a list that would silently drop the ones nobody has hit yet.
+`flag_not_set` when unflagged; a name otherwise. Two observed so far, both
+lowercase with **no separator**: `important` and `followup`.
+
+That second one is why `normalize_email_summary` passes any name through
+unchanged rather than matching against a list. The first draft of its test
+guessed `follow_up`, and the real value has no underscore — so an enumeration
+built from that guess would have silently dropped a flag the user had actually
+set. Zoho's UI offers more flag types than these two; assume the same shape
+and don't try to enumerate them.
 
 ### The thread fields still could not be verified
 

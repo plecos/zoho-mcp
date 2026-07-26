@@ -385,7 +385,7 @@ def test_priority_is_a_label_not_a_number():
         ("1", "highest"),
         ("2", "high"),  # verified live against `Importance: High`
         ("3", "normal"),  # verified live against `Importance: Medium`
-        ("4", "low"),
+        ("4", "low"),  # verified live against `Importance: Low`
         ("5", "lowest"),
     ],
 )
@@ -438,10 +438,12 @@ def test_an_absent_flagid_reads_as_unflagged():
     assert normalize_email_summary(raw, TIMEZONE)["flag"] == ""
 
 
-def test_an_unfamiliar_flag_name_is_passed_through():
-    # Only 'important' has been observed. Zoho's UI offers other flag types,
-    # so the name passes through rather than being matched against a list
-    # that would silently drop the ones nobody has seen yet.
-    record = normalize_email_summary(raw_email(flagid="follow_up"), TIMEZONE)
+@pytest.mark.parametrize("name", ["important", "followup", "someflagnobodyhasseen"])
+def test_flag_names_pass_through_unchanged(name):
+    # 'important' and 'followup' are both observed live. The third is the
+    # point of the design: this originally guessed "follow_up", and the real
+    # value has no separator -- so an enumeration built from that guess would
+    # have silently dropped a flag the user had actually set.
+    record = normalize_email_summary(raw_email(flagid=name), TIMEZONE)
 
-    assert record["flag"] == "follow_up"
+    assert record["flag"] == name

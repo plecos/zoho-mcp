@@ -141,9 +141,27 @@ class ZohoTokenManager:
         error covers every tool, and no tool can route around it.
 
         Raises:
-            ZohoAuthError: if no refresh token is held, or Zoho rejects the
-                refresh (e.g. revoked token).
+            ZohoAuthError: if credentials are missing, no refresh token is
+                held, or Zoho rejects the refresh (e.g. revoked token).
         """
+        # Checked before the token, and before Zoho is asked at all. Found by
+        # driving the packed bundle: a refresh with a blank client id gets
+        # `invalid_client` back, which says nothing about what to fix. A
+        # bundle reinstall lands exactly there -- the credential store keeps
+        # the token while the settings form starts empty. Naming the
+        # credentials beats naming the token, since `authenticate` can't run
+        # without them either.
+        for name, value in (
+            ("ZOHO_CLIENT_ID", self._client_id),
+            ("ZOHO_CLIENT_SECRET", self._client_secret),
+        ):
+            if not value.strip():
+                raise ZohoAuthError(
+                    f"{name} is not set, so this server cannot talk to Zoho. "
+                    f"Register a Server-based Application at "
+                    f"https://accounts.zoho.com/developerconsole and supply "
+                    f"its credentials, then authenticate."
+                )
         if self._refresh_token is None:
             raise ZohoAuthError(
                 "This server has no Zoho authorization yet. Call the "

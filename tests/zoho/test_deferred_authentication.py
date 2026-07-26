@@ -107,3 +107,50 @@ async def test_setting_a_blank_refresh_token_is_rejected(http_client, blank):
 
     with pytest.raises(ZohoAuthError, match="refresh token"):
         token_manager.set_refresh_token(blank)
+
+
+# Found by driving the packed bundle: with a token already in the credential
+# store but no client id/secret configured, Zoho answers a refresh with
+# `invalid_client`, which tells the user nothing about what to fix. A bundle
+# reinstall lands exactly there -- keyring survives, the settings form starts
+# empty.
+async def test_missing_credentials_are_reported_before_asking_zoho(
+    respx_mock, http_client
+):
+    route = mock_token_endpoint(respx_mock)
+    token_manager = ZohoTokenManager(
+        client_id="",
+        client_secret="secret",
+        refresh_token="refresh-1",
+        http_client=http_client,
+    )
+
+    with pytest.raises(ZohoAuthError, match="ZOHO_CLIENT_ID"):
+        await token_manager.get_access_token()
+
+    assert not route.called
+
+
+async def test_missing_secret_is_reported_before_asking_zoho(respx_mock, http_client):
+    route = mock_token_endpoint(respx_mock)
+    token_manager = ZohoTokenManager(
+        client_id="id",
+        client_secret="   ",
+        refresh_token="refresh-1",
+        http_client=http_client,
+    )
+
+    with pytest.raises(ZohoAuthError, match="ZOHO_CLIENT_SECRET"):
+        await token_manager.get_access_token()
+
+    assert not route.called
+
+
+async def test_credentials_are_checked_before_the_missing_token(http_client):
+    # Both missing: naming the credentials is more useful, because
+    # `authenticate` can't run without them either.
+    token_manager = manager(http_client)
+    token_manager._client_id = ""
+
+    with pytest.raises(ZohoAuthError, match="ZOHO_CLIENT_ID"):
+        await token_manager.get_access_token()

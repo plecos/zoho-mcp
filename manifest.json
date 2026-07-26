@@ -23,6 +23,8 @@
     "type": "uv",
     "entry_point": "src/zoho_mcp/server.py",
     "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "src/zoho_mcp/server.py"],
       "env": {
         "ZOHO_CLIENT_ID": "${user_config.zoho_client_id}",
         "ZOHO_CLIENT_SECRET": "${user_config.zoho_client_secret}",

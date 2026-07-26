@@ -9,9 +9,12 @@ to assert once the tested pieces are wired together, only real network I/O.
 
 import asyncio
 import http.server
+import json
 import os
+import sys
 import urllib.parse
 import webbrowser
+from pathlib import Path
 
 import httpx
 
@@ -102,6 +105,31 @@ async def _exchange_store_and_lookup(
     return account_id, calendar_uid
 
 
+def zoho_mcp_executable() -> Path:
+    """Absolute path to this install's ``zoho-mcp`` entry point.
+
+    Derived from the running interpreter rather than ``PATH``: an MCP
+    client launches the server with its own environment, so a bare
+    ``zoho-mcp`` that happens to resolve in the developer's shell won't
+    resolve there.
+    """
+    name = "zoho-mcp.exe" if os.name == "nt" else "zoho-mcp"
+    return Path(sys.executable).parent / name
+
+
+def build_client_config_snippet(executable: Path) -> str:
+    """Render the MCP-client config entry for this install, ready to paste.
+
+    ``json.dumps`` rather than an f-string because Windows paths are full
+    of backslashes -- hand-formatting one produces a snippet the client
+    can't parse.
+    """
+    return json.dumps(
+        {"mcpServers": {"zoho-mcp": {"command": str(executable), "args": []}}},
+        indent=2,
+    )
+
+
 def main() -> None:
     load_env()
     client_id = os.environ["ZOHO_CLIENT_ID"]
@@ -127,11 +155,13 @@ def main() -> None:
             redirect_uri=redirect_uri,
         )
     )
-    print("Zoho refresh token stored.\n")
-    print("Add these to your .env:")
+    print("Zoho refresh token stored. Setup is complete.\n")
+    print("Point your MCP client at this server by adding:\n")
+    print(build_client_config_snippet(zoho_mcp_executable()))
+    print("\nOptional -- the server looks both of these up on startup if")
+    print("they're absent, so adding them to .env only saves two API calls:")
     print(f"ZOHO_ACCOUNT_ID={account_id}")
-    print(f"ZOHO_CALENDAR_UID={calendar_uid}\n")
-    print("Then run `uv run zoho-mcp`.")
+    print(f"ZOHO_CALENDAR_UID={calendar_uid}")
 
 
 if __name__ == "__main__":

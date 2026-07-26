@@ -91,5 +91,30 @@ async def test_account_and_calendar_ids_are_passed_through(env):
 
     client, _ = server._build_zoho_clients_from_env()
 
-    assert client._account_id == "acct-123"
-    assert client._calendar_uid == "cal-456"
+    assert client._account_id_cache == "acct-123"
+    assert client._calendar_uid_cache == "cal-456"
+
+
+async def test_missing_account_and_calendar_ids_are_left_for_discovery(env):
+    # Neither is required any more -- ZohoClient looks them up. A KeyError
+    # here would put the ids back on the setup checklist.
+    env.delenv("ZOHO_ACCOUNT_ID", raising=False)
+    env.delenv("ZOHO_CALENDAR_UID", raising=False)
+
+    client, _ = server._build_zoho_clients_from_env()
+
+    assert client._account_id_cache is None
+    assert client._calendar_uid_cache is None
+
+
+# A key left in .env with no value is the likely shape of a half-finished
+# setup; it has to read as "not configured", not as an empty path segment.
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_blank_ids_are_treated_as_unconfigured(env, blank):
+    env.setenv("ZOHO_ACCOUNT_ID", blank)
+    env.setenv("ZOHO_CALENDAR_UID", blank)
+
+    client, _ = server._build_zoho_clients_from_env()
+
+    assert client._account_id_cache is None
+    assert client._calendar_uid_cache is None

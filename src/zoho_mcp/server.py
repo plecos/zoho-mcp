@@ -54,7 +54,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
     """Build the FastMCP app and register all tools against the given clients."""
     mcp = FastMCP("zoho-mcp")
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="Search email", annotations=_READ_ONLY)
     async def search_emails(
         query: str = "", limit: int = 20, days_back: int | None = None
     ) -> list[dict]:
@@ -92,7 +92,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, query=query, limit=limit, days_back=days_back
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List email by read status", annotations=_READ_ONLY)
     async def list_emails(
         status: str = "all",
         folder_id: str | None = None,
@@ -120,14 +120,14 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, status=status, folder_id=folder_id, limit=limit, start=start
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="Read an email", annotations=_READ_ONLY)
     async def get_email(message_id: str, folder_id: str) -> dict:
         """Fetch the full plain-text body of one email found via search_emails."""
         return await mail_tools.get_email(
             client, message_id=message_id, folder_id=folder_id
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List email attachments", annotations=_READ_ONLY)
     async def list_attachments(message_id: str, folder_id: str) -> list[dict]:
         """List attachment metadata for one email found via search_emails.
 
@@ -138,7 +138,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, message_id=message_id, folder_id=folder_id
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List mail folders", annotations=_READ_ONLY)
     async def list_folders() -> list[dict]:
         """List all folders in the mailbox, including custom subfolders.
 
@@ -148,7 +148,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         return await mail_tools.list_folders(client)
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List mail labels", annotations=_READ_ONLY)
     async def list_labels() -> list[dict]:
         """List all labels/tags configured in the mailbox.
 
@@ -157,7 +157,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         return await mail_tools.list_labels(client)
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List email signatures", annotations=_READ_ONLY)
     async def list_signatures() -> list[dict]:
         """List all configured email signatures.
 
@@ -165,7 +165,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         return await mail_tools.list_signatures(client)
 
-    @mcp.tool(annotations=_CREATE)
+    @mcp.tool(title="Save an email draft", annotations=_CREATE)
     async def create_draft(
         to: list[str],
         subject: str,
@@ -187,7 +187,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, to=to, subject=subject, content=content, cc=cc, bcc=bcc
         )
 
-    @mcp.tool(annotations=_CREATE)
+    @mcp.tool(title="Save a reply draft", annotations=_CREATE)
     async def reply_draft(
         message_id: str, content: str, reply_all: bool = False
     ) -> dict:
@@ -207,7 +207,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, message_id=message_id, content=content, reply_all=reply_all
         )
 
-    @mcp.tool(annotations=_SEND)
+    @mcp.tool(title="Send an email", annotations=_SEND)
     async def send_email(
         to: list[str],
         subject: str,
@@ -232,7 +232,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, to=to, subject=subject, content=content, cc=cc, bcc=bcc
         )
 
-    @mcp.tool(annotations=_MAIL_UPDATE)
+    @mcp.tool(title="Mark email as read", annotations=_MAIL_UPDATE)
     async def mark_as_read(message_ids: list[str]) -> None:
         """Mark one or more emails as read, given ids from search_emails.
 
@@ -243,7 +243,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         await mail_tools.mark_as_read(client, message_ids=message_ids)
 
-    @mcp.tool(annotations=_MAIL_UPDATE)
+    @mcp.tool(title="Mark email as unread", annotations=_MAIL_UPDATE)
     async def mark_as_unread(message_ids: list[str]) -> None:
         """Mark one or more emails as unread, given ids from search_emails.
 
@@ -252,7 +252,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         await mail_tools.mark_as_unread(client, message_ids=message_ids)
 
-    @mcp.tool(annotations=_MAIL_UPDATE)
+    @mcp.tool(title="Move email to a folder", annotations=_MAIL_UPDATE)
     async def move_email(message_ids: list[str], folder_id: str) -> None:
         """Move one or more emails to a different folder.
 
@@ -265,7 +265,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, message_ids=message_ids, folder_id=folder_id
         )
 
-    @mcp.tool(annotations=_MAIL_UPDATE)
+    @mcp.tool(title="Add a label to email", annotations=_MAIL_UPDATE)
     async def add_label(message_ids: list[str], label_id: str) -> None:
         """Apply one label to one or more emails.
 
@@ -276,7 +276,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         await mail_tools.add_label(client, message_ids=message_ids, label_id=label_id)
 
-    @mcp.tool(annotations=_MAIL_UPDATE)
+    @mcp.tool(title="Remove a label from email", annotations=_MAIL_UPDATE)
     async def remove_label(message_ids: list[str], label_id: str) -> None:
         """Remove one label from one or more emails.
 
@@ -289,7 +289,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, message_ids=message_ids, label_id=label_id
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List calendar events", annotations=_READ_ONLY)
     async def list_events(
         start: str, end: str, calendar_id: str | None = None
     ) -> list[dict]:
@@ -309,7 +309,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, start=start, end=end, calendar_id=calendar_id
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="Get event details", annotations=_READ_ONLY)
     async def get_event(uid: str, calendar_id: str | None = None) -> dict:
         """Fetch full details for one event, given an id from list_events.
 
@@ -328,7 +328,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         return await calendar_tools.get_event(client, uid=uid, calendar_id=calendar_id)
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List calendars", annotations=_READ_ONLY)
     async def list_calendars() -> list[dict]:
         """List all calendars the user has access to.
 
@@ -338,7 +338,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         return await calendar_tools.list_calendars(client)
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="Check free/busy time", annotations=_READ_ONLY)
     async def get_freebusy(email: str, start: str, end: str) -> list[dict]:
         """Get busy time slots for a user's calendar in a time range.
 
@@ -358,7 +358,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, email=email, start=start, end=end
         )
 
-    @mcp.tool(annotations=_CREATE)
+    @mcp.tool(title="Create a calendar event", annotations=_CREATE)
     async def create_event(
         title: str,
         start: str,
@@ -394,7 +394,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             calendar_id=calendar_id,
         )
 
-    @mcp.tool(annotations=_UPDATE)
+    @mcp.tool(title="Update a calendar event", annotations=_UPDATE)
     async def update_event(
         uid: str,
         title: str | None = None,
@@ -431,7 +431,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             calendar_id=calendar_id,
         )
 
-    @mcp.tool(annotations=_DELETE)
+    @mcp.tool(title="Delete a calendar event", annotations=_DELETE)
     async def delete_event(uid: str, calendar_id: str | None = None) -> None:
         """Delete an existing Zoho Calendar event. Irreversible.
 
@@ -442,7 +442,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         await calendar_tools.delete_event(client, uid=uid, calendar_id=calendar_id)
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List office branches", annotations=_READ_ONLY)
     async def list_branches() -> list[dict]:
         """List the office branches configured for Zoho Calendar's
         Resource Booking feature (meeting rooms, equipment), each with
@@ -455,7 +455,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         return await resources_tools.list_branches(client)
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List bookable resources", annotations=_READ_ONLY)
     async def list_resources(
         branch_id: str, building_id: str, floor_id: str
     ) -> list[dict]:
@@ -471,7 +471,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, branch_id=branch_id, building_id=building_id, floor_id=floor_id
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List tasks", annotations=_READ_ONLY)
     async def list_tasks(
         limit: int = 20,
         offset: int = 0,
@@ -509,7 +509,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, limit=limit, offset=offset, group_id=group_id, view=view
         )
 
-    @mcp.tool(annotations=_CREATE)
+    @mcp.tool(title="Create a task", annotations=_CREATE)
     async def create_task(
         title: str,
         description: str = "",
@@ -537,12 +537,12 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             group_id=group_id,
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="Get task details", annotations=_READ_ONLY)
     async def get_task(task_id: str) -> dict:
         """Fetch one task's full details, given an id from list_tasks."""
         return await tasks_tools.get_task(client, task_id=task_id)
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List notes", annotations=_READ_ONLY)
     async def list_notes(
         limit: int = 20,
         after: int = 0,
@@ -571,7 +571,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             oldest_first=oldest_first,
         )
 
-    @mcp.tool(annotations=_CREATE)
+    @mcp.tool(title="Create a note", annotations=_CREATE)
     async def create_note(
         content: str, title: str = "", group_id: str | None = None
     ) -> dict:
@@ -590,12 +590,12 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, content=content, title=title, group_id=group_id
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="Get note details", annotations=_READ_ONLY)
     async def get_note(note_id: str) -> dict:
         """Fetch one note's full details, given an id from list_notes."""
         return await notes_tools.get_note(client, note_id=note_id)
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List bookmarks", annotations=_READ_ONLY)
     async def list_bookmarks(
         limit: int = 20,
         after: int = 0,
@@ -626,7 +626,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             oldest_first=oldest_first,
         )
 
-    @mcp.tool(annotations=_CREATE)
+    @mcp.tool(title="Create a bookmark", annotations=_CREATE)
     async def create_bookmark(
         url: str,
         title: str,
@@ -648,12 +648,12 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             client, url=url, title=title, summary=summary, group_id=group_id
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="Get bookmark details", annotations=_READ_ONLY)
     async def get_bookmark(bookmark_id: str) -> dict:
         """Fetch one bookmark's full details, given an id from list_bookmarks."""
         return await bookmarks_tools.get_bookmark(client, bookmark_id=bookmark_id)
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="List shared groups", annotations=_READ_ONLY)
     async def list_groups() -> list[dict]:
         """List every shared Zoho Mail group the user belongs to.
 
@@ -673,7 +673,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
         """
         return await groups_tools.list_groups(client)
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="Search contacts", annotations=_READ_ONLY)
     async def search_contacts(
         query: str = "", limit: int = 20, status: str = "active"
     ) -> dict:
@@ -707,7 +707,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             contacts_client, query=query, limit=limit, status=status
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="Get contact details", annotations=_READ_ONLY)
     async def get_contact(contact_id: str, scope: str) -> dict:
         """Fetch one contact's full details, given an id and scope from
         search_contacts.
@@ -720,7 +720,7 @@ def create_server(client: ZohoClient, contacts_client: ZohoContactsClient) -> Fa
             contacts_client, contact_id=contact_id, scope=scope
         )
 
-    @mcp.tool(annotations=_READ_ONLY)
+    @mcp.tool(title="Count contacts", annotations=_READ_ONLY)
     async def count_contacts() -> dict:
         """Return the user's Zoho Contacts counts directly and reliably.
 
@@ -764,8 +764,13 @@ def _build_zoho_clients_from_env() -> tuple[ZohoClient, ZohoContactsClient]:
     client = ZohoClient(
         token_manager=token_manager,
         http_client=http_client,
-        account_id=os.environ["ZOHO_ACCOUNT_ID"],
-        calendar_uid=os.environ["ZOHO_CALENDAR_UID"],
+        # Both optional: ZohoClient looks them up from the API when absent,
+        # so a fresh install runs without hand-copying two ids out of
+        # setup's output into .env. Blank-to-None because a key left in
+        # .env with no value would otherwise build URLs like
+        # /accounts//folders instead of falling back to discovery.
+        account_id=os.environ.get("ZOHO_ACCOUNT_ID", "").strip() or None,
+        calendar_uid=os.environ.get("ZOHO_CALENDAR_UID", "").strip() or None,
         strip_invisible_chars=os.environ.get("ZOHO_STRIP_INVISIBLE_CHARS", "false")
         .strip()
         .lower()

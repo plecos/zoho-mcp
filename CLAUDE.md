@@ -89,6 +89,8 @@ Neither was a coverage gap. Every test passed, each exercising a single id. Peri
 
 Before writing a looked-up value to `.env`, ask whether it's a **stable identifier** (account id, calendar uid — essentially permanent) or a **mutable setting** (timezone, primary address, any preference a person can change). Only the former belongs in static config.
 
+"Belongs in static config" isn't the same as "required there". `ZOHO_ACCOUNT_ID` and `ZOHO_CALENDAR_UID` are both stable identifiers, so caching them in `.env` is safe — but requiring them made a fresh install fail with a `KeyError` until the user hand-copied two values out of setup's output. `ZohoClient` now discovers each one on first use when it's absent, so config is an optimization rather than a prerequisite. Reach for that shape whenever a required setting is something the code could just as well look up.
+
 Caught before shipping: `days_back` originally stored the mailbox timezone in `ZOHO_MAILBOX_TIMEZONE` at setup time. That goes stale the moment the user changes their Zoho timezone, and nothing signals the drift — it would silently misresolve "today" again, the exact bug the feature existed to fix. `ZohoClient` now fetches the timezone (and the outgoing address) live, cached in memory for the life of the instance. Staleness is bounded to "since this process started" rather than "since setup was last run", at the cost of one API call per client instance rather than per call.
 
 ## Don't delegate correctness to the caller

@@ -184,6 +184,27 @@ async def test_create_server_registers_all_thirty_seven_tools():
     }
 
 
+async def test_every_tool_has_a_human_readable_title():
+    # MCP clients show `title` in permission prompts and tool pickers; a
+    # missing one falls back to the snake_case function name.
+    server = create_server(FakeZohoClient(), FakeContactsClient())
+
+    tools = await server.list_tools()
+    untitled = [t.name for t in tools if not (t.title or "").strip()]
+
+    assert untitled == []
+
+
+async def test_tool_titles_are_prose_not_repeated_function_names():
+    server = create_server(FakeZohoClient(), FakeContactsClient())
+
+    tools = await server.list_tools()
+    titles = [t.title for t in tools]
+
+    assert [t.name for t in tools if "_" in (t.title or "")] == []
+    assert len(set(titles)) == len(titles)
+
+
 _WRITE_TOOL_NAMES = {
     "create_draft",
     "reply_draft",

@@ -801,7 +801,10 @@ async def _get_default_mail_account(
 async def get_primary_account_id(
     token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
 ) -> str:
-    """Look up the user's default Zoho Mail account id (for the ``ZOHO_ACCOUNT_ID`` setting).
+    """Look up the user's default Zoho Mail account id.
+
+    Used by ``ZohoClient._get_account_id`` when ``ZOHO_ACCOUNT_ID`` isn't
+    configured, and by ``zoho-mcp-setup`` to print the value.
 
     Raises:
         ZohoAPIError: if the request fails, the response is malformed, or no
@@ -895,7 +898,10 @@ async def get_folder_types(
 async def get_default_calendar_uid(
     token_manager: ZohoTokenManager, http_client: httpx.AsyncClient
 ) -> str:
-    """Look up the user's default calendar uid (for the ``ZOHO_CALENDAR_UID`` setting).
+    """Look up the user's default calendar uid.
+
+    Used by ``ZohoClient._get_calendar_uid`` when ``ZOHO_CALENDAR_UID``
+    isn't configured, and by ``zoho-mcp-setup`` to print the value.
 
     Raises:
         ZohoAPIError: if the request fails, the response is malformed, or no
@@ -925,15 +931,19 @@ class ZohoClient:
         self,
         token_manager: ZohoTokenManager,
         http_client: httpx.AsyncClient,
-        account_id: str,
-        calendar_uid: str,
+        account_id: str | None = None,
+        calendar_uid: str | None = None,
         strip_invisible_chars: bool = False,
         allow_auto_send: bool = False,
     ) -> None:
         self._token_manager = token_manager
         self._http_client = http_client
-        self._account_id = account_id
-        self._calendar_uid = calendar_uid
+        # Both are optional: they're derivable from the same endpoints setup
+        # calls, so an operator who never copied them into .env gets them
+        # looked up on first use instead of a KeyError. Supplying them skips
+        # the lookup -- see ``_get_account_id``/``_get_calendar_uid``.
+        self._account_id_cache = account_id
+        self._calendar_uid_cache = calendar_uid
         self._strip_invisible_chars = strip_invisible_chars
         # Gates send_email only. Drafting is never gated. Enforced here, in
         # the layer that actually issues the HTTP call, so no higher-level
@@ -974,6 +984,33 @@ class ZohoClient:
         token = await self._token_manager.get_access_token()
         return await zoho_authenticated_delete(self._http_client, url, token, params)
 
+    async def _get_account_id(self) -> str:
+        """Return the mail account id, looked up once per client if unconfigured.
+
+        Unlike ``_get_mailbox_timezone``, this is a stable identifier, so
+        caching it forever would be safe -- it's fetched lazily rather than
+        eagerly only so a client that never touches Mail (calendar-only
+        usage) doesn't pay for a lookup it won't use.
+        """
+        if self._account_id_cache is None:
+            self._account_id_cache = await get_primary_account_id(
+                self._token_manager, self._http_client
+            )
+        return self._account_id_cache
+
+    async def _get_calendar_uid(self) -> str:
+        """Return the default calendar's uid, looked up once per client if unconfigured.
+
+        Every call site reaches this as ``calendar_id or await
+        self._get_calendar_uid()``, so an explicitly targeted calendar
+        short-circuits the lookup entirely.
+        """
+        if self._calendar_uid_cache is None:
+            self._calendar_uid_cache = await get_default_calendar_uid(
+                self._token_manager, self._http_client
+            )
+        return self._calendar_uid_cache
+
     async def _get_mailbox_timezone(self) -> str:
         """Return the mailbox's timezone, fetched once per client and cached.
 
@@ -1000,7 +1037,7 @@ class ZohoClient:
         """
         if self._excluded_folder_ids_cache is None:
             folder_types = await get_folder_types(
-                self._token_manager, self._http_client, self._account_id
+                self._token_manager, self._http_client, await self._get_account_id()
             )
             self._excluded_folder_ids_cache = frozenset(
                 folder_id
@@ -1054,8 +1091,9 @@ class ZohoClient:
             date_filter = f"fromDate:{cutoff.strftime('%d-%b-%Y')}"
             search_key = f"{search_key}::{date_filter}" if search_key else date_filter
 
+        account_id = await self._get_account_id()
         payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/search",
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages/search",
             params={"searchKey": search_key, "limit": limit},
         )
         raw_items = payload.get("data", [])
@@ -1125,8 +1163,9 @@ class ZohoClient:
         if folder_id is not None:
             params["folderId"] = folder_id
 
+        account_id = await self._get_account_id()
         payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/view",
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages/view",
             params=params,
         )
         raw_items = payload.get("data", [])
@@ -1196,8 +1235,9 @@ class ZohoClient:
         if bcc_addresses:
             body["bccAddress"] = ",".join(bcc_addresses)
 
+        account_id = await self._get_account_id()
         payload = await self._post(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages",
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages",
             json_body=body,
         )
         return {"id": (payload.get("data") or {}).get("messageId", "")}
@@ -1293,8 +1333,9 @@ class ZohoClient:
             "action": "replyall" if reply_all else "reply",
             "mode": "draft",  # never remove: without it Zoho sends the reply
         }
+        account_id = await self._get_account_id()
         payload = await self._post(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/messages/{message_id}",
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages/{message_id}",
             json_body=body,
         )
         return {"id": (payload.get("data") or {}).get("messageId", "")}
@@ -1305,8 +1346,9 @@ class ZohoClient:
         Raises:
             ZohoAPIError: if the Zoho Mail API rejects or fails the request.
         """
+        account_id = await self._get_account_id()
         payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}"
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}"
             f"/folders/{folder_id}/messages/{message_id}/content"
         )
         try:
@@ -1326,8 +1368,9 @@ class ZohoClient:
         Raises:
             ZohoAPIError: if the Zoho Mail API rejects or fails the request.
         """
+        account_id = await self._get_account_id()
         payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}"
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}"
             f"/folders/{folder_id}/messages/{message_id}/attachmentinfo"
         )
         attachments = payload.get("data", {}).get("attachments", [])
@@ -1353,8 +1396,9 @@ class ZohoClient:
         ids = [message_id.strip() for message_id in message_ids if message_id.strip()]
         if not ids:
             raise ZohoAPIError("message_ids must contain at least one message id")
+        account_id = await self._get_account_id()
         await self._put(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/updatemessage",
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/updatemessage",
             json_body={"mode": mode, "messageId": ids, **extra},
         )
 
@@ -1421,9 +1465,8 @@ class ZohoClient:
         Raises:
             ZohoAPIError: if the Zoho Mail API rejects or fails the request.
         """
-        payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/folders"
-        )
+        account_id = await self._get_account_id()
+        payload = await self._get(f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/folders")
         return [normalize_folder(f) for f in payload.get("data", [])]
 
     async def list_labels(self) -> list[dict]:
@@ -1432,9 +1475,8 @@ class ZohoClient:
         Raises:
             ZohoAPIError: if the Zoho Mail API rejects or fails the request.
         """
-        payload = await self._get(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{self._account_id}/labels"
-        )
+        account_id = await self._get_account_id()
+        payload = await self._get(f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/labels")
         return [normalize_label(item) for item in payload.get("data", [])]
 
     async def list_signatures(self) -> list[dict]:
@@ -1453,7 +1495,7 @@ class ZohoClient:
 
         Args:
             calendar_id: which calendar to query -- defaults to the
-                configured ``ZOHO_CALENDAR_UID`` if omitted. Use
+                account's default calendar if omitted. Use
                 ``list_calendars`` to see what else is available.
 
         Raises:
@@ -1479,8 +1521,9 @@ class ZohoClient:
         # See search_emails: returned in the mailbox's own local offset, not
         # UTC, so the LLM never has to convert a timezone it doesn't know.
         mailbox_timezone = await self._get_mailbox_timezone()
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         payload = await self._get(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events",
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events",
             params={"range": range_param},
         )
         return [
@@ -1493,7 +1536,7 @@ class ZohoClient:
 
         Args:
             calendar_id: which calendar the event belongs to -- defaults
-                to the configured ``ZOHO_CALENDAR_UID`` if omitted.
+                to the account's default calendar if omitted.
 
         See ``normalize_event_detail`` for why this deliberately omits
         start/end -- get the occurrence's actual date/time from
@@ -1503,8 +1546,9 @@ class ZohoClient:
             ZohoAPIError: if no event is found for ``uid``, or the
                 Calendar API rejects or fails the request.
         """
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         payload = await self._get(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}"
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events/{uid}"
         )
         events = payload.get("events", [])
         if not events:
@@ -1617,8 +1661,9 @@ class ZohoClient:
             eventdata["attendees"] = [
                 {"email": email, "status": "NEEDS-ACTION"} for email in attendees
             ]
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         payload = await self._post(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events",
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events",
             params={"eventdata": json.dumps(eventdata)},
         )
         events = payload.get("events", [])
@@ -1638,8 +1683,9 @@ class ZohoClient:
             ZohoAPIError: if no event is found for ``uid``, or the
                 Calendar API rejects or fails the request.
         """
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         payload = await self._get(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}"
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events/{uid}"
         )
         events = payload.get("events", [])
         if not events:
@@ -1735,8 +1781,9 @@ class ZohoClient:
                 {"email": email, "status": "NEEDS-ACTION"} for email in attendees
             ]
 
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         payload = await self._put(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}",
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events/{uid}",
             params={"eventdata": json.dumps(eventdata)},
         )
         events = payload.get("events", [])
@@ -1758,8 +1805,9 @@ class ZohoClient:
                 Calendar API rejects or fails the request.
         """
         raw = await self._get_raw_event(uid, calendar_id)
+        calendar_uid = calendar_id or await self._get_calendar_uid()
         await self._delete(
-            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_id or self._calendar_uid}/events/{uid}",
+            f"{ZOHO_CALENDAR_BASE_URL}/calendars/{calendar_uid}/events/{uid}",
             params={"eventdata": json.dumps({"etag": raw["etag"]})},
         )
 

@@ -26,9 +26,9 @@ This one is narrow on purpose: local stdio with no third-party relay, draft-firs
 
 ## Setup
 
-1. **Register a Server-based Application** in the Zoho API Console with redirect URI `http://localhost:8765/callback` (change the port with `ZOHO_OAUTH_CALLBACK_PORT` if 8765 is taken).
+1. **Register a Server-based Application** in the [Zoho API Console](https://accounts.zoho.com/developerconsole) with redirect URI `http://localhost:8765/callback` (change the port with `ZOHO_OAUTH_CALLBACK_PORT` if 8765 is taken). The redirect URI is the only thing you configure there — scopes are not a console setting.
 
-   Request these scopes:
+   Scopes are sent in the authorization request instead, from the `SCOPES` list in [src/zoho_mcp/setup_auth.py](src/zoho_mcp/setup_auth.py). These are what step 3 will ask you to consent to:
 
    ```
    ZohoMail.messages.READ      ZohoMail.messages.ALL
@@ -45,9 +45,9 @@ This one is narrow on purpose: local stdio with no third-party relay, draft-firs
 
    Several are needed at runtime, not just during setup: `accounts.READ` for the live timezone and outgoing-address lookups, `folders.READ` for filtering Sent/Drafts/Templates out of search results, and `calendar.READ` for `list_calendars` (it's also what finds your calendar's UID during setup).
 
-   If you only want read-only access, omit the `.ALL` and `.CREATE` scopes — the read tools work fine without them, and the write tools will fail with a clear scope error.
+   If you only want read-only access, delete the `.ALL` and `.CREATE` entries from that `SCOPES` list before running setup — the read tools work fine without them, and the write tools will fail with a clear scope error.
 
-2. **Copy `.env.example` to `.env`** and fill in `ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET`.
+2. **Copy `.env.example` to `.env`** and fill in `ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET`. Nothing else in that file is required.
 
 3. **Run the one-time auth flow:**
 
@@ -55,15 +55,15 @@ This one is narrow on purpose: local stdio with no third-party relay, draft-firs
    uv run zoho-mcp-setup
    ```
 
-   This opens your browser to approve access, stores the refresh token in your OS credential store (via `keyring`), and prints your `ZOHO_ACCOUNT_ID` and `ZOHO_CALENDAR_UID`. Add both to `.env`.
+   This opens your browser to approve access, stores the refresh token in your OS credential store (via `keyring`), and prints a ready-to-paste MCP client config block with the absolute path to this install's `zoho-mcp` executable.
 
-4. **Start the server:**
+4. **Paste that block into your MCP client's config** and restart it. The server speaks MCP over stdio; the client launches it.
+
+   To run it yourself instead — to check setup worked, or for a client that wants a command rather than a config file:
 
    ```bash
    uv run zoho-mcp
    ```
-
-   It speaks MCP over stdio. Point your client at the `zoho-mcp` executable in `.venv/Scripts/` (Windows) or `.venv/bin/` (macOS/Linux).
 
 If you later add scopes, re-run `zoho-mcp-setup` — the stored token carries whatever scopes it was granted, so new ones need fresh consent.
 
@@ -161,10 +161,12 @@ One practical note: drafts don't show up in `search_emails` at all (a Zoho quirk
 
 ## Configuration
 
-All optional, in `.env`:
+`ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET` are required. Everything else in `.env` is optional:
 
 | Variable | Default | |
 | --- | --- | --- |
+| `ZOHO_ACCOUNT_ID` | *discovered* | Your Zoho Mail account id. Left unset, the server looks it up on first use and caches it for the life of the process. Setting it saves one API call per start. |
+| `ZOHO_CALENDAR_UID` | *discovered* | Your default calendar's uid, same story — looked up only when a calendar tool is called without an explicit `calendar_id`. |
 | `ZOHO_ALLOW_AUTO_SEND` | `false` | Allow `send_email` to actually send. See above. |
 | `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Have `get_email` strip invisible Unicode padding some marketing mail uses to inflate preview text. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
 | `ZOHO_OAUTH_CALLBACK_PORT` | `8765` | Local port for the one-time OAuth redirect. |

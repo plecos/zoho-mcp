@@ -63,6 +63,12 @@ MAIL_CASES = [
         {"message_id": "m-1", "folder_id": "f-1"},
     ),
     (
+        "get_email_source",
+        {"message_id": "m-1", "include_raw": True},
+        "get_email_source",
+        {"message_id": "m-1", "include_raw": True},
+    ),
+    (
         "get_attachment",
         {"message_id": "m-1", "folder_id": "f-1", "attachment_id": "a-1"},
         "get_attachment",

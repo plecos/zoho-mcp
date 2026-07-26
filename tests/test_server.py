@@ -57,6 +57,9 @@ class FakeZohoClient:
     async def get_attachment(self, message_id, folder_id, attachment_id):
         return {}
 
+    async def get_email_source(self, message_id, include_raw=False):
+        return {}
+
     async def list_folders(self):
         return []
 
@@ -152,6 +155,7 @@ async def test_create_server_registers_every_expected_tool():
         "get_email",
         "list_attachments",
         "get_attachment",
+        "get_email_source",
         "list_folders",
         "list_labels",
         "list_signatures",

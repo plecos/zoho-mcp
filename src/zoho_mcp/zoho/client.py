@@ -5,6 +5,8 @@ bodies, event timestamps) into the compact, LLM-facing shapes used by the
 MCP tools happens here and only here.
 """
 
+import email.header
+import email.parser
 import html
 import json
 import urllib.parse
@@ -94,6 +96,39 @@ MAX_BOOKMARKS_LIMIT = 399
 MAX_ATTACHMENT_FETCH_BYTES = 5_000_000
 MAX_ATTACHMENT_TEXT_CHARS = 100_000
 
+# An ordinary message's RFC 822 source ran 28,469 characters on a real
+# account, so `raw` is both opt-in and capped.
+MAX_RAW_MESSAGE_CHARS = 100_000
+
+# Headers worth returning by value, mapped to the names the record uses.
+# Everything else is reported by *name* only -- DKIM-Signature is the
+# motivating case: a long base64 blob no reader benefits from, whose
+# absence would still be worth knowing about.
+_INTERESTING_HEADERS = {
+    "from": "from",
+    "to": "to",
+    "cc": "cc",
+    "bcc": "bcc",
+    "reply-to": "reply_to",
+    "subject": "subject",
+    "date": "date",
+    "message-id": "message_id",
+    "in-reply-to": "in_reply_to",
+    "references": "references",
+    "return-path": "return_path",
+    "delivered-to": "delivered_to",
+    "list-id": "list_id",
+    "list-unsubscribe": "list_unsubscribe",
+    "authentication-results": "authentication_results",
+    "received-spf": "received_spf",
+    "dkim-filter": "dkim_filter",
+    "content-type": "content_type",
+    "precedence": "precedence",
+    "auto-submitted": "auto_submitted",
+    "x-mailer": "x_mailer",
+    "user-agent": "user_agent",
+}
+
 # Zoho gives us nothing to type an attachment with: `attachmentinfo` returns
 # only id/name/size, and the download response is always
 # `application/octet-stream` even for a gzip (both confirmed live -- see
@@ -137,6 +172,11 @@ _TASK_VIEWS = {"assigned_to_me": "assignedtome", "created_by_me": "createdbyme"}
 # against the real API), so this can never accidentally catch a user's own
 # folder, only Zoho's built-in non-received ones.
 EXCLUDED_FOLDER_TYPES = frozenset({"Sent", "Drafts", "Templates"})
+
+# What Zoho puts in an address field that has no addresses -- literal text,
+# not an empty string or an absent key. Seen on 116 of 120 real messages'
+# ccAddress.
+ZOHO_EMPTY_ADDRESS_SENTINEL = "Not Provided"
 
 # Characters with no legitimate visible meaning, used by some marketing
 # emails purely to pad preview text. Deliberately excludes ZWJ (U+200D) and
@@ -212,24 +252,74 @@ def _today_in_timezone(tz_name: str) -> date:
     return datetime.now(ZoneInfo(tz_name)).date()
 
 
+def _split_address_field(value: object) -> list[str]:
+    """Turn one of Zoho's address strings into a list of addresses.
+
+    Three quirks in one field. The value is HTML-entity-encoded, so an
+    address arrives as ``&lt;a@b.com&gt;``. Multiple addresses are
+    comma-joined. And an empty one is the literal text ``"Not Provided"``
+    rather than an empty string or an absent key -- passing that through
+    would have the model report a recipient by that name.
+
+    Bare ``<addr>`` wrappers are unwrapped; a display name plus address is
+    left intact, since dropping either half loses information.
+    """
+    if not isinstance(value, str):
+        return []
+    decoded = html.unescape(value).strip()
+    if not decoded or decoded == ZOHO_EMPTY_ADDRESS_SENTINEL:
+        return []
+    addresses = []
+    for part in decoded.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if part.startswith("<") and part.endswith(">"):
+            part = part[1:-1].strip()
+        addresses.append(part)
+    return addresses
+
+
 def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
     """Normalize one entry from Zoho Mail's List Emails ``data`` array.
 
-    Returns the compact shape the LLM sees: id, from, subject, date, snippet.
-    ``date`` is in ``mailbox_timezone``, not UTC -- see ``_epoch_ms_to_iso8601``.
+    Returns the compact shape the LLM sees. ``date`` is in
+    ``mailbox_timezone``, not UTC -- see ``_epoch_ms_to_iso8601``.
     ``subject``/``snippet`` are HTML-entity-decoded -- confirmed live that
     Zoho's search API frequently returns these with literal undecoded
     entities (e.g. "&#39;" instead of an apostrophe, seen in ~10% of
     subjects and ~36% of snippets in a real sample), not human-readable text.
+
+    Zoho sends 21 keys per message and this keeps 13. The omissions are
+    deliberate and documented in docs/zoho-api-notes.md: ``sentDateInGMT``
+    is wrong, and ``flagid``/``priority``/``threadId``/``threadCount``
+    could not be distinguished from a real mailbox's data.
+
+    Every field beyond the core degrades to a default rather than raising,
+    because Zoho's key set genuinely varies per message -- ``toAddress``
+    was absent on one of 60 real messages and ``labelId`` on 27 of them.
+    The core fields still raise, since a record without them is unusable.
 
     Raises:
         ZohoAPIError: if ``raw`` is missing an expected field or a field has
             an unexpected type/value (e.g. a non-numeric date).
     """
     try:
+        sender = html.unescape(str(raw.get("sender") or ""))
+        from_address = raw["fromAddress"]
+        try:
+            size_bytes: int | None = int(raw["size"])
+        except (KeyError, TypeError, ValueError):
+            size_bytes = None
+        label_ids = raw.get("labelId") or []
         return {
             "id": raw["messageId"],
-            "from": raw["fromAddress"],
+            "from": from_address,
+            # `sender` is a display name, not an address: on 25 of 60 real
+            # messages it had no "@" at all while fromAddress did, and on
+            # the other 35 it simply repeated fromAddress. Blank rather
+            # than duplicated, so a value here always means something.
+            "from_name": "" if sender == from_address else sender,
             "subject": html.unescape(raw["subject"]),
             # receivedTime, not sentDateInGMT: despite its name, sentDateInGMT
             # is not reliably GMT -- observed consistently off by exactly the
@@ -242,6 +332,15 @@ def normalize_email_summary(raw: dict, mailbox_timezone: str) -> dict:
             # status="0"; already-read mail showed "1"); any other/unknown
             # value defaults to unread, the safer failure mode.
             "read": raw["status"] == "1",
+            "to": _split_address_field(raw.get("toAddress")),
+            "cc": _split_address_field(raw.get("ccAddress")),
+            "has_attachment": raw.get("hasAttachment") == "1",
+            "size_bytes": size_bytes,
+            # Wrapped rather than iterated if it ever arrives as a bare
+            # string: splitting one into characters is the worst outcome.
+            "label_ids": (
+                list(label_ids) if isinstance(label_ids, list) else [label_ids]
+            ),
         }
     except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed email summary from Zoho: {e}") from e
@@ -440,6 +539,94 @@ def normalize_attachment_content(
     else:
         record["text"] = text
     return record
+
+
+def _decoded_header_value(value: object) -> str:
+    """Render one header value as readable text, decoding RFC 2047 if needed.
+
+    Subjects and display names arrive as ``=?utf-8?B?...?=`` often enough
+    that leaving them encoded would push base64 decoding onto the model --
+    the same class of delegated correctness as returning UTC timestamps.
+    Falls back to ``str`` on anything ``email.header`` can't handle, since
+    a mangled header is still worth showing.
+    """
+    try:
+        return str(email.header.make_header(email.header.decode_header(str(value))))
+    except MALFORMED_DATA_ERRORS:
+        return str(value)
+
+
+def normalize_email_source(
+    message_id: str, content: object, *, include_raw: bool
+) -> dict:
+    """Parse an RFC 822 message source into a JSON record.
+
+    Zoho's ``originalmessage`` endpoint returns the entire source as one
+    string. That's the right thing for a mail client and the wrong thing
+    for a tool result, so it's parsed here: the headers worth reading come
+    back by value, the ``Received`` chain as an ordered list, and every
+    other header by name so nothing is hidden without being mentioned.
+
+    Args:
+        message_id: the message's id, echoed back.
+        content: the raw source from Zoho.
+        include_raw: also return the source text itself, capped at
+            ``MAX_RAW_MESSAGE_CHARS``. Off by default because a single
+            ordinary message ran ~28,000 characters.
+
+    Returns:
+        ``{"id", "headers", "received_chain", "other_header_names",
+        "size_chars", "raw", "raw_truncated"}``. ``headers`` omits absent
+        headers rather than setting them to null, and joins a repeated
+        header's values with a newline.
+
+    Raises:
+        ZohoAPIError: if ``content`` isn't parseable message source.
+    """
+    if not isinstance(content, str):
+        raise ZohoAPIError(
+            f"Malformed original message from Zoho: expected source text, "
+            f"got {type(content).__name__}"
+        )
+    try:
+        parsed = email.parser.HeaderParser().parsestr(content)
+        raw_headers = parsed.items()
+    except MALFORMED_DATA_ERRORS as e:
+        raise ZohoAPIError(f"Malformed original message from Zoho: {e}") from e
+
+    headers: dict[str, str] = {}
+    received_chain: list[str] = []
+    other_names: list[str] = []
+    for name, value in raw_headers:
+        lowered = name.lower()
+        if lowered == "received":
+            received_chain.append(" ".join(str(value).split()))
+            continue
+        key = _INTERESTING_HEADERS.get(lowered)
+        if key is None:
+            if name not in other_names:
+                other_names.append(name)
+            continue
+        decoded = _decoded_header_value(value)
+        # Authentication-Results legitimately repeats, once per relay --
+        # keeping only the first would drop the verdict that matters.
+        headers[key] = f"{headers[key]}\n{decoded}" if key in headers else decoded
+
+    raw: str | None = None
+    raw_truncated = False
+    if include_raw:
+        raw = content[:MAX_RAW_MESSAGE_CHARS]
+        raw_truncated = len(content) > MAX_RAW_MESSAGE_CHARS
+
+    return {
+        "id": message_id,
+        "headers": headers,
+        "received_chain": received_chain,
+        "other_header_names": other_names,
+        "size_chars": len(content),
+        "raw": raw,
+        "raw_truncated": raw_truncated,
+    }
 
 
 def normalize_calendar(raw: dict) -> dict:
@@ -1561,6 +1748,42 @@ class ZohoClient:
         )
         attachments = payload.get("data", {}).get("attachments", [])
         return [normalize_attachment(a) for a in attachments]
+
+    async def get_email_source(
+        self, message_id: str, include_raw: bool = False
+    ) -> dict:
+        """Fetch and parse one message's RFC 822 source.
+
+        Note the endpoint takes no ``folderId``, unlike every other
+        per-message call -- it's account-scoped only.
+
+        Args:
+            message_id: an email's ``id`` from ``search_emails``/``list_emails``.
+            include_raw: also return the source text, capped. Off by
+                default; see ``normalize_email_source``.
+
+        Returns:
+            The record described by ``normalize_email_source``.
+
+        Raises:
+            ZohoAPIError: if ``message_id`` is blank, the response has no
+                source in it, or the Zoho Mail API rejects the request.
+        """
+        if not message_id.strip():
+            raise ZohoAPIError("message_id must not be blank")
+        account_id = await self._get_account_id()
+        payload = await self._get(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}"
+            f"/messages/{message_id}/originalmessage"
+        )
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise ZohoAPIError(
+                "Malformed original message from Zoho: response has no data object"
+            )
+        return normalize_email_source(
+            message_id, data.get("content"), include_raw=include_raw
+        )
 
     async def get_attachment(
         self, message_id: str, folder_id: str, attachment_id: str

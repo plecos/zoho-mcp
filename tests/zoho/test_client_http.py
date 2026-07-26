@@ -161,12 +161,21 @@ async def test_search_emails_calls_search_endpoint_with_auth_header(
         {
             "id": "1730217600123456789",
             "from": "jamie.rivera@example.com",
+            "from_name": "",
             "subject": "Q3 Roadmap Sync",
             # Mailbox's own offset, not UTC -- see _epoch_ms_to_iso8601.
             "date": "2024-10-29T09:00:00-07:00",
             "snippet": "Let's sync on the Q3 roadmap tomorrow morning.",
             "folder_id": "1122334455",
             "read": False,
+            # This fixture omits every optional key, which is realistic:
+            # Zoho's key set varies per message. They default rather than
+            # raise -- see tests/zoho/test_email_summary_fields.py.
+            "to": [],
+            "cc": [],
+            "has_attachment": False,
+            "size_bytes": None,
+            "label_ids": [],
         }
     ]
 
@@ -586,11 +595,17 @@ async def test_list_emails_calls_view_endpoint_with_correct_params(
         {
             "id": "1",
             "from": "someone@example.com",
+            "from_name": "",
             "subject": "Subject",
             "date": "2024-10-29T09:00:00-07:00",
             "snippet": "Snippet",
             "folder_id": "1122334455",
             "read": True,
+            "to": [],
+            "cc": [],
+            "has_attachment": False,
+            "size_bytes": None,
+            "label_ids": [],
         }
     ]
 

@@ -116,6 +116,27 @@ async def list_attachments(
     return await client.list_attachments(message_id=message_id, folder_id=folder_id)
 
 
+async def get_email_source(
+    client: ZohoClient, message_id: str, include_raw: bool = False
+) -> dict:
+    """Fetch one email's parsed RFC 822 headers.
+
+    Args:
+        client: injected Zoho client.
+        message_id: an email's ``id`` from a prior ``search_emails`` result.
+        include_raw: also return the message source text, capped.
+
+    Returns:
+        ``{"id", "headers", "received_chain", "other_header_names",
+        "size_chars", "raw", "raw_truncated"}``.
+
+    Raises:
+        ZohoAPIError: if ``message_id`` is blank, or the Zoho Mail API
+            rejects or fails the request.
+    """
+    return await client.get_email_source(message_id=message_id, include_raw=include_raw)
+
+
 async def get_attachment(
     client: ZohoClient, message_id: str, folder_id: str, attachment_id: str
 ) -> dict:

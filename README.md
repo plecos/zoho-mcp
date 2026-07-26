@@ -2,7 +2,7 @@
 
 An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contacts, Tasks, Notes, Bookmarks, Groups, and Resource Booking as tools to any MCP-compatible LLM client — Claude, ChatGPT, Gemini, or anything else that speaks MCP.
 
-38 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
+39 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
 
 **Sending email is disabled by default.** The server saves drafts instead, and only sends if you explicitly opt in. See [Composing email](#composing-email).
 
@@ -76,6 +76,7 @@ If you later add scopes, re-run `zoho-mcp-setup` — the stored token carries wh
 | `search_emails` | Keyword/sender/label search using Zoho's search syntax, optionally limited to the last N days |
 | `list_emails` | Enumerate mail by read/unread status, with real pagination |
 | `get_email` | Full plain-text body of one message |
+| `get_email_source` | Parsed RFC 822 headers: sender, SPF/DKIM/DMARC, `Received` chain |
 | `list_attachments` | Attachment metadata (name, size) for one message |
 | `get_attachment` | One attachment's content, as text when it is text |
 | `list_folders` | All folders, with paths |
@@ -91,6 +92,10 @@ If you later add scopes, re-run `zoho-mcp-setup` — the stored token carries wh
 `search_emails` and `list_emails` do different jobs and aren't interchangeable. Zoho's search API has no read/unread filter and can't page past its first batch of results by recency, so it will miss older mail. Use `list_emails` whenever you need to reliably act on *every* matching message ("mark all my unread email as read"); use `search_emails` for actual searching.
 
 The write tools take lists, and one call handles the whole batch.
+
+`search_emails` and `list_emails` return 13 fields per message — id, from, from_name, subject, date, snippet, folder_id, read, to, cc, has_attachment, size_bytes, label_ids. Zoho sends 21; the eight left out are left out for stated reasons ([the notes](docs/zoho-api-notes.md#flagid-priority-and-the-thread-fields-could-not-be-verified)), chiefly that a real mailbox couldn't distinguish their values.
+
+`get_email_source` answers the questions `get_email` can't: who really sent this, did it pass SPF/DKIM/DMARC, what path did it take. Zoho returns the whole message source — 28,000 to 82,000 characters for ordinary mail — so it's parsed here into headers, an ordered `Received` chain, and the names of the headers not returned by value. RFC 2047 encoded-words are decoded. `include_raw=true` adds the source text itself, capped.
 
 `get_attachment` returns a JSON record, never a file or a blob — a tool result goes into a context window, so the bytes stop at the server. Content comes back as `text` only when it actually decodes as UTF-8; for a PDF, image, or archive you get `is_text: false` and a `note` saying what it is. Nothing here decodes or extracts text from binary formats. Zoho gives no media type on either attachment endpoint (see [the notes](docs/zoho-api-notes.md#nothing-in-the-attachment-apis-tells-you-an-attachments-type)), so `media_type` is inferred from the filename and is a hint; the decode is the fact. Text over 100,000 characters is truncated with `truncated: true`, and anything over 5 MB isn't downloaded at all.
 

@@ -124,9 +124,19 @@ def test_authentication_headers_are_kept_because_they_are_the_point():
 def test_the_received_chain_is_a_list_in_order():
     record = normalize_email_source(MESSAGE_ID, SAMPLE_SOURCE, include_raw=False)
 
-    assert len(record["received_chain"]) == 2
-    assert record["received_chain"][0].startswith("by 10.0.0.1")
-    assert "mail.example.net" in record["received_chain"][1]
+    # Whole values rather than substring checks. The second hop is a folded
+    # header in the source, split across two lines, so asserting the entire
+    # string is what proves the unfolding and whitespace collapsing -- which
+    # `"mail.example.net" in ...` never did. CodeQL also flags substring
+    # tests against a host as bypassable sanitization
+    # (py/incomplete-url-substring-sanitization); harmless in a test, but
+    # not worth an open high-severity alert on a public repo when the
+    # stronger assertion is also the shorter one.
+    assert record["received_chain"] == [
+        "by 10.0.0.1 with SMTP id abc; Fri, 24 Jul 2026 09:00:01 -0700",
+        "from mail.example.net (mail.example.net [203.0.113.7]) "
+        "by mx.example.com with ESMTPS id xyz; Fri, 24 Jul 2026 09:00:00 -0700",
+    ]
 
 
 def test_received_headers_are_not_duplicated_into_the_header_map():

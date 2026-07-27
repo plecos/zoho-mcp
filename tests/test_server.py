@@ -1,8 +1,10 @@
+import json
 import re
 from pathlib import Path
 
 import httpx
 
+from zoho_mcp.releases import ReleaseChecker
 from zoho_mcp.server import create_server
 from zoho_mcp.zoho.auth import ZohoTokenManager
 
@@ -164,7 +166,12 @@ def build_server():
         http_client=http_client,
     )
     return create_server(
-        FakeZohoClient(), FakeContactsClient(), token_manager, http_client
+        FakeZohoClient(),
+        FakeContactsClient(),
+        token_manager,
+        http_client,
+        # Disabled, so nothing in the suite can reach github.com by accident.
+        ReleaseChecker(http_client, enabled=False),
     )
 
 
@@ -216,6 +223,7 @@ async def test_create_server_registers_every_expected_tool():
         "search_contacts",
         "get_contact",
         "count_contacts",
+        "check_for_updates",
     }
 
 
@@ -269,6 +277,61 @@ async def test_read_only_tools_are_annotated_correctly():
     read_only_tools = [t for t in tools if t.name not in _WRITE_TOOL_NAMES]
 
     assert all(tool.annotations.readOnlyHint is True for tool in read_only_tools)
+
+
+async def test_check_for_updates_is_annotated_as_reaching_outside():
+    # Read-only, but it is the one tool here that talks to a host other than
+    # Zoho -- openWorldHint is what says so. Reusing a plain _READ_ONLY would
+    # describe it as a local lookup.
+    server = build_server()
+
+    tool = next(t for t in await server.list_tools() if t.name == "check_for_updates")
+
+    assert tool.annotations.readOnlyHint is True
+    assert tool.annotations.openWorldHint is True
+
+
+async def test_check_for_updates_reaches_the_injected_checker():
+    # The one thing test_tool_invocation.py can't cover for this tool, since
+    # it forwards to a ReleaseChecker rather than a Zoho client: that the
+    # registered closure is wired to the checker create_server was handed,
+    # and not to one it built itself.
+    http_client = httpx.AsyncClient()
+    token_manager = ZohoTokenManager(
+        client_id="id",
+        client_secret="secret",
+        refresh_token="refresh",
+        http_client=http_client,
+    )
+    server = create_server(
+        FakeZohoClient(),
+        FakeContactsClient(),
+        token_manager,
+        http_client,
+        ReleaseChecker(http_client, installed="9.9.9", enabled=False),
+    )
+
+    (content,) = await server.call_tool("check_for_updates", {})
+
+    assert json.loads(content.text)["installed_version"] == "9.9.9"
+
+
+async def test_the_server_reports_its_own_version_in_the_handshake():
+    """`serverInfo.version` is the protocol's one place to state this.
+
+    FastMCP takes no version argument, so left alone the low-level Server
+    falls back to the *MCP SDK's* version -- which it did here for the whole
+    of 0.1.0, printed on every CI run by scripts/smoke_bundle.py without
+    anyone noticing it was the wrong number.
+    """
+    from importlib.metadata import version as distribution_version
+
+    server = build_server()
+
+    reported = server._mcp_server.create_initialization_options().server_version
+
+    assert reported == distribution_version("zoho-mcp")
+    assert reported != distribution_version("mcp")
 
 
 async def test_write_tools_are_not_annotated_read_only():

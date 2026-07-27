@@ -29,15 +29,19 @@ from unittest.mock import AsyncMock, create_autospec
 import httpx
 import pytest
 
+from zoho_mcp.releases import ReleaseChecker
 from zoho_mcp.server import create_server
 from zoho_mcp.zoho.auth import ZohoTokenManager
 from zoho_mcp.zoho.client import ZohoClient
 from zoho_mcp.zoho.contacts_client import ZohoContactsClient
 
-# `authenticate` is the one registered tool that doesn't forward to a client:
-# it mutates the token manager and runs a browser flow, covered by
-# tests/tools/test_authenticate.py instead.
-UNFORWARDED_TOOLS = {"authenticate"}
+# The two registered tools that don't forward to a Zoho client. `authenticate`
+# mutates the token manager and runs a browser flow (covered by
+# tests/tools/test_authenticate.py); `check_for_updates` talks to GitHub
+# through a ReleaseChecker (covered by tests/test_releases.py and
+# tests/tools/test_updates_tools.py, with its wiring pinned in
+# tests/test_server.py).
+UNFORWARDED_TOOLS = {"authenticate", "check_for_updates"}
 
 # (tool name, arguments in, expected client method, expected forwarded kwargs).
 #
@@ -324,7 +328,9 @@ def server(clients):
         refresh_token="refresh",
         http_client=http_client,
     )
-    return create_server(*clients, token_manager, http_client)
+    return create_server(
+        *clients, token_manager, http_client, ReleaseChecker(http_client, enabled=False)
+    )
 
 
 def _awaited(mock_client) -> list[str]:

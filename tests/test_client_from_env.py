@@ -11,6 +11,7 @@ make `ZOHO_ALLOW_AUTO_SEND=false` sitting in a .env file *enable live sending*,
 and no other test in the suite would notice.
 """
 
+import httpx
 import pytest
 
 from zoho_mcp import server
@@ -32,7 +33,14 @@ def env(monkeypatch):
     monkeypatch.setenv("ZOHO_CALENDAR_UID", "cal")
     monkeypatch.delenv("ZOHO_ALLOW_AUTO_SEND", raising=False)
     monkeypatch.delenv("ZOHO_STRIP_INVISIBLE_CHARS", raising=False)
+    monkeypatch.delenv("ZOHO_CHECK_FOR_UPDATES", raising=False)
     return monkeypatch
+
+
+@pytest.fixture
+async def http_client():
+    async with httpx.AsyncClient() as client:
+        yield client
 
 
 # Case-insensitive with surrounding whitespace ignored -- matching what the
@@ -76,6 +84,22 @@ async def test_strip_invisible_chars_parses_the_same_way(env, value, expected):
     client, *_ = server._build_zoho_clients_from_env()
 
     assert client._strip_invisible_chars is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("true", True), (" TRUE ", True), ("false", False), ("1", False), ("", False)],
+)
+async def test_update_checking_parses_the_same_way(env, http_client, value, expected):
+    env.setenv("ZOHO_CHECK_FOR_UPDATES", value)
+
+    assert server._build_release_checker(http_client)._enabled is expected
+
+
+async def test_update_checking_is_off_when_unset(env, http_client):
+    # The default that keeps the manifest's "only outbound calls are to Zoho"
+    # promise true for anyone who hasn't opted in.
+    assert server._build_release_checker(http_client)._enabled is False
 
 
 async def test_starts_unauthenticated_rather_than_refusing_to_start(env):

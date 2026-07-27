@@ -15,6 +15,7 @@ Nothing monolithic — each module has exactly one job:
 - `zoho/client.py` — HTTP calls to the Zoho Mail/Calendar/Tasks/Notes/Bookmarks/Resource-Booking APIs, plus raw-JSON-to-normalized-shape conversion. No MCP or tool concepts. Tasks, Notes, and Bookmarks live here rather than in their own modules because they're Zoho *Mail* features sharing its domain and scope family, not separate products. Resource Booking is the same story for Calendar.
 - `zoho/contacts_client.py` — the Zoho Contacts API and its normalization. Separate from `client.py` despite an identical pattern, because Contacts genuinely is a distinct product (own base URL, own scope family). The two share `zoho_authenticated_get` and `ZohoAPIError` rather than each rolling their own.
 - `zoho/auth.py` — OAuth flow, token refresh, and token storage. No knowledge of Mail/Calendar/Contacts payloads.
+- `releases.py` — which version is installed, and which one GitHub has published. Deliberately *not* under `zoho/`: it shares no base URL, no auth header and no error type with the Zoho clients, because GitHub is a different vendor. Reporting only; it never downloads or installs.
 - `tools/*.py` — thin MCP tool wrappers that call into a client and shape output for the LLM. No HTTP, no token logic; the client is injected, never constructed here. `tools/groups.py` is its own module because groups span Tasks/Notes/Bookmarks and belong to none of them.
 - `tools/auth.py` — the `authenticate` tool: composes `zoho/auth.py`'s consent flow so an unauthorized server can be authorized from inside a conversation. Needed because an MCPB bundle has a single entry point, which puts `zoho-mcp-setup` out of reach. Its browser round trip is injectable so everything around it is testable.
 - `server.py` — FastMCP instantiation and tool registration only. No business logic.
@@ -56,6 +57,14 @@ There is deliberately no send-a-reply tool in any configuration. A reply quotes 
 
 Zoho makes sending the *default* and drafting the opt-in flag (see the notes), so this codebase inverts that and pins the inversion with tests. When a vendor makes the destructive behavior the default, invert it in your own layer and test the inversion — don't just remember to pass the flag.
 
+### The update check is gated for a different reason
+
+`check_for_updates` is the only thing here that contacts a host other than Zoho, so `ZOHO_CHECK_FOR_UPDATES` gates it, off by default, checked inside `ReleaseChecker` rather than in the tool wrapper — same placement argument as `send_email`. The invariant differs though: the disabled path issues **no request at all**, and that's what the test asserts. Don't copy the send gate's "assert on a field" shape here; each gate's test has to name the guarantee that gate actually makes.
+
+**A documentation claim is an invariant.** `manifest.json` and `SECURITY.md` both said "the only outbound calls are to Zoho's own REST APIs" — the sentence someone installs this on the strength of. Adding one GitHub request made it false, so both had to be amended in the same change, and a manifest test now ties the claim to the setting: remove the exception from the prose and the test demands you remove the setting too. When a change falsifies a promise in the docs, the promise is part of the diff.
+
+And **not everything worth detecting is worth automating.** An installed bundle *could* be made to overwrite its own directory; the reason not to isn't that it's hard, it's that a tool which fetches code from the network into the directory the server runs from is reachable from a conversation whose input includes untrusted email. That's the same hole the send gate closes. The technical obstacles are real but secondary — decide on the threat model first, or you'll spend the effort working around them.
+
 ## Test thoroughness
 
 Happy-path tests alone are not done. For every unit of behavior, also test:
@@ -96,10 +105,13 @@ Two design flaws in this project were invisible to a passing test suite and obvi
 
 Neither was a coverage gap. Every test passed, each exercising a single id. Periodically drive the tools at realistic scale and eyeball the real output.
 
-Installing the MCPB bundle in a real Claude Desktop added two more, both invisible to any test:
+Installing the MCPB bundle in a real Claude Desktop added three more, all invisible to any test:
 
 - **The bundle installs disabled** when it has required config, and filling the config in doesn't enable it. The symptom isn't an error — the server never starts, so its tools simply aren't there and mail questions get answered by some other connector.
 - **Two clients meant two server processes.** `authenticate` in one wrote the token to the credential store and updated *its own* in-memory manager; the sibling, started unauthenticated seconds earlier, refused every call until restarted. `get_access_token` now re-reads the store before giving up. Anything cached in a process is per-process — when a value can be changed by something outside that process, decide what re-reads it and when.
+- **A locally installed bundle is on no update channel.** The host's `extensions-installations.json` records `"source": "local"` and `"signatureInfo": {"status": "unsigned"}` against the signed `ant.dir.*` entries that update themselves, and the manifest spec has no update field at all. It also records a content `hash` and a cached copy of the manifest, so a server that rewrote its own directory would leave the host describing a bundle that no longer exists. Detection is buildable; installation isn't — and wouldn't be wanted anyway (below).
+
+**Watch out for a default that fills in a plausible wrong value.** `FastMCP(name)` takes no version, and the `Server` it wraps then reports the *MCP SDK's* version as the server's own. So `serverInfo.version` — the protocol's one place to state this — said `1.28.x` for the whole of 0.1.0, printed on every CI run by `scripts/smoke_bundle.py`, and read as correct because it was a plausible version number in the right shape. A field that's absent gets noticed; a field that's confidently wrong doesn't. `create_server` now sets `mcp._mcp_server.version` explicitly and a test asserts it differs from the SDK's.
 
 ## Config vs. live state
 
@@ -137,8 +149,11 @@ tool is additive: minor slot.
 - [ ] `README.md` — the `dist/zoho-mcp-<version>.mcpb` smoke-test example.
       **Nothing verifies this one**; it's a filename in prose, so it goes stale
       silently. It's the one to check by hand.
-- [ ] `manifest.json`'s `long_description` and README's tool count ("41 tools")
-      when the release adds or removes a tool. Also unverified by any test.
+- [ ] `manifest.json`'s `long_description` and README's tool count ("42 tools")
+      when the release adds or removes a tool. Now pinned by
+      `test_the_advertised_tool_count_matches_the_tool_list`, which counts
+      `manifest["tools"]` and greps both files for it — the checklist item that
+      earned a test by going stale.
 
 Then: merge the bump PR, and tag **the merge commit on `main`**, not the branch
 tip — with a merge commit those are different, and tagging the tip points a

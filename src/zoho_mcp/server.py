@@ -15,6 +15,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from zoho_mcp.config import load_env
+from zoho_mcp.releases import ReleaseChecker, installed_version
 from zoho_mcp.tools import auth as auth_tools
 from zoho_mcp.tools import bookmarks as bookmarks_tools
 from zoho_mcp.tools import calendar as calendar_tools
@@ -24,6 +25,7 @@ from zoho_mcp.tools import mail as mail_tools
 from zoho_mcp.tools import notes as notes_tools
 from zoho_mcp.tools import resources as resources_tools
 from zoho_mcp.tools import tasks as tasks_tools
+from zoho_mcp.tools import updates as updates_tools
 from zoho_mcp.zoho.auth import (
     DEFAULT_CALLBACK_PORT,
     ZohoTokenManager,
@@ -62,6 +64,10 @@ _AUTHENTICATE = ToolAnnotations(
     idempotentHint=True,
     openWorldHint=True,
 )
+# Reads nothing of the user's, so readOnlyHint -- but it is the only tool here
+# that talks to a host other than Zoho, which is what openWorldHint says. A
+# plain _READ_ONLY would describe it as a local lookup.
+_READ_ONLY_OPEN_WORLD = ToolAnnotations(readOnlyHint=True, openWorldHint=True)
 
 
 def create_server(
@@ -69,6 +75,7 @@ def create_server(
     contacts_client: ZohoContactsClient,
     token_manager: ZohoTokenManager,
     http_client: httpx.AsyncClient,
+    release_checker: ReleaseChecker,
 ) -> FastMCP:
     """Build the FastMCP app and register all tools against the given clients.
 
@@ -77,6 +84,11 @@ def create_server(
     the token manager the other tools are already using.
     """
     mcp = FastMCP("zoho-mcp")
+    # FastMCP takes no version argument, and the low-level Server it wraps
+    # falls back to reporting the *MCP SDK's* version when it has none --
+    # which is what `serverInfo.version` carried for all of 0.1.0. This is
+    # the seam: create_initialization_options reads it at handshake time.
+    mcp._mcp_server.version = installed_version()
 
     @mcp.tool(title="Authorize Zoho access", annotations=_AUTHENTICATE)
     async def authenticate() -> dict:
@@ -912,6 +924,31 @@ def create_server(
         """
         return await contacts_tools.count_contacts(contacts_client)
 
+    @mcp.tool(title="Check for a newer version", annotations=_READ_ONLY_OPEN_WORLD)
+    async def check_for_updates() -> dict:
+        """Report whether a newer version of this server has been published.
+
+        Touches nothing in the user's Zoho account. If the operator has
+        enabled update checking it asks GitHub for the latest release and
+        compares it with the running version; if not, it reports the
+        installed version and says where to look, without any network call.
+
+        Call it when the user asks what version this is, whether it's up to
+        date, or how to update. Don't call it speculatively -- it is the one
+        tool here that contacts a host other than Zoho.
+
+        Returns {"installed_version": str, "checked": bool} plus, when
+        checked, {"latest_version": str, "update_available": bool,
+        "release_url": str} and -- when an update exists -- "download_url"
+        and "how_to_install" steps. When checked is false, "reason" says why
+        and "releases_url" is where to look manually.
+
+        There is no tool that performs the upgrade: an installed extension
+        cannot replace itself. Relay the how_to_install steps rather than
+        offering to do it.
+        """
+        return await updates_tools.check_for_updates(release_checker)
+
     return mcp
 
 
@@ -932,6 +969,28 @@ def _callback_port() -> int:
         return int(float(raw))
     except (TypeError, ValueError):
         return DEFAULT_CALLBACK_PORT
+
+
+def _env_flag(name: str) -> bool:
+    """Read an opt-in boolean setting from the environment.
+
+    Opt-in only: case-insensitive ``"true"`` with surrounding whitespace
+    ignored, and *anything* else -- including "1" and "yes" -- leaves the
+    flag off. A truthiness check here would make ``ZOHO_ALLOW_AUTO_SEND=false``
+    sitting in a .env file enable live sending, which is why this parse is
+    shared rather than repeated per setting.
+    """
+    return os.environ.get(name, "false").strip().lower() == "true"
+
+
+def _build_release_checker(http_client: httpx.AsyncClient) -> ReleaseChecker:
+    """Build the update checker, off unless the operator opted in.
+
+    Separate from ``_build_zoho_clients_from_env`` because GitHub isn't Zoho:
+    it shares the http client and nothing else -- no token manager, no
+    account, no scope.
+    """
+    return ReleaseChecker(http_client, enabled=_env_flag("ZOHO_CHECK_FOR_UPDATES"))
 
 
 def _build_zoho_clients_from_env() -> tuple[
@@ -973,16 +1032,11 @@ def _build_zoho_clients_from_env() -> tuple[
         # /accounts//folders instead of falling back to discovery.
         account_id=os.environ.get("ZOHO_ACCOUNT_ID", "").strip() or None,
         calendar_uid=os.environ.get("ZOHO_CALENDAR_UID", "").strip() or None,
-        strip_invisible_chars=os.environ.get("ZOHO_STRIP_INVISIBLE_CHARS", "false")
-        .strip()
-        .lower()
-        == "true",
-        # Opt-in only: case-insensitive "true", surrounding whitespace
-        # ignored; any other value leaves sending disabled. Pinned by
-        # tests/test_client_from_env.py -- a truthiness check here would
-        # make ZOHO_ALLOW_AUTO_SEND=false enable live sending.
-        allow_auto_send=os.environ.get("ZOHO_ALLOW_AUTO_SEND", "false").strip().lower()
-        == "true",
+        strip_invisible_chars=_env_flag("ZOHO_STRIP_INVISIBLE_CHARS"),
+        # Opt-in only -- see _env_flag. Pinned by
+        # tests/test_client_from_env.py, because a truthiness check here
+        # would make ZOHO_ALLOW_AUTO_SEND=false enable live sending.
+        allow_auto_send=_env_flag("ZOHO_ALLOW_AUTO_SEND"),
     )
     contacts_client = ZohoContactsClient(
         token_manager=token_manager, http_client=http_client
@@ -992,7 +1046,13 @@ def _build_zoho_clients_from_env() -> tuple[
 
 def main() -> None:
     client, contacts_client, token_manager, http_client = _build_zoho_clients_from_env()
-    server = create_server(client, contacts_client, token_manager, http_client)
+    server = create_server(
+        client,
+        contacts_client,
+        token_manager,
+        http_client,
+        _build_release_checker(http_client),
+    )
     server.run(transport="stdio")
 
 

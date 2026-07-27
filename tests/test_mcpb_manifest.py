@@ -131,6 +131,50 @@ def test_the_auto_send_setting_says_what_turning_it_on_means(manifest):
     assert "draft" in setting["description"].lower()
 
 
+def test_update_checking_is_exposed_as_a_setting_that_defaults_to_off(manifest):
+    # It is the only thing here that contacts a host other than Zoho, so it
+    # has to be the user's choice rather than a default anyone has to notice
+    # and turn off.
+    setting = manifest["user_config"]["zoho_check_for_updates"]
+
+    assert setting["type"] == "boolean"
+    assert setting["default"] is False
+    assert setting["required"] is False
+    assert (
+        manifest["server"]["mcp_config"]["env"]["ZOHO_CHECK_FOR_UPDATES"]
+        == "${user_config.zoho_check_for_updates}"
+    )
+
+
+def test_the_long_description_owns_up_to_the_one_non_zoho_call(manifest):
+    """The outbound-calls promise in the listing was true once.
+
+    "The only outbound calls are to Zoho's own REST APIs" is the reason
+    someone installs this without reading the source.
+    Adding an update check made it false unless it names the exception, so
+    this pins the two halves together: whoever removes the exception has to
+    remove the setting too.
+    """
+    long_description = manifest["long_description"]
+    checks_for_updates = "zoho_check_for_updates" in manifest["user_config"]
+
+    assert ("GitHub" in long_description) is checks_for_updates
+    assert "off when you install it" in long_description
+
+
+def test_the_advertised_tool_count_matches_the_tool_list(manifest):
+    """The release checklist called this out as unverified, and it was.
+
+    Both numbers are prose -- one in a store listing, one in a README -- so
+    they go stale silently the first time a release adds or removes a tool.
+    """
+    count = len(manifest["tools"])
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert f"{count} MCP tools" in manifest["long_description"]
+    assert f"{count} tools" in readme
+
+
 def test_no_declared_tool_offers_to_change_the_servers_settings(manifest):
     # The invariant that outlived the old "not exposed as a setting" test:
     # whoever turns sending on, it must not be the model. A tool that edits

@@ -2,7 +2,7 @@
 
 An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contacts, Tasks, Notes, Bookmarks, Groups, and Resource Booking as tools to any MCP-compatible LLM client — Claude, ChatGPT, Gemini, or anything else that speaks MCP.
 
-41 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
+42 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
 
 **Sending email is disabled by default.** The server saves drafts instead, and only sends if you explicitly opt in. See [Composing email](#composing-email).
 
@@ -111,6 +111,21 @@ Both parsers here are written for that and fail closed on anything else, so a ho
 
 Sending email is one of those settings — a checkbox, off when you install it. It used to be withheld from the settings form on the theory that hand-editing `.env` was useful friction, but for a bundle install the file would have to live inside the installed extension directory, which every update replaces. That isn't friction, it's a feature you can't reach. What keeps mail in your account is that the box starts unticked and nothing but you can tick it — no tool changes server settings.
 
+## Updating
+
+**Nothing updates itself.** A bundle you installed from a file is on no update channel, so you find out about a new version by looking — either at the [releases page](https://github.com/plecos/zoho-mcp/releases), or by asking the assistant, which is what `check_for_updates` is for.
+
+That tool is off until you tick **"Check for new versions of this extension"**. Left off it reports the version you're running and points at the releases page, without a network call. Turned on it asks GitHub's public releases API for the latest tag and compares it — one request, no account data in it, cached for an hour. It never downloads or installs anything.
+
+To update: download the new `.mcpb`, **disable the extension and restart Claude first** (see the uninstall quirk above), then open the file. Expect to re-enter your client id and secret; your Zoho authorization survives, so `authenticate` doesn't need re-running. Then quit and reopen Claude so the new process picks the settings up.
+
+**Why there's no tool that does it for you.** Four reasons, in ascending order of how much they matter:
+
+- The MCPB manifest format has no update field — no update URL, nothing that tells a host where a newer bundle lives.
+- Automatic updates are a channel for extensions installed from Anthropic's directory. A locally installed one records `"source": "local"` and `"signatureInfo": {"status": "unsigned"}` in the host's `extensions-installations.json`, against the signature info that directory extensions carry.
+- That same file records a content `hash` of what was installed plus a cached copy of its manifest. A server that unzipped a new version over its own directory would desync both, leaving the host's UI, version and tool list describing the bundle it thinks it installed. It also couldn't restart itself — the host owns the process lifecycle — and on Windows it would be overwriting files it holds open.
+- Most of all: it would be the wrong shape. A tool that fetches code from the network into the directory the server runs from is reachable from inside a conversation, and this server's input includes email, which is untrusted. That's the same hole the send gate exists to close. It stays closed.
+
 ## Tools
 
 ### Authorization
@@ -120,6 +135,14 @@ Sending email is one of those settings — a checkbox, off when you install it. 
 | `authenticate` | Run the Zoho consent flow and store the token *(write)* |
 
 Only needed if the server was started without a stored token — the case for a bundle install, where `zoho-mcp-setup` isn't reachable. Every other tool fails with a message naming this one until it has run. The check lives in the token manager, which every Zoho call passes through, so no tool can route around it.
+
+### Version
+
+| Tool | |
+| --- | --- |
+| `check_for_updates` | Report whether a newer version has been published |
+
+The only tool that contacts a host other than Zoho, and the only one gated on a setting that starts off. See [Updating](#updating).
 
 ### Mail
 
@@ -240,6 +263,7 @@ One practical note: drafts don't show up in `search_emails` at all (a Zoho quirk
 | `ZOHO_CALENDAR_UID` | *discovered* | Your default calendar's uid, same story — looked up only when a calendar tool is called without an explicit `calendar_id`. |
 | `ZOHO_ALLOW_AUTO_SEND` | `false` | Allow `send_email` to actually send. Left off, it saves to Drafts instead. Exposed as a checkbox in a bundle install. See above. |
 | `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Strip the invisible Unicode padding some marketing mail uses to inflate preview text — from `get_email` bodies and from the `snippet` of every `search_emails`/`list_emails` result. Subjects are left alone; senders don't pad those, since it would look broken in any mail client. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
+| `ZOHO_CHECK_FOR_UPDATES` | `false` | Let `check_for_updates` ask GitHub's releases API whether a newer version exists. The one setting that permits an outbound call to a host other than Zoho. Exposed as a checkbox in a bundle install. See [Updating](#updating). |
 | `ZOHO_OAUTH_CALLBACK_PORT` | `8765` | Local port for the one-time OAuth redirect. |
 
 Both booleans are matched case-insensitively with surrounding whitespace ignored, so `true`, `True`, and `TRUE` all enable them. Any other value leaves them off.

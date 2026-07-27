@@ -24,6 +24,8 @@ Two things make this stronger than a hand-written fake:
 """
 
 import inspect
+import json
+import typing
 from unittest.mock import AsyncMock, create_autospec
 
 import httpx
@@ -308,7 +310,8 @@ ZOHO_CASES = MAIL_CASES + CALENDAR_CASES + OTHER_CASES
 def _make_clients():
     zoho = create_autospec(ZohoClient, instance=True, spec_set=True)
     contacts = create_autospec(ZohoContactsClient, instance=True, spec_set=True)
-    # These two results get unpacked by their tool wrappers.
+    # These results get unpacked by their tool wrappers.
+    zoho.list_emails.return_value = ([], False)
     zoho.list_tasks.return_value = ([], False)
     contacts.search_contacts.return_value = ([], False)
     return zoho, contacts
@@ -422,6 +425,101 @@ async def test_every_registered_tool_is_covered_by_a_case(server):
     assert registered == covered, (
         f"untested tools: {sorted(registered - covered)}; "
         f"cases for nonexistent tools: {sorted(covered - registered)}"
+    )
+
+
+# Every tool that enumerates things, and the key its items travel under.
+# The count that goes with them is `counted`'s job (tests/tools/test_envelope.py);
+# what's checked here is that each tool actually routes through it, at the
+# registered-tool boundary an LLM sees rather than at the wrapper.
+ENUMERATION_KEYS = {
+    "search_emails": "emails",
+    "list_emails": "emails",
+    "list_attachments": "attachments",
+    "list_folders": "folders",
+    "list_labels": "labels",
+    "list_signatures": "signatures",
+    "list_events": "events",
+    "list_calendars": "calendars",
+    "get_freebusy": "busy_slots",
+    "list_branches": "branches",
+    "list_resources": "resources",
+    "list_tasks": "tasks",
+    "list_notes": "notes",
+    "list_bookmarks": "bookmarks",
+    "list_groups": "groups",
+    "search_contacts": "contacts",
+}
+
+# The three client methods that hand back `(items, has_more)` rather than a
+# bare list, so the fake has to match that shape or the wrapper can't unpack it.
+_TUPLE_RETURNING = {"list_emails", "list_tasks", "search_contacts"}
+
+_CONTACTS_TOOLS = {case[0] for case in CONTACTS_CASES}
+_ARGS_AND_METHOD = {case[0]: (case[1], case[2]) for case in ZOHO_CASES + CONTACTS_CASES}
+
+
+@pytest.mark.parametrize("tool", sorted(ENUMERATION_KEYS))
+async def test_enumeration_tool_reports_a_count_matching_the_items_it_returns(
+    server, clients, tool
+):
+    """The count an LLM reads has to be derived, not composed.
+
+    A bare list leaves "how many?" to whoever writes the summary, and a number
+    produced while writing prose is not a number that was counted -- that's a
+    wrong total reported confidently, with nothing in the result to check it
+    against.
+    """
+    zoho, contacts = clients
+    args, method = _ARGS_AND_METHOD[tool]
+    target = contacts if tool in _CONTACTS_TOOLS else zoho
+    items = [{"id": "1"}, {"id": "2"}, {"id": "3"}]
+    getattr(target, method).return_value = (
+        (items, False) if tool in _TUPLE_RETURNING else items
+    )
+
+    payload = json.loads((await server.call_tool(tool, args))[0].text)
+
+    assert payload[ENUMERATION_KEYS[tool]] == items
+    assert payload["count"] == 3
+
+
+@pytest.mark.parametrize("tool", sorted(ENUMERATION_KEYS))
+async def test_enumeration_tool_reports_zero_rather_than_an_empty_list_alone(
+    server, clients, tool
+):
+    zoho, contacts = clients
+    args, method = _ARGS_AND_METHOD[tool]
+    target = contacts if tool in _CONTACTS_TOOLS else zoho
+    getattr(target, method).return_value = (
+        ([], False) if tool in _TUPLE_RETURNING else []
+    )
+
+    payload = json.loads((await server.call_tool(tool, args))[0].text)
+
+    assert payload[ENUMERATION_KEYS[tool]] == []
+    assert payload["count"] == 0
+
+
+async def test_no_registered_tool_returns_a_bare_list(server):
+    """The rule tool #43 has to obey, enforced instead of remembered.
+
+    `ENUMERATION_KEYS` above only covers tools someone thought to list. This
+    catches the new one: returning a list rather than a counted envelope is
+    the shape that pushes counting back onto the caller, so it's rejected at
+    the type level, where a reviewer can't miss it.
+    """
+    returning_lists = []
+    for tool in await server.list_tools():
+        annotation = server._tool_manager.get_tool(tool.name).fn.__annotations__.get(
+            "return"
+        )
+        if typing.get_origin(annotation) is list or annotation is list:
+            returning_lists.append(tool.name)
+
+    assert returning_lists == [], (
+        f"these tools return a bare list: {returning_lists}. Wrap the items with "
+        "tools.envelope.counted() so the result carries its own count."
     )
 
 

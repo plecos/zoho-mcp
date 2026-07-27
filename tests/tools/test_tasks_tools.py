@@ -40,7 +40,11 @@ async def test_list_tasks_delegates_to_client_and_shapes_result():
     assert client.list_tasks_calls == [
         {"limit": 5, "offset": 10, "group_id": None, "view": None}
     ]
-    assert result == {"tasks": client.list_tasks_result[0], "has_more": False}
+    assert result == {
+        "tasks": client.list_tasks_result[0],
+        "count": 1,
+        "has_more": False,
+    }
 
 
 async def test_list_tasks_defaults_limit_and_offset():

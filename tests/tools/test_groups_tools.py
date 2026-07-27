@@ -13,13 +13,13 @@ class FakeZohoClient:
         return self.list_groups_result
 
 
-async def test_list_groups_delegates_to_client():
+async def test_list_groups_delegates_to_client_and_counts_the_result():
     client = FakeZohoClient()
 
     result = await list_groups(client)
 
     assert client.list_groups_calls == 1
-    assert result == client.list_groups_result
+    assert result == {"groups": client.list_groups_result, "count": 1}
 
 
 async def test_list_groups_passes_through_empty_result():
@@ -28,4 +28,4 @@ async def test_list_groups_passes_through_empty_result():
     client = FakeZohoClient()
     client.list_groups_result = []
 
-    assert await list_groups(client) == []
+    assert await list_groups(client) == {"groups": [], "count": 0}

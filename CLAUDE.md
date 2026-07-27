@@ -127,6 +127,10 @@ Caught before shipping: `days_back` originally stored the mailbox timezone in `Z
 
 If a piece of math (timezone conversion, date-boundary resolution, unit conversion) can be done once, correctly, in tested server code, do it there. `ZohoClient` returns every date/time already in the mailbox's own local offset, so there's no conversion left for any caller to get wrong.
 
+Counting is that same math. Every enumeration tool returns `{"<domain>": [...], "count": N}` via `tools/envelope.py`'s `counted()` — never a bare list. This came from a live session that reported "21 unread emails" for a list of 20: with only a list in the payload, the total is something the model composes while writing prose rather than something it derives, and a fabricated number in the right shape reads as correct. `test_no_registered_tool_returns_a_bare_list` enforces the shape for the next tool, since a convention that lives only in the other 16 wrappers is one copy-paste from lapsing.
+
+Two things about `count` that its neighbors don't share: it describes the page it ships with, never a mailbox total, and it is **not** an end-of-results signal. `list_emails` filters Sent/Drafts/Templates out *after* fetching a page, so a short page can still have more behind it — which is why `has_more` is computed from the raw page, before that filter, and why paging must follow `has_more` rather than `count < limit`. Whenever a result is filtered after the window that produced it, the surviving count stops answering "was that everything?" and something else has to.
+
 ## Git workflow
 
 Never commit directly to `main`; work on a feature branch and open a PR, even for "just scaffolding" changes. Before any commit, scan the actual staged file list (`git status`, `git add -A -n`) for anything that shouldn't ship: real credentials, and real account identifiers or personal data sitting in what's meant to be synthetic fixture data. Test fixtures use obviously-fake values (`555…` ids, invented names) on purpose — keep it that way when adding fixtures.

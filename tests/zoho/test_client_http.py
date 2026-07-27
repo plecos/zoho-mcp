@@ -588,7 +588,7 @@ async def test_list_emails_calls_view_endpoint_with_correct_params(
         )
     )
 
-    results = await zoho_client.list_emails()
+    results, _ = await zoho_client.list_emails()
 
     assert route.called
     request = route.calls.last.request
@@ -647,7 +647,7 @@ async def test_list_emails_passes_folder_id_when_given(respx_mock, zoho_client):
 
     # No mock_folder_types_endpoint -- an explicit folder_id must skip the
     # exclusion-filter fetch entirely, same as search_emails' "in:" case.
-    results = await zoho_client.list_emails(folder_id="folder-9")
+    results, _ = await zoho_client.list_emails(folder_id="folder-9")
 
     assert route.calls.last.request.url.params["folderId"] == "folder-9"
     assert {r["id"] for r in results} == {"1"}
@@ -703,7 +703,7 @@ async def test_list_emails_returns_empty_list_when_data_key_absent(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
     ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
 
-    results = await zoho_client.list_emails()
+    results, _ = await zoho_client.list_emails()
 
     assert results == []
 
@@ -727,9 +727,86 @@ async def test_list_emails_filters_out_sent_drafts_and_templates_by_default(
         )
     )
 
-    results = await zoho_client.list_emails()
+    results, _ = await zoho_client.list_emails()
 
     assert {r["id"] for r in results} == {"1"}
+
+
+async def test_list_emails_reports_more_pages_when_the_raw_page_came_back_full(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    _raw_email(message_id="1", folder_id="1122334455"),
+                    _raw_email(message_id="2", folder_id="1122334455"),
+                ]
+            },
+        )
+    )
+
+    results, has_more = await zoho_client.list_emails(limit=2)
+
+    assert len(results) == 2
+    assert has_more is True
+
+
+async def test_list_emails_still_reports_more_pages_when_filtering_shrinks_the_page(
+    respx_mock, zoho_client
+):
+    """The exclusion filter runs *after* the page is fetched.
+
+    So a full page of `limit` raw messages can return fewer than `limit`
+    results once Sent/Drafts/Templates are dropped. Deriving "last page" from
+    the returned length -- which is what callers were told to do -- then stops
+    the sweep early and silently leaves later mail unenumerated. `has_more`
+    has to be measured against the raw page, before any filtering.
+    """
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    _raw_email(message_id="1", folder_id="1122334455"),
+                    _raw_email(message_id="2", folder_id="sent-folder-id"),
+                ]
+            },
+        )
+    )
+
+    results, has_more = await zoho_client.list_emails(limit=2)
+
+    assert {r["id"] for r in results} == {"1"}
+    assert has_more is True
+
+
+async def test_list_emails_reports_no_more_pages_when_the_raw_page_was_short(
+    respx_mock, zoho_client
+):
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [_raw_email(message_id="1", folder_id="1122334455")]},
+        )
+    )
+
+    _, has_more = await zoho_client.list_emails(limit=20)
+
+    assert has_more is False
 
 
 async def test_list_emails_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_client):
@@ -3811,6 +3888,16 @@ async def test_blank_cc_and_bcc_entries_are_dropped(respx_mock, zoho_client):
 _LISTING_CALLS = {"search_emails": {"query": "entire:deal"}, "list_emails": {}}
 
 
+def _listing_emails(result):
+    """The emails out of either listing tool's return.
+
+    `search_emails` returns a bare list; `list_emails` returns
+    `(emails, has_more)` because its page-level filtering makes the returned
+    length unusable as an end-of-results signal.
+    """
+    return result[0] if isinstance(result, tuple) else result
+
+
 @pytest.mark.parametrize("tool", list(_LISTING_CALLS))
 async def test_listing_tools_pass_strip_invisible_chars_through(
     respx_mock, http_client, tool
@@ -3832,7 +3919,9 @@ async def test_listing_tools_pass_strip_invisible_chars_through(
         strip_invisible_chars=True,
     )
 
-    results = await getattr(stripping_client, tool)(**_LISTING_CALLS[tool])
+    results = _listing_emails(
+        await getattr(stripping_client, tool)(**_LISTING_CALLS[tool])
+    )
 
     assert results[0]["snippet"] == "Deal inside"
 
@@ -3852,6 +3941,6 @@ async def test_listing_tools_keep_padding_when_the_flag_is_off(
             f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/{endpoint}"
         ).mock(return_value=httpx.Response(200, json={"data": [raw]}))
 
-    results = await getattr(zoho_client, tool)(**_LISTING_CALLS[tool])
+    results = _listing_emails(await getattr(zoho_client, tool)(**_LISTING_CALLS[tool]))
 
     assert results[0]["snippet"] == padded

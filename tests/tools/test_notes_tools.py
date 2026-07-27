@@ -40,7 +40,7 @@ async def test_list_notes_delegates_to_client():
     assert client.list_notes_calls == [
         {"limit": 5, "after": 10, "group_id": None, "oldest_first": False}
     ]
-    assert result == client.list_notes_result
+    assert result == {"notes": client.list_notes_result, "count": 1}
 
 
 async def test_list_notes_defaults_limit_and_after():

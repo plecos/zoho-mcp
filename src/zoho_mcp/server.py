@@ -126,7 +126,7 @@ def create_server(
     @mcp.tool(title="Search email", annotations=_READ_ONLY)
     async def search_emails(
         query: str = "", limit: int = 20, days_back: int | None = None
-    ) -> list[dict]:
+    ) -> dict:
         """Search the user's Zoho Mail mailbox for emails matching a query
         and/or a recency window.
 
@@ -165,6 +165,11 @@ def create_server(
         the mail, so a marketing message can claim "highest" -- treat it
         as the sender's assertion, not a fact about importance. A flag is
         the account owner's own marking and does mean something.
+
+        Returns {"emails": [...], "count": N}. Report count as the number
+        of matches rather than tallying the list yourself. Because Search
+        returns only the top `limit` by recency, count == limit means the
+        results were very likely truncated -- it is not a mailbox total.
         """
         return await mail_tools.search_emails(
             client, query=query, limit=limit, days_back=days_back
@@ -176,7 +181,7 @@ def create_server(
         folder_id: str | None = None,
         limit: int = 20,
         start: int = 1,
-    ) -> list[dict]:
+    ) -> dict:
         """List emails by read/unread status, with real pagination.
 
         Use this instead of search_emails when you need to reliably
@@ -191,8 +196,15 @@ def create_server(
         search_emails).
         limit (optional): maximum results per page (1-200).
         start (optional): 1-based starting sequence number -- call again
-        with start += limit to fetch the next page, and stop once a page
-        comes back with fewer than limit results.
+        with start += limit to fetch the next page.
+
+        Returns {"emails": [...], "count": N, "has_more": bool}. Report
+        count as this page's size rather than tallying the list yourself.
+        Keep paging while has_more is true and add up count for a
+        mailbox total; do NOT stop because a page came back with fewer
+        than limit results, since Sent/Drafts/Templates are filtered out
+        after the page is fetched and can shorten a page that has more
+        behind it.
         """
         return await mail_tools.list_emails(
             client, status=status, folder_id=folder_id, limit=limit, start=start
@@ -206,11 +218,12 @@ def create_server(
         )
 
     @mcp.tool(title="List email attachments", annotations=_READ_ONLY)
-    async def list_attachments(message_id: str, folder_id: str) -> list[dict]:
+    async def list_attachments(message_id: str, folder_id: str) -> dict:
         """List attachment metadata for one email found via search_emails.
 
-        Returns [{"id", "name", "size_bytes"}, ...] -- metadata only.
-        Pass an id to get_attachment to read one's content.
+        Returns {"attachments": [{"id", "name", "size_bytes"}, ...],
+        "count": N} -- metadata only. Pass an id to get_attachment to
+        read one's content.
         """
         return await mail_tools.list_attachments(
             client, message_id=message_id, folder_id=folder_id
@@ -283,29 +296,32 @@ def create_server(
         )
 
     @mcp.tool(title="List mail folders", annotations=_READ_ONLY)
-    async def list_folders() -> list[dict]:
+    async def list_folders() -> dict:
         """List all folders in the mailbox, including custom subfolders.
 
-        Each folder has id, name, path (e.g. "/Inbox/Work" -- the
-        hierarchy signal, not any id field), and type. Pass a folder's
-        name to search_emails' in: qualifier to search it.
+        Returns {"folders": [...], "count": N}. Each folder has id, name,
+        path (e.g. "/Inbox/Work" -- the hierarchy signal, not any id
+        field), and type. Pass a folder's name to search_emails' in:
+        qualifier to search it.
         """
         return await mail_tools.list_folders(client)
 
     @mcp.tool(title="List mail labels", annotations=_READ_ONLY)
-    async def list_labels() -> list[dict]:
+    async def list_labels() -> dict:
         """List all labels/tags configured in the mailbox.
 
-        Each label has id, name, color. Pass a label's name to
-        search_emails' label: qualifier to search it.
+        Returns {"labels": [...], "count": N}. Each label has id, name,
+        color. Pass a label's name to search_emails' label: qualifier to
+        search it.
         """
         return await mail_tools.list_labels(client)
 
     @mcp.tool(title="List email signatures", annotations=_READ_ONLY)
-    async def list_signatures() -> list[dict]:
+    async def list_signatures() -> dict:
         """List all configured email signatures.
 
-        Each has id, name, content (plain text).
+        Returns {"signatures": [...], "count": N}. Each has id, name,
+        content (plain text).
         """
         return await mail_tools.list_signatures(client)
 
@@ -481,9 +497,7 @@ def create_server(
         )
 
     @mcp.tool(title="List calendar events", annotations=_READ_ONLY)
-    async def list_events(
-        start: str, end: str, calendar_id: str | None = None
-    ) -> list[dict]:
+    async def list_events(start: str, end: str, calendar_id: str | None = None) -> dict:
         """List Zoho Calendar events in a time range (max 31 days).
 
         start/end: ISO 8601 datetime strings with an explicit UTC offset
@@ -495,6 +509,10 @@ def create_server(
 
         Returned event times are already in the mailbox's own local
         timezone, not UTC -- do not convert them yourself.
+
+        Returns {"events": [...], "count": N}. Report count rather than
+        tallying the list yourself; it counts occurrences in the range,
+        so a recurring event contributes one per occurrence.
         """
         return await calendar_tools.list_events(
             client, start=start, end=end, calendar_id=calendar_id
@@ -520,17 +538,18 @@ def create_server(
         return await calendar_tools.get_event(client, uid=uid, calendar_id=calendar_id)
 
     @mcp.tool(title="List calendars", annotations=_READ_ONLY)
-    async def list_calendars() -> list[dict]:
+    async def list_calendars() -> dict:
         """List all calendars the user has access to.
 
-        Each calendar has id, name, is_default, timezone, privilege. Pass
-        a calendar's id to list_events/get_event's calendar_id argument
-        to target it instead of the default.
+        Returns {"calendars": [...], "count": N}. Each calendar has id,
+        name, is_default, timezone, privilege. Pass a calendar's id to
+        list_events/get_event's calendar_id argument to target it instead
+        of the default.
         """
         return await calendar_tools.list_calendars(client)
 
     @mcp.tool(title="Check free/busy time", annotations=_READ_ONLY)
-    async def get_freebusy(email: str, start: str, end: str) -> list[dict]:
+    async def get_freebusy(email: str, start: str, end: str) -> dict:
         """Get busy time slots for a user's calendar in a time range.
 
         email: the calendar owner's email address.
@@ -544,6 +563,9 @@ def create_server(
 
         Returned times are already in the mailbox's own local timezone,
         not UTC -- do not convert them yourself.
+
+        Returns {"busy_slots": [...], "count": N}. Since an unshared
+        calendar raises instead, count: 0 does mean genuinely free.
         """
         return await calendar_tools.get_freebusy(
             client, email=email, start=start, end=end
@@ -634,29 +656,30 @@ def create_server(
         await calendar_tools.delete_event(client, uid=uid, calendar_id=calendar_id)
 
     @mcp.tool(title="List office branches", annotations=_READ_ONLY)
-    async def list_branches() -> list[dict]:
+    async def list_branches() -> dict:
         """List the office branches configured for Zoho Calendar's
         Resource Booking feature (meeting rooms, equipment), each with
         nested buildings and floors.
 
-        An empty list is normal -- Resource Booking is an office-facility
-        feature most personal/small accounts never set up, not an error.
-        Use a floor's id (only floors with has_resource true have any)
-        with list_resources to see what's actually bookable there.
+        Returns {"branches": [...], "count": N}, where count counts
+        branches rather than the nested buildings/floors. count: 0 is
+        normal -- Resource Booking is an office-facility feature most
+        personal/small accounts never set up, not an error. Use a floor's
+        id (only floors with has_resource true have any) with
+        list_resources to see what's actually bookable there.
         """
         return await resources_tools.list_branches(client)
 
     @mcp.tool(title="List bookable resources", annotations=_READ_ONLY)
-    async def list_resources(
-        branch_id: str, building_id: str, floor_id: str
-    ) -> list[dict]:
+    async def list_resources(branch_id: str, building_id: str, floor_id: str) -> dict:
         """List the bookable resources (rooms, equipment) on one floor.
 
         branch_id/building_id/floor_id: from a prior list_branches result
         -- all three are required by Zoho's own API.
 
-        Each resource has an email address -- invite it to a calendar
-        event (as an attendee) to book it.
+        Returns {"resources": [...], "count": N}. Each resource has an
+        email address -- invite it to a calendar event (as an attendee)
+        to book it.
         """
         return await resources_tools.list_resources(
             client, branch_id=branch_id, building_id=building_id, floor_id=floor_id
@@ -684,13 +707,14 @@ def create_server(
         asks about assignment or authorship. Cannot be combined with
         group_id.
 
-        Returns {"tasks": [...], "has_more": bool}. Each task has id,
-        title, description, status, priority, due_date, project,
+        Returns {"tasks": [...], "count": N, "has_more": bool}. Each task
+        has id, title, description, status, priority, due_date, project,
         assignee, tags, subtask_count, recurring, created_at, modified_at.
         due_date's format is unverified against this account (never seen
         populated) -- treat it as an opaque string, don't assume a
-        format. If has_more is true, raise limit or increase offset,
-        don't assume the count you got back is the full total.
+        format. Report count rather than tallying the list yourself; it
+        is this page's size, so if has_more is true, raise limit or
+        increase offset rather than treating count as the full total.
 
         There is no server-side filter for task status, priority, or due
         date -- Zoho's API offers none. Fetch and filter on the returned
@@ -739,7 +763,7 @@ def create_server(
         after: int = 0,
         group_id: str | None = None,
         oldest_first: bool = False,
-    ) -> list[dict]:
+    ) -> dict:
         """List Zoho Mail notes -- the user's personal ones, or a group's.
 
         limit (optional): maximum number of notes to return (1-399).
@@ -749,10 +773,11 @@ def create_server(
         oldest_first (optional): return oldest-created notes first.
         Defaults to newest first.
 
-        Each note has id, title, content, book, owner, is_favorite,
-        color, created_at, modified_at. There is no has_more signal for
-        this endpoint -- getting back fewer than limit results is the
-        only reliable sign you've reached the end.
+        Returns {"notes": [...], "count": N}. Each note has id, title,
+        content, book, owner, is_favorite, color, created_at,
+        modified_at. Report count rather than tallying the list yourself.
+        There is no has_more signal for this endpoint, so a count below
+        limit is the only reliable sign you've reached the end.
         """
         return await notes_tools.list_notes(
             client,
@@ -792,7 +817,7 @@ def create_server(
         after: int = 0,
         group_id: str | None = None,
         oldest_first: bool = False,
-    ) -> list[dict]:
+    ) -> dict:
         """List Zoho Mail bookmarks -- the user's personal ones, or a group's.
 
         limit (optional): maximum number of bookmarks to return (1-399).
@@ -802,12 +827,13 @@ def create_server(
         oldest_first (optional): return oldest-created bookmarks first.
         Defaults to newest first.
 
-        Each bookmark has id, title, url, summary, collection, owner,
-        is_favorite, tags. Bookmarks carry no created/modified timestamps
-        at all, so ordering is the only way to reason about their age.
-        There is no has_more signal for this endpoint -- getting back
-        fewer than limit results is the only reliable sign you've
-        reached the end.
+        Returns {"bookmarks": [...], "count": N}. Each bookmark has id,
+        title, url, summary, collection, owner, is_favorite, tags.
+        Bookmarks carry no created/modified timestamps at all, so
+        ordering is the only way to reason about their age. Report count
+        rather than tallying the list yourself. There is no has_more
+        signal for this endpoint, so a count below limit is the only
+        reliable sign you've reached the end.
         """
         return await bookmarks_tools.list_bookmarks(
             client,
@@ -845,20 +871,21 @@ def create_server(
         return await bookmarks_tools.get_bookmark(client, bookmark_id=bookmark_id)
 
     @mcp.tool(title="List shared groups", annotations=_READ_ONLY)
-    async def list_groups() -> list[dict]:
+    async def list_groups() -> dict:
         """List every shared Zoho Mail group the user belongs to.
 
-        Returns [{"id", "name", "owner", "member_count"}, ...], one row
-        per group. A group is shared across Tasks, Notes, and Bookmarks
-        rather than belonging to any one of them, so the same id works
-        for all three -- pass it to list_tasks / list_notes /
-        list_bookmarks's group_id argument. A group can legitimately
-        hold items in one service and none in the others.
+        Returns {"groups": [{"id", "name", "owner", "member_count"},
+        ...], "count": N}, one row per group. A group is shared across
+        Tasks, Notes, and Bookmarks rather than belonging to any one of
+        them, so the same id works for all three -- pass it to
+        list_tasks / list_notes / list_bookmarks's group_id argument. A
+        group can legitimately hold items in one service and none in the
+        others.
 
         member_count may be null and owner may be empty if Zoho didn't
         report them for that group.
 
-        An empty list is a normal, common result -- groups are a
+        count: 0 is a normal, common result -- groups are a
         shared-mailbox feature most personal accounts never set up. Do
         not treat it as an error or retry it.
         """
@@ -884,15 +911,16 @@ def create_server(
         merges the results -- these are two separate pools in Zoho, each
         with their own Archived/Inactive folders.
 
-        Returns {"contacts": [...], "has_more": bool}. Each contact
-        includes a scope field ("personal" or "organization") along with
-        phones, notes, nickname, and birthday when set. Pass scope back
-        into get_contact -- the same id can mean a different, unrelated
-        record depending on scope. If has_more is true, there are more
-        results than limit returned -- raise limit or narrow query, don't
-        assume the count you got back is the full total. For "how many
-        contacts do I have" style questions, use count_contacts instead of
-        paginating and summing.
+        Returns {"contacts": [...], "count": N, "has_more": bool}. Each
+        contact includes a scope field ("personal" or "organization")
+        along with phones, notes, nickname, and birthday when set. Pass
+        scope back into get_contact -- the same id can mean a different,
+        unrelated record depending on scope. Report count rather than
+        tallying the list yourself; it covers only what came back here,
+        so if has_more is true, raise limit or narrow query rather than
+        treating count as the full total. For "how many contacts do I
+        have" style questions, use count_contacts instead of paginating
+        and summing.
         """
         return await contacts_tools.search_contacts(
             contacts_client, query=query, limit=limit, status=status

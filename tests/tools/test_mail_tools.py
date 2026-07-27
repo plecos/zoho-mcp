@@ -24,7 +24,7 @@ class FakeZohoClient:
         self.get_email_calls = []
         self.search_result = [{"id": "1", "subject": "hi"}]
         self.list_emails_calls = []
-        self.list_emails_result = [{"id": "1", "subject": "hi", "read": False}]
+        self.list_emails_result = ([{"id": "1", "subject": "hi", "read": False}], False)
         self.get_email_result = {"id": "1", "text": "hello"}
         self.list_attachments_calls = []
         self.list_attachments_result = [{"id": "attach-1", "name": "roadmap.pdf"}]
@@ -143,7 +143,7 @@ async def test_search_emails_delegates_to_client_and_returns_result():
     result = await search_emails(client, query="roadmap", limit=5)
 
     assert client.search_calls == [{"query": "roadmap", "limit": 5, "days_back": None}]
-    assert result == client.search_result
+    assert result == {"emails": client.search_result, "count": 1}
 
 
 async def test_search_emails_defaults_limit():
@@ -170,7 +170,38 @@ async def test_list_emails_delegates_to_client_with_defaults():
     assert client.list_emails_calls == [
         {"status": "all", "folder_id": None, "limit": 20, "start": 1}
     ]
-    assert result == client.list_emails_result
+    assert result == {
+        "emails": client.list_emails_result[0],
+        "count": 1,
+        "has_more": False,
+    }
+
+
+async def test_list_emails_surfaces_has_more_true_alongside_a_short_page():
+    """count and has_more answer different questions, and can disagree.
+
+    The client filters Sent/Drafts/Templates out after fetching a page, so a
+    page with more behind it can still come back short. Reading "count <
+    limit" as "done" is exactly the inference has_more exists to replace.
+    """
+    client = FakeZohoClient()
+    client.list_emails_result = ([{"id": "1", "subject": "hi", "read": False}], True)
+
+    result = await list_emails(client, limit=20)
+
+    assert result["count"] == 1
+    assert result["has_more"] is True
+
+
+async def test_list_emails_reports_zero_for_an_empty_page():
+    client = FakeZohoClient()
+    client.list_emails_result = ([], False)
+
+    assert await list_emails(client) == {
+        "emails": [],
+        "count": 0,
+        "has_more": False,
+    }
 
 
 async def test_list_emails_forwards_status_folder_id_limit_and_start():
@@ -200,7 +231,7 @@ async def test_list_attachments_delegates_to_client_with_message_and_folder_id()
     assert client.list_attachments_calls == [
         {"message_id": "msg-1", "folder_id": "folder-1"}
     ]
-    assert result == client.list_attachments_result
+    assert result == {"attachments": client.list_attachments_result, "count": 1}
 
 
 async def test_list_folders_delegates_to_client():
@@ -209,7 +240,7 @@ async def test_list_folders_delegates_to_client():
     result = await list_folders(client)
 
     assert client.list_folders_calls == 1
-    assert result == client.list_folders_result
+    assert result == {"folders": client.list_folders_result, "count": 1}
 
 
 async def test_list_labels_delegates_to_client():
@@ -218,7 +249,7 @@ async def test_list_labels_delegates_to_client():
     result = await list_labels(client)
 
     assert client.list_labels_calls == 1
-    assert result == client.list_labels_result
+    assert result == {"labels": client.list_labels_result, "count": 1}
 
 
 async def test_list_signatures_delegates_to_client():
@@ -227,7 +258,7 @@ async def test_list_signatures_delegates_to_client():
     result = await list_signatures(client)
 
     assert client.list_signatures_calls == 1
-    assert result == client.list_signatures_result
+    assert result == {"signatures": client.list_signatures_result, "count": 1}
 
 
 async def test_mark_as_read_delegates_to_client():

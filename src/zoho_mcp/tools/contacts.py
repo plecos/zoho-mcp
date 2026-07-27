@@ -5,6 +5,7 @@ Zoho Contacts client is injected by the caller (``server.py``), never
 constructed here.
 """
 
+from zoho_mcp.tools.envelope import counted
 from zoho_mcp.zoho.contacts_client import ZohoContactsClient
 
 
@@ -27,16 +28,17 @@ async def search_contacts(
             explicitly requested via this argument.
 
     Returns:
-        ``{"contacts": [...], "has_more": bool}``. Each contact has id,
-        scope ("personal" or "organization"), first_name, last_name,
-        nickname, company, emails, phones, notes, birthday. Searches both
-        the Personal and Organization contact pools and merges the
-        results -- pass the result's ``scope`` back into ``get_contact``,
-        since the same id can mean a different record in each pool.
-        ``has_more`` is True if more results exist beyond ``limit`` --
-        don't infer this from the result count, raise the limit or narrow
-        the query instead. Use ``count_contacts`` for a reliable total
-        rather than paginating and summing.
+        ``{"contacts": [...], "count": int, "has_more": bool}``. Each
+        contact has id, scope ("personal" or "organization"), first_name,
+        last_name, nickname, company, emails, phones, notes, birthday.
+        Searches both the Personal and Organization contact pools and
+        merges the results -- pass the result's ``scope`` back into
+        ``get_contact``, since the same id can mean a different record in
+        each pool. ``count`` is how many came back here; ``has_more`` is
+        True if more results exist beyond ``limit`` -- don't infer that
+        from ``count``, raise the limit or narrow the query instead. Use
+        ``count_contacts`` for a reliable total rather than paginating
+        and summing.
 
     Raises:
         ZohoAPIError: if limit is less than 1, status is not recognized,
@@ -45,7 +47,7 @@ async def search_contacts(
     contacts, has_more = await client.search_contacts(
         query=query, limit=limit, status=status
     )
-    return {"contacts": contacts, "has_more": has_more}
+    return counted("contacts", contacts, has_more=has_more)
 
 
 async def get_contact(client: ZohoContactsClient, contact_id: str, scope: str) -> dict:

@@ -9,25 +9,26 @@ groups span all three of Tasks/Notes/Bookmarks -- it isn't any one
 service's concern.
 """
 
+from zoho_mcp.tools.envelope import counted
 from zoho_mcp.zoho.client import ZohoClient
 
 
-async def list_groups(client: ZohoClient) -> list[dict]:
+async def list_groups(client: ZohoClient) -> dict:
     """List every shared Zoho Mail group the user belongs to.
 
     Args:
         client: injected Zoho client.
 
     Returns:
-        ``[{"id", "name", "owner", "member_count"}, ...]``, one row per
-        distinct group. A group is shared across Tasks, Notes, and
-        Bookmarks rather than belonging to one of them, so the same id
-        works for all three. ``owner``/``member_count`` may be
-        ``""``/``None`` for a group Zoho's Tasks listing didn't report.
-        An empty list is a normal, common result -- groups are a
+        ``{"groups": [...], "count": int}``, one row per distinct group,
+        each with id, name, owner, member_count. A group is shared across
+        Tasks, Notes, and Bookmarks rather than belonging to one of them,
+        so the same id works for all three. ``owner``/``member_count``
+        may be ``""``/``None`` for a group Zoho's Tasks listing didn't
+        report. ``count: 0`` is a normal, common result -- groups are a
         shared-mailbox feature most personal accounts never set up.
 
     Raises:
         ZohoAPIError: if any of the three underlying requests fails.
     """
-    return await client.list_groups()
+    return counted("groups", await client.list_groups())

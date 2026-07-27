@@ -1,7 +1,7 @@
 """The shared result shape for every enumeration tool."""
 
 
-def counted(key: str, items: list[dict], **extra) -> dict:
+def counted(key: str, items: list[dict], **extra: object) -> dict:
     """Wrap an enumeration result so its size travels with it.
 
     A bare list leaves "how many are there?" to whoever reads the result,

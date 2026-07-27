@@ -109,6 +109,26 @@ MAIL_CASES = [
         {"message_id": "m-1", "content": "B", "reply_all": True},
     ),
     (
+        "forward_draft",
+        {
+            "message_id": "m-1",
+            "folder_id": "f-1",
+            "to": ["a@example.com"],
+            "content": "FYI",
+            "cc": ["c@example.com"],
+            "bcc": ["d@example.com"],
+        },
+        "forward_draft",
+        {
+            "message_id": "m-1",
+            "folder_id": "f-1",
+            "to": ["a@example.com"],
+            "content": "FYI",
+            "cc": ["c@example.com"],
+            "bcc": ["d@example.com"],
+        },
+    ),
+    (
         "send_email",
         {"to": ["a@example.com"], "subject": "S", "content": "B"},
         "send_email",
@@ -402,9 +422,10 @@ async def test_every_registered_tool_is_covered_by_a_case(server):
 async def test_drafting_tools_never_reach_send_email(server, clients):
     """The specific catastrophe this file exists for.
 
-    `create_draft`/`reply_draft` and `send_email` are adjacent closures with
-    near-identical shapes. If either drafting tool were wired to the sending
-    path, the tool list would look identical and every other test would pass.
+    `create_draft`/`reply_draft`/`forward_draft` and `send_email` are adjacent
+    closures with near-identical shapes. If any drafting tool were wired to the
+    sending path, the tool list would look identical and every other test would
+    pass.
     """
     zoho, _ = clients
 
@@ -412,7 +433,12 @@ async def test_drafting_tools_never_reach_send_email(server, clients):
         "create_draft", {"to": ["a@example.com"], "subject": "S", "content": "B"}
     )
     await server.call_tool("reply_draft", {"message_id": "m-1", "content": "B"})
+    await server.call_tool(
+        "forward_draft",
+        {"message_id": "m-1", "folder_id": "f-1", "to": ["a@example.com"]},
+    )
 
     assert zoho.send_email.await_count == 0
     assert zoho.create_draft.await_count == 1
     assert zoho.reply_draft.await_count == 1
+    assert zoho.forward_draft.await_count == 1

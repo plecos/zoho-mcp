@@ -78,6 +78,11 @@ class FakeZohoClient:
     async def reply_draft(self, message_id, content, reply_all=False):
         return {}
 
+    async def forward_draft(
+        self, message_id, folder_id, to, content="", cc=None, bcc=None
+    ):
+        return {}
+
     async def send_email(self, to, subject, content, cc=None, bcc=None):
         return {}
 
@@ -179,6 +184,7 @@ async def test_create_server_registers_every_expected_tool():
         "list_signatures",
         "create_draft",
         "reply_draft",
+        "forward_draft",
         "send_email",
         "mark_as_read",
         "mark_as_unread",
@@ -237,6 +243,7 @@ _WRITE_TOOL_NAMES = {
     "authenticate",
     "create_draft",
     "reply_draft",
+    "forward_draft",
     "send_email",
     "create_task",
     "create_note",

@@ -115,6 +115,41 @@ If a piece of math (timezone conversion, date-boundary resolution, unit conversi
 
 Never commit directly to `main`; work on a feature branch and open a PR, even for "just scaffolding" changes. Before any commit, scan the actual staged file list (`git status`, `git add -A -n`) for anything that shouldn't ship: real credentials, and real account identifiers or personal data sitting in what's meant to be synthetic fixture data. Test fixtures use obviously-fake values (`555…` ids, invented names) on purpose — keep it that way when adding fixtures.
 
+## Releasing
+
+The version is inert until a tag exists. `release.yml` fires only on `push:
+tags: ["v*"]`, so bumping the number publishes nothing by itself — which is why
+the bump belongs in **its own PR, after the features it covers have landed**,
+never inside a feature PR. Two feature branches that each bump the version
+collide in both files over a line that carries no functional meaning, and until
+the batch is done you don't know whether it's a minor or a patch. Pre-1.0, a new
+tool is additive: minor slot.
+
+`0.1.0` lives in three places, and only two of them can fail loudly:
+
+- [ ] `pyproject.toml` — pinned to the manifest by
+      `test_the_manifest_version_matches_the_package_version`
+- [ ] `manifest.json` — same test, **plus** release.yml's tag check
+- [ ] `README.md` — the `dist/zoho-mcp-<version>.mcpb` smoke-test example.
+      **Nothing verifies this one**; it's a filename in prose, so it goes stale
+      silently. It's the one to check by hand.
+- [ ] `manifest.json`'s `long_description` and README's tool count ("41 tools")
+      when the release adds or removes a tool. Also unverified by any test.
+
+Then: merge the bump PR, and tag **the merge commit on `main`**, not the branch
+tip — with a merge commit those are different, and tagging the tip points a
+release at something that isn't in `main`'s history.
+
+```
+git checkout main && git pull --ff-only origin main
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`workflow_dispatch` builds and verifies without publishing, so the pipeline can
+be rehearsed without minting a release. And if a tag and the manifest ever
+disagree, the build fails before publishing rather than shipping a bundle whose
+filename misstates its contents.
+
 ## Documentation
 
 - Every public module, class, and function gets a concise Google-style docstring: what it does, params, return shape, exceptions raised.

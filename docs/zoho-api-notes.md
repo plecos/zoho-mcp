@@ -262,6 +262,123 @@ differing only by `mode` plus mode-specific extras (`destfolderId`,
 Zoho's docs are internally inconsistent on `labelId`'s shape — the apply sample
 shows an array, the remove sample a single value. An array works for both.
 
+### Forwarding must go through `action=forward`, not a recomposed body
+
+`POST .../messages/{id}` takes `action`: `reply`, `replyall`, `forward`. Zoho
+builds the quoted original server-side from the stored message, so the body we
+send carries only the forwarder's added note.
+
+The reason this matters more than it looks: the obvious-seeming alternative —
+`get_email` then `create_draft` — is silently lossy. `get_email` runs the body
+through `normalize_email_content`, which flattens HTML to plain text, so a
+forward rebuilt from it arrives stripped of formatting, inline images and
+attachments. That is a real reported bug, not a hypothetical: an assistant
+asked to forward a message did exactly this, because no forward tool existed.
+**Never round-trip a body through this server to forward it.**
+
+**`action=forward` is accepted vocabulary and fails anyway.** Verified live,
+2026-07-27: every `action=forward` request returns a content-free
+`500 Internal Error`, while `reply`/`replyall` succeed on the same message with
+the same body shape, every time. It is not a wrong-field problem:
+
+- `forward` passes the action pattern check that rejects `Forward`, `FORWARD`,
+  and `bogusvalue` with `400 PATTERN_NOT_MATCHED`, so the value is in Zoho's
+  enum.
+- `toAddress` is recognized (no `EXTRA_KEY_FOUND_IN_JSON`), and Zoho's Mail360
+  docs state it "becomes mandatory when the value of the action is set to
+  forward". Sending it changes nothing.
+- Still 500 with `attachments: []`, with real attachment descriptors, with
+  `subject`, `mailFormat`, `encoding`, `askReceipt`, `isSchedule`, on messages
+  with and without attachments.
+
+Key-probing technique worth reusing: this endpoint emits
+`EXTRA_KEY_FOUND_IN_JSON` for unrecognized keys, but the **action pattern check
+runs first**, so a bogus action masks it. `action=forward` is the ideal probe
+vehicle instead — it passes the pattern check, always fails internally, and so
+never creates a draft while still exercising key validation. That mapped the
+accepted vocabulary (`toAddress`, `ccAddress`, `bccAddress`, `subject`,
+`attachments`, `inReplyTo`, `refHeader`, `priority`, `mailFormat`, `encoding`,
+`askReceipt`) and the attachment object's inner keys (`storeName`,
+`attachmentName`, `attachmentPath` recognized; `attachmentId` not).
+
+### The web client doesn't use `action=forward` either
+
+Ground truth from Zoho Mail's own network traffic: forwarding posts
+form-urlencoded to the internal **`/zm/send.do`**, not the public REST API,
+carrying `accId`, `mymId` (the original message id), `fwdInlineMode=7`,
+`originalMode=draft`, `from`/`to`/`cc`/`bcc`/`subject`, and a `content` field
+holding **the entire forward body assembled in the browser** — the
+`============ Forwarded message ============` header block plus the original
+inside `<blockquote id="blockquote_zmail">`. That endpoint authenticates with
+session cookies and an `x-zcsrf-token`, so it is unreachable from an OAuth
+client and is not a contract to depend on.
+
+The lesson for our own design: **assembling the forward body ourselves is not a
+workaround, it is what the vendor's own client does.** The server-side path
+exists in the API but is broken.
+
+### Inline images survive, and the rewrite that "fixed" them was a no-op
+
+The web client rewrites inline images to absolute
+`https://us4-zmud.zoho.com/zm/ImageDisplay?...` URLs, whereas the content API
+returns them **relative** (`/mail/ImageDisplay?na=...&mode=inline`). That looked
+like a bug to compensate for, so `forward_draft` briefly absolutized them.
+
+Three measurements, in the order that matters:
+
+1. Post a body with absolute `mail.zoho.com/mail/ImageDisplay` srcs, read the
+   draft back — Zoho has **re-relativized all three**. It normalizes its own
+   host on store, so the rewrite never reached the wire.
+2. Send that draft for real and read the received message's RFC 822 source —
+   it is `multipart/related` with three base64 parts (`image/png`,
+   `image/jpeg` ×2) carrying the **original message's** Content-IDs
+   (`<23abc@pc27>` and friends). Zoho resolves the references into real image
+   parts at send time.
+3. So inline images survive a forward end-to-end, and the absolutizing was
+   work the vendor undid. It's gone; the original's markup now passes through
+   completely untouched.
+
+The general lesson, which cost a function and its tests: **a vendor value that
+looks wrong may be the form that vendor resolves correctly later.** Before
+writing code to correct one, check whether anything downstream already handles
+it — here, "relative src" was never broken, it was just not yet resolved.
+
+### Attachments forward by round-tripping the bytes
+
+`POST /accounts/{id}/messages/attachments?uploadType=multipart&fileName=<name>`
+with the file as multipart form data returns exactly the descriptor the compose
+body wants:
+
+```json
+{"storeName": "709548548", "attachmentName": "Invoice.pdf",
+ "attachmentPath": "/Mail/3a087e776579a06da9f7e-Invoice.pdf"}
+```
+
+Pass those objects as compose's `attachments` array and they arrive at their
+original byte sizes. So forwarding with attachments is just: list them, download
+each, upload each, attach the descriptors.
+
+`uploadType=multipart` is **required, and its absence doesn't look like a
+missing parameter**. Omit it and Zoho answers `400` with "The file was not
+attached as the file size was detected as 0 bytes" — an error about your file,
+for a request whose file was fine. `uploadType=raw` is rejected by the pattern
+check, so multipart is the only form.
+
+The first version of `forward_draft` shipped documentation saying attachments
+"are not carried", on the strength of the web client using an internal
+`attach.do` for its uploads. That was the wrong inference: the *web client's*
+endpoint being unreachable said nothing about whether a public one existed, and
+one existed. **Do not promote "I didn't find it" to "it isn't there"** — this
+codebase's own rule about looking for a different endpoint applies just as much
+after you think you've finished.
+
+### What forwarding actually costs, as shipped
+
+Verified live 2026-07-27, end to end including one real send: markup, tables,
+links, the quote block, the `Fwd:` subject, file attachments at their original
+byte sizes, and inline images as proper MIME parts all survive. Nothing about a
+forward is known to be lossy.
+
 ### `fromAddress` comes from `primaryEmailAddress`
 
 Required on every send/draft. It's read live from the accounts endpoint rather

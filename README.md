@@ -86,7 +86,7 @@ That produces a `zoho-mcp.mcpb` you can install from Claude Desktop's Extensions
 
 You still register an application in the Zoho API Console (step 1) and paste its client id and secret into the extension's settings, where the secret is stored in your OS credential store. Then call the **`authenticate`** tool once: it opens Zoho's own consent page in your browser, and the resulting token goes to the credential store too. Nothing is typed into the conversation.
 
-Two lifecycle quirks of the host, both worth knowing before you install:
+Several lifecycle quirks of the host, all worth knowing before you install:
 
 **You have to enable it manually.** Because the extension has required configuration, Claude Desktop installs it *disabled* and logs `has missing required configuration, not enabling automatically`. Filling the fields in afterwards does not flip the toggle — you have to switch it on yourself. Until you do, the server never launches, none of its tools appear, and requests about your mail silently go to whatever other mail connector you have enabled.
 
@@ -95,6 +95,19 @@ Two lifecycle quirks of the host, both worth knowing before you install:
 The server itself exits promptly when the host closes its stdin, which is the only shutdown signal MCP defines — measured at 0.08 s for the whole process tree, with no orphans — so there's nothing to wait for on this side.
 
 **Uninstalling clears your settings.** The client id, secret, port and toggle live in the host's per-extension settings file, which is deleted with the extension; reinstalling means re-entering them. The refresh token is separate — it's in your OS credential store — so it survives an uninstall and you won't need to run `authenticate` again.
+
+**Installing a bundle whose version matches the installed one uninstalls it.** Opening a `zoho-mcp-0.1.0.mcpb` while `0.1.0` is already installed does not replace it in place: the host removes the extension directory *and* its settings file, then waits for you to confirm a fresh install. Combined with the quirk above, that means re-entering the client id and secret. Bump the version before rebuilding if you want to test an upgrade rather than perform an uninstall — observed on macOS with Claude Desktop 1.24012.9.
+
+**Changing a setting doesn't restart the server, and neither does reinstalling.** The host substitutes `user_config` values into the environment when it *spawns* the server process, and `_build_zoho_clients_from_env` reads them once at startup. A running server therefore keeps the environment it was launched with: tick the send checkbox and the live process still has the old value — or, after a reinstall, no value at all for a variable the new manifest introduced. Quit and reopen Claude Desktop to pick up a settings change. Nothing surfaces as an error, so the symptom is a setting that appears on and behaves off.
+
+**How the host renders each `user_config` type into the environment** — read out of a live server's own process environment rather than inferred from the spec, since the substitution happens in the host and nothing documents it:
+
+| Declared type | Stored in settings as | Arrives in the environment as |
+| --- | --- | --- |
+| `boolean` | JSON `true` / `false` | `true` / `false`, lowercase |
+| `number` | JSON `8765` | `8765` — no decimal point |
+
+Both parsers here are written for that and fail closed on anything else, so a host that ever changed this would leave a toggle inert rather than silently on.
 
 Sending email is one of those settings — a checkbox, off when you install it. It used to be withheld from the settings form on the theory that hand-editing `.env` was useful friction, but for a bundle install the file would have to live inside the installed extension directory, which every update replaces. That isn't friction, it's a feature you can't reach. What keeps mail in your account is that the box starts unticked and nothing but you can tick it — no tool changes server settings.
 

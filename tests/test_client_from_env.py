@@ -141,6 +141,12 @@ async def test_blank_ids_are_treated_as_unconfigured(env, blank):
 # plausible. Getting this wrong means listening on the default port while the
 # registered redirect points elsewhere, which fails as a timeout with nothing
 # pointing back here.
+#
+# Read out of a live server's process environment on 2026-07-27 (Claude
+# Desktop 1.24012.9, macOS): a `number` arrives as "8765" and a `boolean` as
+# lowercase "true". Both cases stay covered anyway -- one host's behavior
+# today isn't the spec, and the cost of the extra parametrize entries is
+# nothing next to a silent port mismatch.
 @pytest.mark.parametrize(
     ("value", "expected"),
     [

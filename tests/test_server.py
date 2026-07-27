@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 import httpx
 
 from zoho_mcp.server import create_server
@@ -276,6 +279,36 @@ async def test_write_tools_are_not_annotated_read_only():
 
     assert len(write_tools) == len(_WRITE_TOOL_NAMES)
     assert all(tool.annotations.readOnlyHint is False for tool in write_tools)
+
+
+async def test_no_tool_can_turn_sending_on():
+    """The gate is settable by the operator, never by the model.
+
+    Exposing `ZOHO_ALLOW_AUTO_SEND` as a bundle checkbox made it reachable
+    from a settings pane, which is fine -- a human is there. It must not
+    also become reachable from inside a conversation, where the thing
+    asking could be an injected instruction in an email. Two paths would
+    do it: a tool that rebinds the flag, or one that edits the process
+    environment `_build_zoho_clients_from_env` reads.
+    """
+    src = Path(__file__).resolve().parent.parent / "src"
+    sources = {path: path.read_text(encoding="utf-8") for path in src.rglob("*.py")}
+
+    rebinds = [
+        (path.name, line.strip())
+        for path, text in sources.items()
+        for line in text.splitlines()
+        if re.search(r"_allow_auto_send\s*=(?!=)", line)
+    ]
+    # Only the constructor, which runs once at startup from the environment.
+    assert [name for name, _ in rebinds] == ["client.py"], rebinds
+
+    # Reading os.environ is fine; assigning into it is the regression.
+    for path, text in sources.items():
+        assert not re.search(r"os\.environ\[[^\]]*\]\s*=(?!=)", text), path.name
+        assert not re.search(r"environ\.(setdefault|update|pop)|putenv", text), (
+            path.name
+        )
 
 
 async def test_send_email_is_annotated_as_irreversible_and_outward_facing():

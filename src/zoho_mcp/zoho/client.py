@@ -1852,30 +1852,53 @@ class ZohoClient:
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
     ) -> dict:
-        """Send an email immediately. Disabled unless explicitly configured.
+        """Send an email, or save it as a draft when sending is disabled.
 
         Sending is irreversible and outward-facing, so it's off by
         default: the client must be constructed with
         ``allow_auto_send=True`` (driven by ``ZOHO_ALLOW_AUTO_SEND`` in
-        the environment). When disabled this raises *before* issuing any
-        request, so nothing can leave the account.
+        the environment). Disabled, this falls back to a draft rather
+        than erroring -- the message survives for a human to review in
+        Zoho Mail, where they see the real rendered thing with its
+        actual recipients, instead of the work being lost to a failed
+        call.
 
-        Args/Returns: same as ``create_draft``.
+        The safety property is therefore no longer "issues no request".
+        It is that ``as_draft=True`` is passed on every gated call, so
+        the one field that decides send-vs-draft (see ``_compose``)
+        cannot say "send".
+
+        Args: same as ``create_draft``.
+
+        Returns:
+            ``{"id": ..., "sent": bool}`` -- and ``"detail"`` explaining
+            where the message went when ``sent`` is False. The flag is
+            always present: a bare id is indistinguishable from a real
+            send, and a caller that can't tell will claim it sent.
 
         Raises:
-            ZohoAPIError: if auto-send isn't enabled, no recipient is
-                given, or the Zoho Mail API rejects or fails the request.
+            ZohoAPIError: if no recipient is given, or the Zoho Mail API
+                rejects or fails the request.
         """
         if not self._allow_auto_send:
-            raise ZohoAPIError(
-                "Sending email is disabled. This server only saves drafts "
-                "unless auto-send is explicitly turned on by setting "
-                "ZOHO_ALLOW_AUTO_SEND=true in the server's environment. "
-                "Use create_draft instead, and send from Zoho Mail."
+            drafted = await self._compose(
+                to=to, subject=subject, content=content, cc=cc, bcc=bcc, as_draft=True
             )
-        return await self._compose(
+            return {
+                **drafted,
+                "sent": False,
+                "detail": (
+                    "Not sent -- saved to Drafts, because this server has "
+                    "sending turned off. Open the Drafts folder in Zoho Mail "
+                    "to review it and send it from there. Turning it on is "
+                    "the operator's decision, made in the extension's "
+                    "settings or via ZOHO_ALLOW_AUTO_SEND."
+                ),
+            }
+        sent = await self._compose(
             to=to, subject=subject, content=content, cc=cc, bcc=bcc, as_draft=False
         )
+        return {**sent, "sent": True}
 
     async def reply_draft(
         self, message_id: str, content: str, reply_all: bool = False

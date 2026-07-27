@@ -353,3 +353,15 @@ async def test_send_email_delegates_to_client():
     await send_email(client, to=["a@x.com"], subject="S", content="B")
 
     assert client.send_email_calls[0]["to"] == ["a@x.com"]
+
+
+async def test_send_email_passes_the_sent_flag_through_untouched():
+    # The wrapper is what the LLM actually sees. Reshaping the result down to
+    # an id here -- the shape every other compose tool returns -- would leave
+    # a drafted message indistinguishable from a delivered one.
+    client = FakeZohoClient()
+    client.compose_result = {"id": "m-1", "sent": False, "detail": "saved to Drafts"}
+
+    result = await send_email(client, to=["a@x.com"], subject="S", content="B")
+
+    assert result == {"id": "m-1", "sent": False, "detail": "saved to Drafts"}

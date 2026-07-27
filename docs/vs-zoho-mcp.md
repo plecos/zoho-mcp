@@ -454,8 +454,10 @@ the tools, not the token.
 
 **This project gates at request time, and omits replies entirely.**
 
-- `send_email` refuses unless the operator sets `ZOHO_ALLOW_AUTO_SEND=true`, and
-  fails **before making any network call**.
+- `send_email` delivers only if the operator turned sending on — a checkbox in
+  the bundle's settings, `ZOHO_ALLOW_AUTO_SEND=true` otherwise. Left off, it
+  saves the message to Drafts and says so, so **nothing reaches a recipient**
+  without a deliberate act by the person who installed the server.
 - The check lives in `ZohoClient` — the layer that issues the request — not in a
   tool wrapper that another code path could sidestep.
 - **There is no send-a-reply tool in any configuration.** Replies quote incoming

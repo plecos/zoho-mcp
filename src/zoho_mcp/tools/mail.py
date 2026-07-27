@@ -290,14 +290,18 @@ async def send_email(
     cc: list[str] | None = None,
     bcc: list[str] | None = None,
 ) -> dict:
-    """Send an email immediately. Disabled unless the server is configured
-    to allow it (``ZOHO_ALLOW_AUTO_SEND=true``).
+    """Send an email, unless the server has sending disabled -- in which
+    case the message is saved to Drafts instead (``ZOHO_ALLOW_AUTO_SEND``).
 
-    Args/Returns: same as ``create_draft``.
+    Args: same as ``create_draft``.
+
+    Returns:
+        ``{"id": ..., "sent": bool}``, plus ``"detail"`` when it was
+        drafted rather than sent.
 
     Raises:
-        ZohoAPIError: if auto-send isn't enabled, no recipient is given,
-            or the Zoho Mail API rejects or fails the request.
+        ZohoAPIError: if no recipient is given, or the Zoho Mail API
+            rejects or fails the request.
     """
     return await client.send_email(
         to=to, subject=subject, content=content, cc=cc, bcc=bcc

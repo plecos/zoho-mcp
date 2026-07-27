@@ -13,6 +13,7 @@ server/venv/
 # Not needed at runtime.
 tests/
 docs/
+scripts/
 .github/
 .git/
 .gitignore

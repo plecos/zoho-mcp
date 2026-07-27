@@ -20,8 +20,8 @@ This one is narrow on purpose: local stdio with no third-party relay, draft-firs
 
 ## Requirements
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
+- [uv](https://docs.astral.sh/uv/) — required for both install methods, including the packaged extension
+- Python 3.12+ — only if you run from a checkout; uv provides its own interpreter for the extension
 - A Zoho account, plus a registered application in the [Zoho API Console](https://accounts.zoho.com/developerconsole)
 
 ## Setup
@@ -75,7 +75,13 @@ The repo also packages as an [MCP Bundle](https://github.com/anthropics/mcpb), w
 npx @anthropic-ai/mcpb pack
 ```
 
-That produces a `zoho-mcp.mcpb` you can install from Claude Desktop's Extensions pane. It declares `server.type: "uv"`, so the host supplies the Python runtime and resolves dependencies from `pyproject.toml` — nothing is vendored into the bundle and the user needs no Python install of their own.
+Or download a prebuilt one from [Releases](https://github.com/plecos/zoho-mcp/releases).
+
+That produces a `zoho-mcp.mcpb` you can install from Claude Desktop's Extensions pane. It declares `server.type: "uv"`, so dependencies are resolved from `pyproject.toml` at install time rather than vendored into the archive.
+
+**You need [uv](https://docs.astral.sh/uv/) on your PATH; you do not need Python.** Claude Desktop does not ship a uv of its own — verified on a real install, where the extension's generated `pyvenv.cfg` recorded the same uv version as the one in the user's own `~/.local/bin`. uv then downloads and manages its own CPython, so no system Python is involved. The MCPB documentation's "no user Python installation required" is accurate about Python and silent about uv.
+
+**One bundle covers Windows, macOS and Linux.** The archive holds only Python source, a manifest and a universal `uv.lock`; there is nothing compiled in it, and the host resolves dependencies for its own platform at install time. Per-platform downloads would be identical files under names implying otherwise. The release workflow proves this rather than asserting it — the same artifact is unpacked and launched on Windows, Apple Silicon macOS and Linux, and the release only publishes if all three complete an MCP handshake.
 
 You still register an application in the Zoho API Console (step 1) and paste its client id and secret into the extension's settings, where the secret is stored in your OS credential store. Then call the **`authenticate`** tool once: it opens Zoho's own consent page in your browser, and the resulting token goes to the credential store too. Nothing is typed into the conversation.
 
@@ -228,6 +234,24 @@ uv run mypy src
 ```
 
 CI runs all of the above on every push and PR. A separate `build-validation.yml` workflow runs on `main` and tags to confirm the package builds and its entry points import cleanly — a release-readiness gate, not a deployment; there's no hosting target.
+
+### Cutting a release
+
+Bump `version` in both `pyproject.toml` and `manifest.json` (a test enforces that they match), then push a tag:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`release.yml` validates the manifest, checks the version against the tag, packs the bundle, refuses to publish one containing a `.env` or a virtualenv, smoke-tests it on all three platforms, and only then creates the GitHub release with the `.mcpb` attached. `workflow_dispatch` runs everything except the publish, so the pipeline can be exercised without minting a release.
+
+To smoke-test a bundle yourself:
+
+```bash
+uv run python scripts/smoke_bundle.py dist/zoho-mcp-0.1.0.mcpb
+```
+
+It launches the bundle using the command its own `manifest.json` declares, so a broken `mcp_config` fails there rather than after someone installs it.
 
 Conventions, architecture, and the reasoning behind the design are in [CLAUDE.md](CLAUDE.md). Zoho's API quirks — the ones that make otherwise-odd-looking code necessary — are in [docs/zoho-api-notes.md](docs/zoho-api-notes.md). Read the latter before touching anything that talks to Zoho.
 

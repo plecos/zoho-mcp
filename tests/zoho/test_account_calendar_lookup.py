@@ -61,7 +61,7 @@ async def test_get_default_calendar_uid_returns_the_default_calendar(
 
     calendar_uid = await get_default_calendar_uid(FakeTokenManager(), http_client)
 
-    assert calendar_uid == "a809d42a99e34f258c5d5ebd043e5e23"
+    assert calendar_uid == "cal555000111222333444555666777888"
 
 
 async def test_get_primary_account_id_raises_clearly_when_no_default_flagged(

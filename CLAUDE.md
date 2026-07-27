@@ -141,11 +141,17 @@ collide in both files over a line that carries no functional meaning, and until
 the batch is done you don't know whether it's a minor or a patch. Pre-1.0, a new
 tool is additive: minor slot.
 
-`0.1.0` lives in three places, and only two of them can fail loudly:
+`0.2.0` lives in four places, and only two of them can fail loudly:
 
 - [ ] `pyproject.toml` — pinned to the manifest by
-      `test_the_manifest_version_matches_the_package_version`
+      `test_the_manifest_version_matches_the_package_version`. This is also
+      the one `importlib.metadata` reads, so it's what `check_for_updates`
+      reports and what `serverInfo.version` carries.
 - [ ] `manifest.json` — same test, **plus** release.yml's tag check
+- [ ] `uv.lock` — records the project's own version, and `uv sync` rewrites it
+      as soon as `pyproject.toml` changes. Nothing asks you to do it, so run
+      `uv sync` after the bump rather than discovering the lockfile
+      disagreeing with the package it locks.
 - [ ] `README.md` — the `dist/zoho-mcp-<version>.mcpb` smoke-test example.
       **Nothing verifies this one**; it's a filename in prose, so it goes stale
       silently. It's the one to check by hand.

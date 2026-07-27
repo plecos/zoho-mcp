@@ -207,7 +207,11 @@ When that's unset, `send_email` fails before making any network call, so nothing
 
 There is intentionally **no send-a-reply or send-a-forward tool at all**, in any configuration. Both carry an incoming email, and email bodies are untrusted input — a message in your mailbox can contain text trying to talk an assistant into sending something on your behalf. Replies and forwards always stop at Drafts for a human to read.
 
-Use `forward_draft` to forward mail rather than reading a message and recomposing it with `create_draft`. Zoho quotes the original itself, so the forward keeps its HTML formatting, inline images and attachments; `get_email` returns plain text, so anything rebuilt from it arrives stripped.
+Use `forward_draft` to forward mail rather than reading a message and recomposing it with `create_draft`. It copies the original's real HTML into the draft, so formatting survives; `get_email` returns plain text, so anything rebuilt from it arrives stripped — which is exactly the bug this tool exists to fix.
+
+There's more machinery behind that than the name suggests. Zoho's own `action=forward` API returns a content-free 500 on every valid request, and Zoho's web client doesn't use it either — it assembles the forwarded body in the browser and posts the result. `forward_draft` does the same thing server-side, and copies the original's attachments across by downloading and re-uploading each one. Attachments too large to relay are refused with a clear error rather than quietly dropped, so a draft that comes back is a complete forward.
+
+Inline images survive too: Zoho turns the original's image references into real MIME parts when the message is finally sent. That was confirmed by sending one and reading the delivered source, not assumed.
 
 Leave `ZOHO_ALLOW_AUTO_SEND` off unless you specifically want an assistant able to email people without review.
 

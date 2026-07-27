@@ -96,10 +96,13 @@ class FakeZohoClient:
         )
         return self.compose_result
 
-    async def forward_draft(self, message_id, to, content="", cc=None, bcc=None):
+    async def forward_draft(
+        self, message_id, folder_id, to, content="", cc=None, bcc=None
+    ):
         self.forward_draft_calls.append(
             {
                 "message_id": message_id,
+                "folder_id": folder_id,
                 "to": to,
                 "content": content,
                 "cc": cc,
@@ -315,12 +318,18 @@ async def test_forward_draft_delegates_to_client():
     client = FakeZohoClient()
 
     result = await forward_draft(
-        client, message_id="m-1", to=["fwd@x.com"], content="FYI", cc=["c@x.com"]
+        client,
+        message_id="m-1",
+        folder_id="f-1",
+        to=["fwd@x.com"],
+        content="FYI",
+        cc=["c@x.com"],
     )
 
     assert client.forward_draft_calls == [
         {
             "message_id": "m-1",
+            "folder_id": "f-1",
             "to": ["fwd@x.com"],
             "content": "FYI",
             "cc": ["c@x.com"],
@@ -333,7 +342,7 @@ async def test_forward_draft_delegates_to_client():
 async def test_forward_draft_defaults_to_an_empty_added_note():
     client = FakeZohoClient()
 
-    await forward_draft(client, message_id="m-1", to=["fwd@x.com"])
+    await forward_draft(client, message_id="m-1", folder_id="f-1", to=["fwd@x.com"])
 
     assert client.forward_draft_calls[0]["content"] == ""
 

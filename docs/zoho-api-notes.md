@@ -317,14 +317,67 @@ The lesson for our own design: **assembling the forward body ourselves is not a
 workaround, it is what the vendor's own client does.** The server-side path
 exists in the API but is broken.
 
-One detail only the traffic reveals: the web client rewrites inline images to
-absolute `https://us4-zmud.zoho.com/zm/ImageDisplay?...` URLs, whereas the
-content API returns them **relative** (`/mail/ImageDisplay?na=...&mode=inline`).
-Copying that HTML verbatim into a new draft therefore leaves image `src`s that
-resolve nowhere. Zoho appears to resolve them at send time from `mymId` +
-`fwdInlineMode`, neither of which the public API accepts — so a self-assembled
-forward should expect inline images not to survive for the recipient, and real
-attachments not to carry at all.
+### Inline images survive, and the rewrite that "fixed" them was a no-op
+
+The web client rewrites inline images to absolute
+`https://us4-zmud.zoho.com/zm/ImageDisplay?...` URLs, whereas the content API
+returns them **relative** (`/mail/ImageDisplay?na=...&mode=inline`). That looked
+like a bug to compensate for, so `forward_draft` briefly absolutized them.
+
+Three measurements, in the order that matters:
+
+1. Post a body with absolute `mail.zoho.com/mail/ImageDisplay` srcs, read the
+   draft back — Zoho has **re-relativized all three**. It normalizes its own
+   host on store, so the rewrite never reached the wire.
+2. Send that draft for real and read the received message's RFC 822 source —
+   it is `multipart/related` with three base64 parts (`image/png`,
+   `image/jpeg` ×2) carrying the **original message's** Content-IDs
+   (`<23abc@pc27>` and friends). Zoho resolves the references into real image
+   parts at send time.
+3. So inline images survive a forward end-to-end, and the absolutizing was
+   work the vendor undid. It's gone; the original's markup now passes through
+   completely untouched.
+
+The general lesson, which cost a function and its tests: **a vendor value that
+looks wrong may be the form that vendor resolves correctly later.** Before
+writing code to correct one, check whether anything downstream already handles
+it — here, "relative src" was never broken, it was just not yet resolved.
+
+### Attachments forward by round-tripping the bytes
+
+`POST /accounts/{id}/messages/attachments?uploadType=multipart&fileName=<name>`
+with the file as multipart form data returns exactly the descriptor the compose
+body wants:
+
+```json
+{"storeName": "709548548", "attachmentName": "Invoice.pdf",
+ "attachmentPath": "/Mail/3a087e776579a06da9f7e-Invoice.pdf"}
+```
+
+Pass those objects as compose's `attachments` array and they arrive at their
+original byte sizes. So forwarding with attachments is just: list them, download
+each, upload each, attach the descriptors.
+
+`uploadType=multipart` is **required, and its absence doesn't look like a
+missing parameter**. Omit it and Zoho answers `400` with "The file was not
+attached as the file size was detected as 0 bytes" — an error about your file,
+for a request whose file was fine. `uploadType=raw` is rejected by the pattern
+check, so multipart is the only form.
+
+The first version of `forward_draft` shipped documentation saying attachments
+"are not carried", on the strength of the web client using an internal
+`attach.do` for its uploads. That was the wrong inference: the *web client's*
+endpoint being unreachable said nothing about whether a public one existed, and
+one existed. **Do not promote "I didn't find it" to "it isn't there"** — this
+codebase's own rule about looking for a different endpoint applies just as much
+after you think you've finished.
+
+### What forwarding actually costs, as shipped
+
+Verified live 2026-07-27, end to end including one real send: markup, tables,
+links, the quote block, the `Fwd:` subject, file attachments at their original
+byte sizes, and inline images as proper MIME parts all survive. Nothing about a
+forward is known to be lossy.
 
 ### `fromAddress` comes from `primaryEmailAddress`
 

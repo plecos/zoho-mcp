@@ -96,6 +96,11 @@ MAX_BOOKMARKS_LIMIT = 399
 MAX_ATTACHMENT_FETCH_BYTES = 5_000_000
 MAX_ATTACHMENT_TEXT_CHARS = 100_000
 
+# Forwarding relays attachment bytes back to Zoho without their content ever
+# entering a context window, so the reason for the 5 MB read cap doesn't apply
+# and the limit that matters is what Zoho will accept on a message.
+MAX_FORWARD_ATTACHMENT_BYTES = 20_000_000
+
 # An ordinary message's RFC 822 source ran 28,469 characters on a real
 # account, so `raw` is both opt-in and capped.
 MAX_RAW_MESSAGE_CHARS = 100_000
@@ -304,6 +309,78 @@ def _collapse_whitespace(text: str) -> str:
     list to keep up to date.
     """
     return " ".join(text.split())
+
+
+def forward_subject(subject: object) -> str:
+    """Prefix a subject with ``Fwd:``, without stacking a second one."""
+    text = str(subject).strip() if isinstance(subject, str) else ""
+    if not text:
+        return "Fwd:"
+    if text.lower().startswith("fwd:"):
+        return text
+    return f"Fwd: {text}"
+
+
+def build_forward_body(*, note: str, headers: object, original_html: object) -> str:
+    """Assemble a forward's HTML body the way Zoho's web client does.
+
+    Zoho's ``action=forward`` is accepted vocabulary that returns a
+    content-free 500 on every documented-valid request, and Zoho's own web
+    client doesn't use it either -- it builds the forwarded body in the browser
+    and posts the result. This is that assembly step. See
+    docs/zoho-api-notes.md.
+
+    The original's markup is passed through completely untouched, which is
+    the whole point: reading it through ``normalize_email_content`` would
+    flatten it to plain text. That includes its relative
+    ``/mail/ImageDisplay`` image references -- left exactly as Zoho stores
+    them, because Zoho resolves them into real MIME image parts when the
+    draft is eventually sent (verified end-to-end; see the notes).
+
+    Args:
+        note: the forwarder's own message, placed above the quoted original.
+            Passed through as-is, like ``create_draft``'s ``content``.
+        headers: the original's parsed headers, from ``get_email_source``.
+        original_html: the original's body, from the content endpoint.
+
+    Raises:
+        ZohoAPIError: if ``original_html`` isn't a string or ``headers`` isn't
+            a mapping.
+    """
+    if not isinstance(headers, dict):
+        raise ZohoAPIError(
+            f"Malformed email headers from Zoho: expected an object, "
+            f"got {type(headers).__name__}"
+        )
+    if not isinstance(original_html, str):
+        raise ZohoAPIError(
+            f"Malformed email content: expected HTML text, "
+            f"got {type(original_html).__name__}"
+        )
+
+    lines = []
+    for label, key in (
+        ("From", "from"),
+        ("To", "to"),
+        ("Cc", "cc"),
+        ("Date", "date"),
+        ("Subject", "subject"),
+    ):
+        value = headers.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        lines.append(f"{label}: {html.escape(str(value))}<br>")
+
+    separator = "============ Forwarded message ============"
+    return (
+        f"<div>{note}</div>"
+        f'<div class="zmail_extra">'
+        f"<div><br></div>"
+        f"<div>{separator}<br>{''.join(lines)}{separator}<br></div>"
+        f"<div><br></div>"
+        f'<blockquote id="blockquote_zmail" style="margin: 0px;">{original_html}</blockquote>'
+        f"</div>"
+    )
 
 
 def _join_addresses(addresses: list[str] | None, *, required: bool = False) -> str:
@@ -1699,6 +1776,8 @@ class ZohoClient:
         cc: list[str] | None,
         bcc: list[str] | None,
         as_draft: bool,
+        mail_format: str | None = None,
+        attachments: list[dict] | None = None,
     ) -> dict:
         """Shared body-builder for ``create_draft`` and ``send_email``.
 
@@ -1723,6 +1802,12 @@ class ZohoClient:
         }
         if as_draft:
             body["mode"] = "draft"
+        # Zoho documents html as the default, but a forward's body is
+        # assembled markup -- too important to leave to a documented default.
+        if mail_format is not None:
+            body["mailFormat"] = mail_format
+        if attachments:
+            body["attachments"] = attachments
         _add_optional_recipients(body, cc=cc, bcc=bcc)
 
         account_id = await self._get_account_id()
@@ -1833,6 +1918,7 @@ class ZohoClient:
     async def forward_draft(
         self,
         message_id: str,
+        folder_id: str,
         to: list[str],
         content: str = "",
         cc: list[str] | None = None,
@@ -1840,13 +1926,28 @@ class ZohoClient:
     ) -> dict:
         """Save a forward of an existing email as a draft. Never sends.
 
-        Zoho assembles the quoted original itself from the stored message,
-        so the body we send carries only the forwarder's added note. That
-        is the entire reason this exists as its own action rather than a
-        ``create_draft`` call: reading a message through ``get_email``
-        flattens its HTML to plain text, so anything recomposed from that
-        text arrives stripped of formatting, inline images and attachments.
-        Never round-trip a body through us to forward it.
+        The forwarded body is assembled here and posted as an ordinary
+        draft. That is not a workaround for a missing feature -- Zoho's
+        own web client does exactly this, and the API's documented
+        ``action=forward`` returns a content-free 500 on every valid
+        request. See docs/zoho-api-notes.md.
+
+        The original's HTML is read from the content endpoint and passed
+        through untouched, so formatting survives. It never goes through
+        ``normalize_email_content``, which is what flattens a body to
+        plain text -- the exact failure this exists to prevent. It also
+        never passes through the caller: an LLM asked to forward a
+        message cannot reproduce its markup, so it doesn't get the
+        chance to try.
+
+        Attachments are carried by ``_copy_attachments``, which relays each
+        one back through Zoho's upload endpoint -- there is no server-side
+        forward-with-attachments to ask for.
+
+        Verified live 2026-07-27, including one real send: markup, quote
+        block and subject prefix kept, both PDFs delivered at their
+        original byte sizes, and the original's inline images arriving as
+        proper `multipart/related` parts under their own Content-IDs.
 
         Like ``reply_draft``, there is no send-a-forward counterpart --
         forwarded mail is incoming content, so it stops in Drafts for a
@@ -1855,35 +1956,171 @@ class ZohoClient:
         Args:
             message_id: the email being forwarded, from ``search_emails``
                 or ``list_emails``.
-            content: an optional note to add above the quoted original.
+            folder_id: that email's folder, from the same result.
             to: recipient addresses (at least one required).
+            content: an optional note, placed above the quoted original.
             cc/bcc: optional additional recipients.
 
         Returns:
             ``{"id": ...}`` -- the new draft's message id.
 
         Raises:
-            ZohoAPIError: if ``message_id`` is blank, no recipient is
-                given, or the Zoho Mail API rejects or fails the request.
+            ZohoAPIError: if ``message_id`` or ``folder_id`` is blank, no
+                recipient is given, or the Zoho Mail API rejects or fails
+                either read or the compose.
         """
         if not message_id.strip():
             raise ZohoAPIError("message_id must not be blank")
-        to_address = _join_addresses(to, required=True)
-        body = {
-            "fromAddress": await self._get_from_address(),
-            "toAddress": to_address,
-            "content": content,
-            "action": "forward",
-            "mode": "draft",  # never remove: without it Zoho sends the forward
-        }
-        _add_optional_recipients(body, cc=cc, bcc=bcc)
+        if not folder_id.strip():
+            raise ZohoAPIError("folder_id must not be blank")
+        # Validated before either read: a bad recipient list otherwise costs
+        # two round trips before failing on the third.
+        _join_addresses(to, required=True)
+
+        source = await self.get_email_source(message_id)
+        original_html = await self._get_raw_email_html(message_id, folder_id)
+        # Before composing, so a failure here can't leave a draft that looks
+        # like a complete forward but silently lost its attachments.
+        attachments = await self._copy_attachments(message_id, folder_id)
+
+        return await self._compose(
+            to=to,
+            subject=forward_subject(source["headers"].get("subject")),
+            content=build_forward_body(
+                note=content,
+                headers=source["headers"],
+                original_html=original_html,
+            ),
+            cc=cc,
+            bcc=bcc,
+            as_draft=True,
+            mail_format="html",
+            attachments=attachments,
+        )
+
+    async def _copy_attachments(self, message_id: str, folder_id: str) -> list[dict]:
+        """Re-upload one message's attachments so a new message can carry them.
+
+        Zoho has no server-side "forward with attachments" reachable from the
+        API, so each attachment round-trips: down from the original, back up
+        through the upload endpoint, which mints the descriptor the compose
+        body wants. The bytes never enter a tool result.
+
+        Inline images aren't included -- ``attachmentinfo`` doesn't list them
+        (verified live), so this can't accidentally convert an inline image
+        into a file attachment.
+
+        Returns:
+            One ``{"storeName", "attachmentName", "attachmentPath"}`` per
+            attachment, in the original's order. Empty when there are none.
+
+        Raises:
+            ZohoAPIError: if an attachment is larger than
+                ``MAX_FORWARD_ATTACHMENT_BYTES``, or Zoho rejects a download
+                or an upload. Never silently drops one: a forward missing the
+                attachment it was sent for is a wrong answer, not a partial
+                success.
+        """
+        attachments = await self.list_attachments(
+            message_id=message_id, folder_id=folder_id
+        )
+        if not attachments:
+            return []
 
         account_id = await self._get_account_id()
-        payload = await self._post(
-            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages/{message_id.strip()}",
-            json_body=body,
+        token = await self._token_manager.get_access_token()
+        descriptors = []
+        for attachment in attachments:
+            name = attachment["name"]
+            data, size_bytes, _ = await zoho_authenticated_get_bytes(
+                self._http_client,
+                f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}"
+                f"/folders/{folder_id}/messages/{message_id}"
+                f"/attachments/{attachment['id']}",
+                token,
+                MAX_FORWARD_ATTACHMENT_BYTES,
+            )
+            if data is None:
+                raise ZohoAPIError(
+                    f"Cannot forward: attachment {name!r} is {size_bytes} bytes, "
+                    f"over this server's {MAX_FORWARD_ATTACHMENT_BYTES}-byte "
+                    f"forwarding limit. Forward it from Zoho Mail instead."
+                )
+            descriptors.append(await self._upload_attachment(name, data))
+        return descriptors
+
+    async def _upload_attachment(self, name: str, data: bytes) -> dict:
+        """Upload bytes as a draft attachment and return Zoho's descriptor.
+
+        ``uploadType=multipart`` is required, not optional: without it Zoho
+        answers 200-shaped failure text reporting the file as 0 bytes.
+
+        Raises:
+            ZohoAPIError: if Zoho rejects the upload or answers without a
+                descriptor.
+        """
+        account_id = await self._get_account_id()
+        token = await self._token_manager.get_access_token()
+        url = f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages/attachments"
+        try:
+            response = await self._http_client.post(
+                url,
+                params={"uploadType": "multipart", "fileName": name},
+                headers={"Authorization": f"Zoho-oauthtoken {token}"},
+                files={"attach": (name, data, "application/octet-stream")},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPStatusError as e:
+            raise ZohoAPIError(
+                f"Uploading attachment {name!r} failed with "
+                f"{e.response.status_code}: {e.response.text}"
+            ) from e
+        except httpx.HTTPError as e:
+            raise ZohoAPIError(f"Uploading attachment {name!r} failed: {e}") from e
+        except MALFORMED_DATA_ERRORS as e:
+            raise ZohoAPIError(
+                f"Malformed upload response from Zoho for {name!r}: {e}"
+            ) from e
+
+        uploaded = payload.get("data") or []
+        if not isinstance(uploaded, list) or not uploaded:
+            raise ZohoAPIError(
+                f"Zoho accepted the upload of {name!r} but returned no "
+                f"attachment descriptor, so it cannot be attached."
+            )
+        descriptor = uploaded[0]
+        missing = [
+            key
+            for key in ("storeName", "attachmentName", "attachmentPath")
+            if key not in descriptor
+        ]
+        if missing:
+            raise ZohoAPIError(
+                f"Zoho's upload response for {name!r} is missing "
+                f"{', '.join(missing)}, so it cannot be attached."
+            )
+        return {
+            "storeName": descriptor["storeName"],
+            "attachmentName": descriptor["attachmentName"],
+            "attachmentPath": descriptor["attachmentPath"],
+        }
+
+    async def _get_raw_email_html(self, message_id: str, folder_id: str) -> str:
+        """One email's body as Zoho stores it, before any flattening.
+
+        ``get_email`` normalizes the same response to plain text for
+        reading; forwarding needs the markup intact.
+
+        Raises:
+            ZohoAPIError: if the Zoho Mail API rejects or fails the request.
+        """
+        account_id = await self._get_account_id()
+        payload = await self._get(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}"
+            f"/folders/{folder_id}/messages/{message_id}/content"
         )
-        return {"id": (payload.get("data") or {}).get("messageId", "")}
+        return str((payload.get("data") or {}).get("content") or "")
 
     async def get_email(self, message_id: str, folder_id: str) -> dict:
         """Fetch the full plain-text content of one email.

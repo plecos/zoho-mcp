@@ -249,6 +249,7 @@ async def reply_draft(
 async def forward_draft(
     client: ZohoClient,
     message_id: str,
+    folder_id: str,
     to: list[str],
     content: str = "",
     cc: list[str] | None = None,
@@ -259,19 +260,25 @@ async def forward_draft(
     Args:
         client: injected Zoho client.
         message_id: the email being forwarded.
+        folder_id: that email's folder.
         to: recipient addresses (at least one required).
-        content: an optional note to add above the quoted original.
+        content: an optional note, placed above the quoted original.
         cc/bcc: optional additional recipients.
 
     Returns:
         ``{"id": ...}`` -- the new draft's message id.
 
     Raises:
-        ZohoAPIError: if message_id is blank, no recipient is given, or
-            the Zoho Mail API rejects or fails the request.
+        ZohoAPIError: if message_id or folder_id is blank, no recipient
+            is given, or the Zoho Mail API rejects or fails the request.
     """
     return await client.forward_draft(
-        message_id=message_id, to=to, content=content, cc=cc, bcc=bcc
+        message_id=message_id,
+        folder_id=folder_id,
+        to=to,
+        content=content,
+        cc=cc,
+        bcc=bcc,
     )
 
 

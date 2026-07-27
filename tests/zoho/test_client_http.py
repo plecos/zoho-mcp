@@ -5,7 +5,11 @@ import httpx
 import pytest
 import time_machine
 
-from zoho_mcp.zoho.client import ZohoAPIError, ZohoClient
+from zoho_mcp.zoho.client import (
+    MAX_FORWARD_ATTACHMENT_BYTES,
+    ZohoAPIError,
+    ZohoClient,
+)
 
 ACCOUNT_ID = "acct-123"
 CALENDAR_UID = "cal-556677"
@@ -3068,10 +3072,27 @@ async def test_reply_draft_rejects_blank_content_without_a_request(
     assert not route.called
 
 
-def mock_message_action_endpoint(respx_mock, message_id="m-1", message_id_out="f-1"):
-    """Accounts lookup (for the mandatory fromAddress) plus the per-message POST.
+ORIGINAL_SOURCE = (
+    "From: Jamie Rivera <jamie@example.com>\r\n"
+    "To: <ken@example.com>\r\n"
+    "Date: Mon, 27 Jul 2026 08:24:04 -0700\r\n"
+    "Subject: Quarterly numbers\r\n"
+    "\r\n"
+    "body ignored -- the HTML comes from the content endpoint\r\n"
+)
+ORIGINAL_HTML = (
+    "<div><b>Quarterly numbers</b></div>"
+    '<img src="/mail/ImageDisplay?na=123&amp;f=1.png&amp;mode=inline">'
+)
 
-    Same endpoint reply and forward both act on, distinguished by ``action``.
+
+def mock_forward_endpoints(respx_mock, *, original_html=ORIGINAL_HTML):
+    """Accounts lookup, the original's source and HTML, plus the compose POST.
+
+    Forwarding reads the original through two endpoints -- headers from
+    `originalmessage` (account-scoped) and the body from the folder-scoped
+    content endpoint -- then posts an ordinary draft, because Zoho's
+    action=forward is broken. See docs/zoho-api-notes.md.
     """
     respx_mock.get("https://mail.zoho.com/api/accounts").mock(
         return_value=httpx.Response(
@@ -3088,114 +3109,341 @@ def mock_message_action_endpoint(respx_mock, message_id="m-1", message_id_out="f
             },
         )
     )
-    return respx_mock.post(
-        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/{message_id}"
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1/originalmessage"
     ).mock(
-        return_value=httpx.Response(200, json={"data": {"messageId": message_id_out}})
+        return_value=httpx.Response(200, json={"data": {"content": ORIGINAL_SOURCE}})
+    )
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}"
+        f"/folders/f-1/messages/m-1/content"
+    ).mock(
+        return_value=httpx.Response(
+            200, json={"data": {"messageId": "m-1", "content": original_html}}
+        )
+    )
+    # Named so mock_attachment_copy can replace it: respx matches routes in
+    # insertion order, so a second registration of the same URL never wins.
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}"
+        f"/folders/f-1/messages/m-1/attachmentinfo",
+        name="attachmentinfo",
+    ).mock(return_value=httpx.Response(200, json={"data": {"attachments": []}}))
+    return respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages"
+    ).mock(return_value=httpx.Response(200, json={"data": {"messageId": "msg-fwd-1"}}))
+
+
+def mock_attachment_copy(respx_mock, attachments=(("a-1", "invoice.pdf", 11),)):
+    """The three calls that carry one original's attachments to a new draft.
+
+    Zoho has no server-side "forward with attachments": the bytes come down
+    from the original and go back up through the upload endpoint, which mints
+    the storeName/attachmentPath descriptors the compose body wants.
+    """
+    respx_mock["attachmentinfo"].mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "attachments": [
+                        {
+                            "attachmentId": att_id,
+                            "attachmentName": name,
+                            "attachmentSize": size,
+                        }
+                        for att_id, name, size in attachments
+                    ]
+                }
+            },
+        )
+    )
+    for att_id, name, size in attachments:
+        respx_mock.get(
+            f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}"
+            f"/folders/f-1/messages/m-1/attachments/{att_id}"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                content=b"x" * size,
+                headers={"content-disposition": f"attachment; filename = {name}"},
+            )
+        )
+    return respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/attachments"
+    ).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "storeName": "709548548",
+                            "attachmentName": name,
+                            "attachmentPath": f"/Mail/abc-{name}",
+                        }
+                    ]
+                },
+            )
+            for _, name, _ in attachments
+        ]
     )
 
 
-# The whole point of forwarding through Zoho's own action rather than
-# recomposing the body: the original's HTML never passes through us, so it
-# can't be flattened. `content` carries only the forwarder's added note.
-async def test_forward_draft_sets_both_action_forward_and_mode_draft(
+async def test_forward_draft_carries_the_originals_attachments(respx_mock, zoho_client):
+    # The reason this exists at all: a forward that silently drops the PDF
+    # everyone cares about is worse than an error.
+    route = mock_forward_endpoints(respx_mock)
+    upload = mock_attachment_copy(
+        respx_mock,
+        attachments=(("a-1", "invoice.pdf", 11), ("a-2", "receipt.pdf", 22)),
+    )
+
+    await zoho_client.forward_draft(
+        message_id="m-1", folder_id="f-1", to=["fwd@example.com"]
+    )
+
+    assert upload.call_count == 2
+    sent = json.loads(route.calls.last.request.content)
+    assert [a["attachmentName"] for a in sent["attachments"]] == [
+        "invoice.pdf",
+        "receipt.pdf",
+    ]
+    assert sent["attachments"][0]["storeName"] == "709548548"
+    assert sent["attachments"][0]["attachmentPath"] == "/Mail/abc-invoice.pdf"
+
+
+async def test_forward_draft_uploads_the_bytes_it_downloaded(respx_mock, zoho_client):
+    mock_forward_endpoints(respx_mock)
+    upload = mock_attachment_copy(respx_mock)
+
+    await zoho_client.forward_draft(
+        message_id="m-1", folder_id="f-1", to=["fwd@example.com"]
+    )
+
+    request = upload.calls.last.request
+    assert request.url.params["uploadType"] == "multipart"  # 0 bytes without it
+    assert request.url.params["fileName"] == "invoice.pdf"
+    assert b"x" * 11 in request.content
+
+
+async def test_forward_draft_omits_attachments_when_the_original_has_none(
     respx_mock, zoho_client
 ):
-    route = mock_message_action_endpoint(respx_mock)
+    route = mock_forward_endpoints(respx_mock)
+    upload = mock_attachment_copy(respx_mock, attachments=())
+
+    await zoho_client.forward_draft(
+        message_id="m-1", folder_id="f-1", to=["fwd@example.com"]
+    )
+
+    assert not upload.called
+    assert "attachments" not in json.loads(route.calls.last.request.content)
+
+
+async def test_forward_draft_fails_loudly_when_an_attachment_is_too_large(
+    respx_mock, zoho_client
+):
+    # Dropping it and composing anyway would produce a draft that looks
+    # complete and isn't -- the failure mode this tool was built to end.
+    mock_forward_endpoints(respx_mock)
+    respx_mock["attachmentinfo"].mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "attachments": [
+                        {
+                            "attachmentId": "a-1",
+                            "attachmentName": "huge.zip",
+                            "attachmentSize": 99,
+                        }
+                    ]
+                }
+            },
+        )
+    )
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}"
+        f"/folders/f-1/messages/m-1/attachments/a-1"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            content=b"",
+            headers={
+                "content-length": str(MAX_FORWARD_ATTACHMENT_BYTES + 1),
+                "content-disposition": "attachment; filename = huge.zip",
+            },
+        )
+    )
+    post = respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages")
+
+    with pytest.raises(ZohoAPIError, match="huge.zip"):
+        await zoho_client.forward_draft(
+            message_id="m-1", folder_id="f-1", to=["fwd@example.com"]
+        )
+
+    assert not post.called
+
+
+async def test_forward_draft_reports_an_upload_failure_without_composing(
+    respx_mock, zoho_client
+):
+    mock_forward_endpoints(respx_mock)
+    mock_attachment_copy(respx_mock)
+    respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/attachments"
+    ).mock(return_value=httpx.Response(413, json={"data": {"errorCode": "TOO_BIG"}}))
+    post = respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages")
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.forward_draft(
+            message_id="m-1", folder_id="f-1", to=["fwd@example.com"]
+        )
+
+    assert not post.called
+
+
+async def test_forward_draft_rejects_an_upload_response_missing_its_descriptor(
+    respx_mock, zoho_client
+):
+    # Zoho is a third party; a 200 whose shape we didn't expect must not
+    # become a draft with a malformed attachments array.
+    mock_forward_endpoints(respx_mock)
+    mock_attachment_copy(respx_mock)
+    respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/attachments"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    with pytest.raises(ZohoAPIError, match="invoice.pdf"):
+        await zoho_client.forward_draft(
+            message_id="m-1", folder_id="f-1", to=["fwd@example.com"]
+        )
+
+
+async def test_forward_draft_posts_a_draft_carrying_the_originals_html(
+    respx_mock, zoho_client
+):
+    route = mock_forward_endpoints(respx_mock)
 
     result = await zoho_client.forward_draft(
-        message_id="m-1", to=["fwd@example.com"], content="FYI"
+        message_id="m-1", folder_id="f-1", to=["fwd@example.com"], content="FYI"
     )
 
     sent = json.loads(route.calls.last.request.content)
-    assert sent["action"] == "forward"
     assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS
-    assert sent["content"] == "FYI"
     assert sent["toAddress"] == "fwd@example.com"
-    assert sent["fromAddress"] == "me@example.com"
-    assert result == {"id": "f-1"}
+    assert sent["subject"] == "Fwd: Quarterly numbers"
+    assert sent["mailFormat"] == "html"
+    assert "FYI" in sent["content"]
+    assert "<b>Quarterly numbers</b>" in sent["content"]
+    assert "Forwarded message" in sent["content"]
+    assert "From: Jamie Rivera &lt;jamie@example.com&gt;" in sent["content"]
+    assert result == {"id": "msg-fwd-1"}
 
 
-async def test_forward_draft_joins_and_strips_recipients(respx_mock, zoho_client):
-    route = mock_message_action_endpoint(respx_mock)
+# The regression this whole feature exists for: reading a message through
+# get_email flattens its HTML, so a forward rebuilt from that text arrives as
+# plain prose. The body must come from the raw content endpoint instead.
+async def test_forward_draft_does_not_flatten_the_original_to_plain_text(
+    respx_mock, zoho_client
+):
+    route = mock_forward_endpoints(
+        respx_mock,
+        original_html="<table><tr><td><b>Q1</b></td></tr></table>",
+    )
+
+    await zoho_client.forward_draft(
+        message_id="m-1", folder_id="f-1", to=["fwd@example.com"]
+    )
+
+    content = json.loads(route.calls.last.request.content)["content"]
+    assert "<table>" in content
+    assert "<b>Q1</b>" in content
+
+
+async def test_forward_draft_passes_inline_image_references_through_untouched(
+    respx_mock, zoho_client
+):
+    # Verified end-to-end on a real send: Zoho turns these relative references
+    # into real base64 MIME image parts, carrying the original's Content-IDs.
+    # Rewriting them is work Zoho undoes on store, so we leave them alone.
+    route = mock_forward_endpoints(respx_mock)
+
+    await zoho_client.forward_draft(
+        message_id="m-1", folder_id="f-1", to=["fwd@example.com"]
+    )
+
+    content = json.loads(route.calls.last.request.content)["content"]
+    assert 'src="/mail/ImageDisplay?na=123&amp;f=1.png&amp;mode=inline"' in content
+
+
+async def test_forward_draft_allows_an_empty_added_note(respx_mock, zoho_client):
+    route = mock_forward_endpoints(respx_mock)
+
+    await zoho_client.forward_draft(
+        message_id="m-1", folder_id="f-1", to=["fwd@example.com"]
+    )
+
+    content = json.loads(route.calls.last.request.content)["content"]
+    assert "Forwarded message" in content
+
+
+async def test_forward_draft_carries_cc_and_bcc(respx_mock, zoho_client):
+    route = mock_forward_endpoints(respx_mock)
 
     await zoho_client.forward_draft(
         message_id="m-1",
-        to=["  a@example.com ", "", "b@example.com"],
-        content="FYI",
-        cc=[" c@example.com"],
+        folder_id="f-1",
+        to=["fwd@example.com"],
+        cc=[" c@example.com "],
         bcc=["  "],
     )
 
     sent = json.loads(route.calls.last.request.content)
-    assert sent["toAddress"] == "a@example.com,b@example.com"
     assert sent["ccAddress"] == "c@example.com"
     assert "bccAddress" not in sent
 
 
-@pytest.mark.parametrize("bad_to", [[], [""], ["   "], ["", "\t"]])
-async def test_forward_draft_rejects_blank_recipients_without_a_request(
+@pytest.mark.parametrize("bad_to", [[], [""], ["   "]])
+async def test_forward_draft_rejects_blank_recipients_without_any_request(
     respx_mock, zoho_client, bad_to
 ):
-    route = respx_mock.post(
-        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
-    )
-
+    # Validated before the two reads, not just before the post -- otherwise a
+    # bad recipient list costs two round trips before failing.
     with pytest.raises(ZohoAPIError, match="recipient"):
-        await zoho_client.forward_draft(message_id="m-1", to=bad_to, content="FYI")
-
-    assert not route.called
-
-
-# Unlike a reply, a bare forward with no added note is an ordinary thing to
-# want -- the quoted original is the payload.
-async def test_forward_draft_allows_empty_added_note(respx_mock, zoho_client):
-    route = mock_message_action_endpoint(respx_mock)
-
-    await zoho_client.forward_draft(message_id="m-1", to=["fwd@example.com"])
-
-    assert json.loads(route.calls.last.request.content)["content"] == ""
-
-
-@pytest.mark.parametrize("bad_id", ["", "   "])
-async def test_forward_draft_rejects_blank_message_id_without_a_request(
-    respx_mock, zoho_client, bad_id
-):
-    with pytest.raises(ZohoAPIError, match="message_id"):
         await zoho_client.forward_draft(
-            message_id=bad_id, to=["fwd@example.com"], content="FYI"
+            message_id="m-1", folder_id="f-1", to=bad_to, content="FYI"
         )
 
     assert not respx_mock.calls
 
 
-async def test_forward_draft_wraps_http_failure(respx_mock, zoho_client):
-    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": [
-                    {
-                        "accountId": ACCOUNT_ID,
-                        "isDefaultAccount": True,
-                        "timeZone": "America/Los_Angeles",
-                        "primaryEmailAddress": "me@example.com",
-                    }
-                ]
-            },
-        )
-    )
-    respx_mock.post(
-        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
-    ).mock(return_value=httpx.Response(404, json={"data": {"errorCode": "INVALID_ID"}}))
-
-    with pytest.raises(ZohoAPIError):
+@pytest.mark.parametrize("bad_id", ["", "   "])
+async def test_forward_draft_rejects_a_blank_message_id_without_any_request(
+    respx_mock, zoho_client, bad_id
+):
+    with pytest.raises(ZohoAPIError, match="message_id"):
         await zoho_client.forward_draft(
-            message_id="m-1", to=["fwd@example.com"], content="FYI"
+            message_id=bad_id, folder_id="f-1", to=["fwd@example.com"]
         )
 
+    assert not respx_mock.calls
 
-async def test_forward_draft_returns_empty_id_when_zoho_omits_data(
+
+@pytest.mark.parametrize("bad_id", ["", "   "])
+async def test_forward_draft_rejects_a_blank_folder_id_without_any_request(
+    respx_mock, zoho_client, bad_id
+):
+    with pytest.raises(ZohoAPIError, match="folder_id"):
+        await zoho_client.forward_draft(
+            message_id="m-1", folder_id=bad_id, to=["fwd@example.com"]
+        )
+
+    assert not respx_mock.calls
+
+
+async def test_forward_draft_wraps_a_failure_reading_the_original(
     respx_mock, zoho_client
 ):
     respx_mock.get("https://mail.zoho.com/api/accounts").mock(
@@ -3213,15 +3461,32 @@ async def test_forward_draft_returns_empty_id_when_zoho_omits_data(
             },
         )
     )
-    respx_mock.post(
-        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
-    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1/originalmessage"
+    ).mock(return_value=httpx.Response(404, json={"data": {"errorCode": "INVALID_ID"}}))
+    post = respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages")
 
-    result = await zoho_client.forward_draft(
-        message_id="m-1", to=["fwd@example.com"], content="FYI"
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.forward_draft(
+            message_id="m-1", folder_id="f-1", to=["fwd@example.com"]
+        )
+
+    # Nothing half-composed: a failed read must not produce a draft.
+    assert not post.called
+
+
+async def test_forward_draft_handles_an_original_with_no_html_body(
+    respx_mock, zoho_client
+):
+    route = mock_forward_endpoints(respx_mock, original_html="")
+
+    await zoho_client.forward_draft(
+        message_id="m-1", folder_id="f-1", to=["fwd@example.com"], content="FYI"
     )
 
-    assert result == {"id": ""}
+    content = json.loads(route.calls.last.request.content)["content"]
+    assert "FYI" in content
+    assert "Forwarded message" in content
 
 
 async def test_get_email_raises_clear_error_when_data_key_absent(
@@ -3328,10 +3593,10 @@ async def test_reply_draft_still_sets_mode_draft_when_auto_send_enabled(
 async def test_forward_draft_still_sets_mode_draft_when_auto_send_enabled(
     respx_mock, sending_client
 ):
-    route = mock_message_action_endpoint(respx_mock)
+    route = mock_forward_endpoints(respx_mock)
 
     await sending_client.forward_draft(
-        message_id="m-1", to=["fwd@example.com"], content="FYI"
+        message_id="m-1", folder_id="f-1", to=["fwd@example.com"], content="FYI"
     )
 
     sent = json.loads(route.calls.last.request.content)

@@ -112,6 +112,7 @@ MAIL_CASES = [
         "forward_draft",
         {
             "message_id": "m-1",
+            "folder_id": "f-1",
             "to": ["a@example.com"],
             "content": "FYI",
             "cc": ["c@example.com"],
@@ -120,6 +121,7 @@ MAIL_CASES = [
         "forward_draft",
         {
             "message_id": "m-1",
+            "folder_id": "f-1",
             "to": ["a@example.com"],
             "content": "FYI",
             "cc": ["c@example.com"],
@@ -432,7 +434,8 @@ async def test_drafting_tools_never_reach_send_email(server, clients):
     )
     await server.call_tool("reply_draft", {"message_id": "m-1", "content": "B"})
     await server.call_tool(
-        "forward_draft", {"message_id": "m-1", "to": ["a@example.com"]}
+        "forward_draft",
+        {"message_id": "m-1", "folder_id": "f-1", "to": ["a@example.com"]},
     )
 
     assert zoho.send_email.await_count == 0

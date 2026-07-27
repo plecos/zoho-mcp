@@ -3068,6 +3068,162 @@ async def test_reply_draft_rejects_blank_content_without_a_request(
     assert not route.called
 
 
+def mock_message_action_endpoint(respx_mock, message_id="m-1", message_id_out="f-1"):
+    """Accounts lookup (for the mandatory fromAddress) plus the per-message POST.
+
+    Same endpoint reply and forward both act on, distinguished by ``action``.
+    """
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    return respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/{message_id}"
+    ).mock(
+        return_value=httpx.Response(200, json={"data": {"messageId": message_id_out}})
+    )
+
+
+# The whole point of forwarding through Zoho's own action rather than
+# recomposing the body: the original's HTML never passes through us, so it
+# can't be flattened. `content` carries only the forwarder's added note.
+async def test_forward_draft_sets_both_action_forward_and_mode_draft(
+    respx_mock, zoho_client
+):
+    route = mock_message_action_endpoint(respx_mock)
+
+    result = await zoho_client.forward_draft(
+        message_id="m-1", to=["fwd@example.com"], content="FYI"
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["action"] == "forward"
+    assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS
+    assert sent["content"] == "FYI"
+    assert sent["toAddress"] == "fwd@example.com"
+    assert sent["fromAddress"] == "me@example.com"
+    assert result == {"id": "f-1"}
+
+
+async def test_forward_draft_joins_and_strips_recipients(respx_mock, zoho_client):
+    route = mock_message_action_endpoint(respx_mock)
+
+    await zoho_client.forward_draft(
+        message_id="m-1",
+        to=["  a@example.com ", "", "b@example.com"],
+        content="FYI",
+        cc=[" c@example.com"],
+        bcc=["  "],
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["toAddress"] == "a@example.com,b@example.com"
+    assert sent["ccAddress"] == "c@example.com"
+    assert "bccAddress" not in sent
+
+
+@pytest.mark.parametrize("bad_to", [[], [""], ["   "], ["", "\t"]])
+async def test_forward_draft_rejects_blank_recipients_without_a_request(
+    respx_mock, zoho_client, bad_to
+):
+    route = respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
+    )
+
+    with pytest.raises(ZohoAPIError, match="recipient"):
+        await zoho_client.forward_draft(message_id="m-1", to=bad_to, content="FYI")
+
+    assert not route.called
+
+
+# Unlike a reply, a bare forward with no added note is an ordinary thing to
+# want -- the quoted original is the payload.
+async def test_forward_draft_allows_empty_added_note(respx_mock, zoho_client):
+    route = mock_message_action_endpoint(respx_mock)
+
+    await zoho_client.forward_draft(message_id="m-1", to=["fwd@example.com"])
+
+    assert json.loads(route.calls.last.request.content)["content"] == ""
+
+
+@pytest.mark.parametrize("bad_id", ["", "   "])
+async def test_forward_draft_rejects_blank_message_id_without_a_request(
+    respx_mock, zoho_client, bad_id
+):
+    with pytest.raises(ZohoAPIError, match="message_id"):
+        await zoho_client.forward_draft(
+            message_id=bad_id, to=["fwd@example.com"], content="FYI"
+        )
+
+    assert not respx_mock.calls
+
+
+async def test_forward_draft_wraps_http_failure(respx_mock, zoho_client):
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
+    ).mock(return_value=httpx.Response(404, json={"data": {"errorCode": "INVALID_ID"}}))
+
+    with pytest.raises(ZohoAPIError):
+        await zoho_client.forward_draft(
+            message_id="m-1", to=["fwd@example.com"], content="FYI"
+        )
+
+
+async def test_forward_draft_returns_empty_id_when_zoho_omits_data(
+    respx_mock, zoho_client
+):
+    respx_mock.get("https://mail.zoho.com/api/accounts").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "accountId": ACCOUNT_ID,
+                        "isDefaultAccount": True,
+                        "timeZone": "America/Los_Angeles",
+                        "primaryEmailAddress": "me@example.com",
+                    }
+                ]
+            },
+        )
+    )
+    respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/m-1"
+    ).mock(return_value=httpx.Response(200, json={"status": {"code": 200}}))
+
+    result = await zoho_client.forward_draft(
+        message_id="m-1", to=["fwd@example.com"], content="FYI"
+    )
+
+    assert result == {"id": ""}
+
+
 async def test_get_email_raises_clear_error_when_data_key_absent(
     respx_mock, zoho_client
 ):
@@ -3164,6 +3320,19 @@ async def test_reply_draft_still_sets_mode_draft_when_auto_send_enabled(
     ).mock(return_value=httpx.Response(200, json={"data": {"messageId": "r-1"}}))
 
     await sending_client.reply_draft(message_id="m-1", content="Sure")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS
+
+
+async def test_forward_draft_still_sets_mode_draft_when_auto_send_enabled(
+    respx_mock, sending_client
+):
+    route = mock_message_action_endpoint(respx_mock)
+
+    await sending_client.forward_draft(
+        message_id="m-1", to=["fwd@example.com"], content="FYI"
+    )
 
     sent = json.loads(route.calls.last.request.content)
     assert sent["mode"] == "draft"  # never remove: without it Zoho SENDS

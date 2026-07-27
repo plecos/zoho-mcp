@@ -306,6 +306,37 @@ def _collapse_whitespace(text: str) -> str:
     return " ".join(text.split())
 
 
+def _join_addresses(addresses: list[str] | None, *, required: bool = False) -> str:
+    """Strip blanks from an outgoing address list and comma-join it Zoho-style.
+
+    Args:
+        addresses: caller-supplied addresses, possibly containing blanks.
+        required: raise rather than return ``""`` when nothing survives.
+
+    Raises:
+        ZohoAPIError: if ``required`` and no usable address remains.
+    """
+    usable = [address.strip() for address in (addresses or []) if address.strip()]
+    if required and not usable:
+        raise ZohoAPIError("at least one recipient address is required")
+    return ",".join(usable)
+
+
+def _add_optional_recipients(
+    body: dict, *, cc: list[str] | None, bcc: list[str] | None
+) -> None:
+    """Add ``ccAddress``/``bccAddress`` to an outgoing body, omitting empties.
+
+    The filtering happens before the truthiness check on purpose: ``cc=[""]``
+    is truthy, so testing the raw list used to produce an empty ``ccAddress``
+    header instead of leaving the key out.
+    """
+    for key, addresses in (("ccAddress", cc), ("bccAddress", bcc)):
+        joined = _join_addresses(addresses)
+        if joined:
+            body[key] = joined
+
+
 def _split_address_field(value: object) -> list[str]:
     """Turn one of Zoho's address strings into a list of addresses.
 
@@ -1681,26 +1712,18 @@ class ZohoClient:
             ZohoAPIError: if ``to`` has no usable address, or the Zoho
                 Mail API rejects or fails the request.
         """
-        recipients = [address.strip() for address in to if address.strip()]
-        if not recipients:
-            raise ZohoAPIError("at least one recipient address is required")
-
+        # Resolved before the fromAddress lookup so a bad recipient list fails
+        # without issuing any request.
+        to_address = _join_addresses(to, required=True)
         body: dict = {
             "fromAddress": await self._get_from_address(),
-            "toAddress": ",".join(recipients),
+            "toAddress": to_address,
             "subject": subject,
             "content": content,
         }
         if as_draft:
             body["mode"] = "draft"
-        # Filtered before the truthiness check: cc=[""] is truthy, so it used
-        # to produce an empty ccAddress header instead of being omitted.
-        cc_addresses = [a.strip() for a in (cc or []) if a.strip()]
-        bcc_addresses = [a.strip() for a in (bcc or []) if a.strip()]
-        if cc_addresses:
-            body["ccAddress"] = ",".join(cc_addresses)
-        if bcc_addresses:
-            body["bccAddress"] = ",".join(bcc_addresses)
+        _add_optional_recipients(body, cc=cc, bcc=bcc)
 
         account_id = await self._get_account_id()
         payload = await self._post(
@@ -1803,6 +1826,61 @@ class ZohoClient:
         account_id = await self._get_account_id()
         payload = await self._post(
             f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages/{message_id}",
+            json_body=body,
+        )
+        return {"id": (payload.get("data") or {}).get("messageId", "")}
+
+    async def forward_draft(
+        self,
+        message_id: str,
+        to: list[str],
+        content: str = "",
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+    ) -> dict:
+        """Save a forward of an existing email as a draft. Never sends.
+
+        Zoho assembles the quoted original itself from the stored message,
+        so the body we send carries only the forwarder's added note. That
+        is the entire reason this exists as its own action rather than a
+        ``create_draft`` call: reading a message through ``get_email``
+        flattens its HTML to plain text, so anything recomposed from that
+        text arrives stripped of formatting, inline images and attachments.
+        Never round-trip a body through us to forward it.
+
+        Like ``reply_draft``, there is no send-a-forward counterpart --
+        forwarded mail is incoming content, so it stops in Drafts for a
+        human to review.
+
+        Args:
+            message_id: the email being forwarded, from ``search_emails``
+                or ``list_emails``.
+            content: an optional note to add above the quoted original.
+            to: recipient addresses (at least one required).
+            cc/bcc: optional additional recipients.
+
+        Returns:
+            ``{"id": ...}`` -- the new draft's message id.
+
+        Raises:
+            ZohoAPIError: if ``message_id`` is blank, no recipient is
+                given, or the Zoho Mail API rejects or fails the request.
+        """
+        if not message_id.strip():
+            raise ZohoAPIError("message_id must not be blank")
+        to_address = _join_addresses(to, required=True)
+        body = {
+            "fromAddress": await self._get_from_address(),
+            "toAddress": to_address,
+            "content": content,
+            "action": "forward",
+            "mode": "draft",  # never remove: without it Zoho sends the forward
+        }
+        _add_optional_recipients(body, cc=cc, bcc=bcc)
+
+        account_id = await self._get_account_id()
+        payload = await self._post(
+            f"{ZOHO_MAIL_BASE_URL}/accounts/{account_id}/messages/{message_id.strip()}",
             json_body=body,
         )
         return {"id": (payload.get("data") or {}).get("messageId", "")}

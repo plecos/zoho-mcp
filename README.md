@@ -2,7 +2,7 @@
 
 An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contacts, Tasks, Notes, Bookmarks, Groups, and Resource Booking as tools to any MCP-compatible LLM client — Claude, ChatGPT, Gemini, or anything else that speaks MCP.
 
-40 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
+41 tools covering both reading and writing. Every one has been verified against a live Zoho account rather than built from the documentation alone; where Zoho's API behaves differently than its docs claim, [docs/zoho-api-notes.md](docs/zoho-api-notes.md) records what it actually does.
 
 **Sending email is disabled by default.** The server saves drafts instead, and only sends if you explicitly opt in. See [Composing email](#composing-email).
 
@@ -123,6 +123,7 @@ Only needed if the server was started without a stored token — the case for a 
 | `list_signatures` | Configured signatures, as plain text |
 | `create_draft` | Save a new email as a draft *(write)* |
 | `reply_draft` | Save a reply to an existing email as a draft *(write)* |
+| `forward_draft` | Forward an email as a draft, keeping its formatting and attachments *(write)* |
 | `send_email` | Send immediately — **disabled unless opted in** *(write)* |
 | `mark_as_read` / `mark_as_unread` | Flip read status on one or many messages *(write)* |
 | `move_email` | Move one or many messages to a folder *(write)* |
@@ -196,7 +197,7 @@ Each resource has an email address; invite it via `create_event`'s `attendees` t
 
 Mail composition is draft-first by design, because sending is the one operation here that's irreversible and reaches another person.
 
-`create_draft` and `reply_draft` always work and always save to Drafts. `send_email` exists but refuses unless the operator sets:
+`create_draft`, `reply_draft` and `forward_draft` always work and always save to Drafts. `send_email` exists but refuses unless the operator sets:
 
 ```
 ZOHO_ALLOW_AUTO_SEND=true
@@ -204,7 +205,9 @@ ZOHO_ALLOW_AUTO_SEND=true
 
 When that's unset, `send_email` fails before making any network call, so nothing can leave the account.
 
-There is intentionally **no send-a-reply tool at all**, in any configuration. A reply quotes an incoming email, and email bodies are untrusted input — a message in your mailbox can contain text trying to talk an assistant into sending something on your behalf. Replies always stop at Drafts for a human to read.
+There is intentionally **no send-a-reply or send-a-forward tool at all**, in any configuration. Both carry an incoming email, and email bodies are untrusted input — a message in your mailbox can contain text trying to talk an assistant into sending something on your behalf. Replies and forwards always stop at Drafts for a human to read.
+
+Use `forward_draft` to forward mail rather than reading a message and recomposing it with `create_draft`. Zoho quotes the original itself, so the forward keeps its HTML formatting, inline images and attachments; `get_email` returns plain text, so anything rebuilt from it arrives stripped.
 
 Leave `ZOHO_ALLOW_AUTO_SEND` off unless you specifically want an assistant able to email people without review.
 

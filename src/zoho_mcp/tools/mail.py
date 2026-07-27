@@ -246,6 +246,35 @@ async def reply_draft(
     )
 
 
+async def forward_draft(
+    client: ZohoClient,
+    message_id: str,
+    to: list[str],
+    content: str = "",
+    cc: list[str] | None = None,
+    bcc: list[str] | None = None,
+) -> dict:
+    """Save a forward of an existing email as a draft. Never sends.
+
+    Args:
+        client: injected Zoho client.
+        message_id: the email being forwarded.
+        to: recipient addresses (at least one required).
+        content: an optional note to add above the quoted original.
+        cc/bcc: optional additional recipients.
+
+    Returns:
+        ``{"id": ...}`` -- the new draft's message id.
+
+    Raises:
+        ZohoAPIError: if message_id is blank, no recipient is given, or
+            the Zoho Mail API rejects or fails the request.
+    """
+    return await client.forward_draft(
+        message_id=message_id, to=to, content=content, cc=cc, bcc=bcc
+    )
+
+
 async def send_email(
     client: ZohoClient,
     to: list[str],

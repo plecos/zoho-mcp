@@ -262,6 +262,30 @@ differing only by `mode` plus mode-specific extras (`destfolderId`,
 Zoho's docs are internally inconsistent on `labelId`'s shape — the apply sample
 shows an array, the remove sample a single value. An array works for both.
 
+### Forwarding must go through `action=forward`, not a recomposed body
+
+`POST .../messages/{id}` takes `action`: `reply`, `replyall`, `forward`. Zoho
+builds the quoted original server-side from the stored message, so the body we
+send carries only the forwarder's added note.
+
+The reason this matters more than it looks: the obvious-seeming alternative —
+`get_email` then `create_draft` — is silently lossy. `get_email` runs the body
+through `normalize_email_content`, which flattens HTML to plain text, so a
+forward rebuilt from it arrives stripped of formatting, inline images and
+attachments. That is a real reported bug, not a hypothetical: an assistant
+asked to forward a message did exactly this, because no forward tool existed.
+**Never round-trip a body through this server to forward it.**
+
+**Unverified, and the assumption the design rests on:** that `forward` takes
+`toAddress` in the body the way `create_draft` does. `reply`/`replyall` derive
+their recipients from the original and pass no address field at all, so there
+is no sibling here to copy — a forward has to name a recipient somehow, and
+`toAddress` is the guess. If it's wrong, the tell is `EXTRA_KEY_FOUND_IN_JSON`
+rather than a generic `Invalid Input`, which separates "wrong key name" from
+"right name, wrong value". Also unverified: whether attachments carry
+automatically or need an explicit id list. Both are settled by one live
+forward of a message with attachments — see the probe in the PR.
+
 ### `fromAddress` comes from `primaryEmailAddress`
 
 Required on every send/draft. It's read live from the accounts endpoint rather

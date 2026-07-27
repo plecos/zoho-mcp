@@ -339,6 +339,36 @@ def create_server(
             client, message_id=message_id, content=content, reply_all=reply_all
         )
 
+    @mcp.tool(title="Save a forward draft", annotations=_CREATE)
+    async def forward_draft(
+        message_id: str,
+        to: list[str],
+        content: str = "",
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+    ) -> dict:
+        """Forward an existing email as a draft. Does NOT send it.
+
+        message_id: the email being forwarded, from search_emails or
+        list_emails.
+        to: recipient addresses (at least one).
+        content (optional): a note to add above the forwarded message.
+        cc / bcc (optional): additional recipients.
+
+        Always use this to forward mail -- never read an email and
+        recompose it with create_draft. Zoho quotes the original itself,
+        so the forward keeps its formatting, inline images and
+        attachments; get_email returns plain text, so anything rebuilt
+        from it arrives stripped.
+
+        Returns {"id": ...}. There is no send-a-forward tool by design --
+        forwards carry incoming mail, so they land in Drafts for a human
+        to review before anything leaves the account.
+        """
+        return await mail_tools.forward_draft(
+            client, message_id=message_id, to=to, content=content, cc=cc, bcc=bcc
+        )
+
     @mcp.tool(title="Send an email", annotations=_SEND)
     async def send_email(
         to: list[str],

@@ -92,6 +92,8 @@ Several lifecycle quirks of the host, all worth knowing before you install:
 
 **To uninstall or replace it, disable it and restart first.** Uninstalling a running extension can fail — on Windows the live server holds files inside its own directory open (`.venv\Scripts\*.exe`, loaded extension modules), and the host does not appear to retry the delete. Disable the extension, restart Claude, then uninstall.
 
+**Disabling stops the tools, not the process.** The restart in that sequence is doing real work, not being cautious. Turning the toggle off withdraws the tools from conversations immediately — ask for one and the client reports it gone — but the server process it already spawned keeps running until Claude Desktop is quit; measured still alive five minutes after the toggle, and in another case until the app was closed. So a disabled extension is still holding its own directory open, which is precisely what makes the uninstall fail. The symptom is misleading in the safe direction (the tools really are unreachable), but "disabled" is not "stopped".
+
 The server itself exits promptly when the host closes its stdin, which is the only shutdown signal MCP defines — measured at 0.08 s for the whole process tree, with no orphans — so there's nothing to wait for on this side.
 
 **Uninstalling clears your settings.** The client id, secret, port and toggle live in the host's per-extension settings file, which is deleted with the extension; reinstalling means re-entering them. The refresh token is separate — it's in your OS credential store — so it survives an uninstall and you won't need to run `authenticate` again.

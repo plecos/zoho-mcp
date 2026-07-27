@@ -300,9 +300,11 @@ def create_server(
         """List all folders in the mailbox, including custom subfolders.
 
         Returns {"folders": [...], "count": N}. Each folder has id, name,
-        path (e.g. "/Inbox/Work" -- the hierarchy signal, not any id
-        field), and type. Pass a folder's name to search_emails' in:
-        qualifier to search it.
+        path (e.g. "/Inbox/Work"), type, and parent_id -- another
+        folder's id, or "" for a top-level folder. Use path to show a
+        folder to the user and parent_id to walk the tree by id; they
+        agree. Pass a folder's name to search_emails' in: qualifier to
+        search it.
         """
         return await mail_tools.list_folders(client)
 

@@ -434,7 +434,33 @@ def test_normalize_folder_maps_core_fields():
         "name": "Work",
         "path": "/Inbox/Work",
         "type": "Inbox",
+        "parent_id": "folder-1",
     }
+
+
+def test_normalize_folder_reports_an_empty_parent_for_a_top_level_folder():
+    raw = load_fixture("folders_response.json")["data"][0]
+
+    assert normalize_folder(raw)["parent_id"] == ""
+
+
+def test_normalize_folder_never_reads_a_parent_out_of_previous_folder_id():
+    """`previousFolderId` is a sibling pointer, and it is *not* a fallback.
+
+    Both fields are present on real subfolders and frequently hold the same
+    id, which is exactly what makes a fallback look harmless in testing and
+    produce a wrong tree on the first folder whose previous sibling isn't its
+    parent. Absent `parentFolderId` means "no parent", full stop.
+    """
+    raw = {
+        "folderId": "folder-9",
+        "folderName": "Archive",
+        "path": "/Archive",
+        "folderType": "Inbox",
+        "previousFolderId": "folder-1",
+    }
+
+    assert normalize_folder(raw)["parent_id"] == ""
 
 
 def test_normalize_folder_raises_clear_error_on_missing_field():

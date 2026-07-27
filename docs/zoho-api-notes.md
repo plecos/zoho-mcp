@@ -120,12 +120,31 @@ one.
 drafts, use `list_emails(folder_id=...)` with the Drafts folder id from
 `list_folders`.
 
-### `previousFolderId` is not a parent pointer
+### Two folder fields look like parents; only `parentFolderId` is one
 
-Despite the name, it's a display-order "previous sibling" pointer — folders form
-a linked list, not a tree, in that field. The real hierarchy signal is the
-folder's `path` (e.g. `/Inbox/Work`). `previousFolderId` is excluded from the
-normalized shape because it invites exactly the wrong inference.
+`previousFolderId` is not a parent pointer. Despite the name, it's a
+display-order "previous sibling" pointer — folders form a linked list, not a
+tree, in that field. It's excluded from the normalized shape because it invites
+exactly the wrong inference.
+
+`parentFolderId` **is** the parent, and is exposed as `parent_id`. Verified
+against a live 26-folder mailbox nesting three levels deep: it appeared on
+exactly the 16 non-top-level folders, was absent on all 10 top-level ones,
+agreed with `path` in all 26 cases, and never pointed at an id outside the
+response. Absent means "no parent" — there is no separate null or sentinel.
+
+The trap worth naming: on a subfolder both keys are usually present and
+**often hold the same id**, because a subfolder's previous sibling is
+frequently also its parent in Zoho's ordering. So reading `previousFolderId`
+as a parent — or falling back to it when `parentFolderId` is missing — looks
+correct on most rows and silently builds a wrong tree on the rest. The
+fallback is pinned shut by
+`test_normalize_folder_never_reads_a_parent_out_of_previous_folder_id`.
+
+`path` is still the signal to *display* (it needs no lookup); `parent_id` is
+for walking the tree by id. This one was missed originally because the earlier
+note only established what `previousFolderId` wasn't, and never asked whether
+some other key was the thing it had been mistaken for.
 
 ### Custom folders all report `folderType: "Inbox"`
 

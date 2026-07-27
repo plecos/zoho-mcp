@@ -37,7 +37,14 @@ dev = [
 ]
 
 [tool.uv]
-required-version = ">=0.11.29,<0.12.0"
+# Floor only, deliberately no upper bound. This file ships inside the .mcpb
+# bundle, and the uv that reads it is the *user's* -- Claude Desktop supplies
+# no uv of its own (confirmed: the extension's generated pyvenv.cfg recorded
+# the same uv version as the one on the installing user's PATH). An upper
+# bound is therefore a promise about software we don't control, and the day
+# uv releases a new major every install and every CI run breaks at once, with
+# an error about a constraint the user never wrote.
+required-version = ">=0.11.29"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -134,3 +134,21 @@ def test_the_license_matches_the_project(manifest):
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
     assert f'license = "{manifest["license"]}"' in pyproject
+
+
+def test_the_uv_requirement_has_no_upper_bound():
+    """pyproject.toml ships in the bundle, so its uv constraint binds users.
+
+    The uv that reads it belongs to whoever installs the extension -- Claude
+    Desktop supplies none -- so an upper bound would break every install and
+    every CI run on the day uv ships a new major, with an error about a
+    constraint the user never wrote. There was a `<0.12.0` here once.
+    """
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    constraint = next(
+        line.split("=", 1)[1].strip().strip('"')
+        for line in pyproject.splitlines()
+        if line.startswith("required-version")
+    )
+
+    assert "<" not in constraint, f"upper bound reintroduced: {constraint!r}"

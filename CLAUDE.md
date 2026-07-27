@@ -145,7 +145,7 @@ collide in both files over a line that carries no functional meaning, and until
 the batch is done you don't know whether it's a minor or a patch. Pre-1.0, a new
 tool is additive: minor slot.
 
-`0.2.0` lives in four places, and only two of them can fail loudly:
+`0.3.0` lives in four places, and only two of them can fail loudly:
 
 - [ ] `pyproject.toml` — pinned to the manifest by
       `test_the_manifest_version_matches_the_package_version`. This is also
@@ -171,7 +171,7 @@ release at something that isn't in `main`'s history.
 
 ```
 git checkout main && git pull --ff-only origin main
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 `workflow_dispatch` builds and verifies without publishing, so the pipeline can

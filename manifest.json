@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "zoho-mcp",
   "display_name": "Zoho Mail, Calendar & Contacts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Read and write Zoho Mail, Calendar, Contacts, Tasks, Notes, Bookmarks and Resource Booking. Sending email is off by default.",
   "long_description": "Exposes a Zoho account as 42 MCP tools, covering Mail, Calendar, Contacts, and Zoho Mail's Tasks, Notes, Bookmarks and Groups, plus Calendar's Resource Booking.\n\nRuns locally over stdio: no listening socket, no hosted endpoint, and no third-party relay. The only outbound calls are to Zoho's own REST APIs, with one exception you control: if you tick \"Check for new versions of this extension\", `check_for_updates` asks GitHub's public releases API which version is current. That setting is off when you install it, and nothing about your account is sent when it is on.\n\nMail composition is draft-first. `create_draft`, `reply_draft` and `forward_draft` always work and always save to Drafts; `send_email` saves to Drafts too, and only delivers if you tick \"Let the assistant send email without your review\" in this extension's settings. That setting is off when you install it. There is no send-a-reply or send-a-forward tool at any setting, because both carry incoming mail and incoming mail is untrusted input.\n\nEvery date and time is returned already converted to the mailbox's own local offset, fetched live rather than stored, so no caller has to get a timezone conversion right.\n\nAfter installing, run the `authenticate` tool once to authorize access. It opens Zoho's own consent page in your browser; the resulting token is stored in your OS credential store, never in this conversation or in a file.",
   "author": {

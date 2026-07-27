@@ -295,7 +295,7 @@ git tag v0.2.0 && git push origin v0.2.0
 To smoke-test a bundle yourself:
 
 ```bash
-uv run python scripts/smoke_bundle.py dist/zoho-mcp-0.1.0.mcpb
+uv run python scripts/smoke_bundle.py dist/zoho-mcp-0.2.0.mcpb
 ```
 
 It launches the bundle using the command its own `manifest.json` declares, so a broken `mcp_config` fails there rather than after someone installs it.

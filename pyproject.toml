@@ -1,6 +1,6 @@
 [project]
 name = "zoho-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "An MCP server exposing Zoho Mail, Calendar, Contacts, Tasks, Notes, and Bookmarks as LLM tools"
 readme = "README.md"
 authors = [

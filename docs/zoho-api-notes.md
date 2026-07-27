@@ -276,15 +276,55 @@ attachments. That is a real reported bug, not a hypothetical: an assistant
 asked to forward a message did exactly this, because no forward tool existed.
 **Never round-trip a body through this server to forward it.**
 
-**Unverified, and the assumption the design rests on:** that `forward` takes
-`toAddress` in the body the way `create_draft` does. `reply`/`replyall` derive
-their recipients from the original and pass no address field at all, so there
-is no sibling here to copy — a forward has to name a recipient somehow, and
-`toAddress` is the guess. If it's wrong, the tell is `EXTRA_KEY_FOUND_IN_JSON`
-rather than a generic `Invalid Input`, which separates "wrong key name" from
-"right name, wrong value". Also unverified: whether attachments carry
-automatically or need an explicit id list. Both are settled by one live
-forward of a message with attachments — see the probe in the PR.
+**`action=forward` is accepted vocabulary and fails anyway.** Verified live,
+2026-07-27: every `action=forward` request returns a content-free
+`500 Internal Error`, while `reply`/`replyall` succeed on the same message with
+the same body shape, every time. It is not a wrong-field problem:
+
+- `forward` passes the action pattern check that rejects `Forward`, `FORWARD`,
+  and `bogusvalue` with `400 PATTERN_NOT_MATCHED`, so the value is in Zoho's
+  enum.
+- `toAddress` is recognized (no `EXTRA_KEY_FOUND_IN_JSON`), and Zoho's Mail360
+  docs state it "becomes mandatory when the value of the action is set to
+  forward". Sending it changes nothing.
+- Still 500 with `attachments: []`, with real attachment descriptors, with
+  `subject`, `mailFormat`, `encoding`, `askReceipt`, `isSchedule`, on messages
+  with and without attachments.
+
+Key-probing technique worth reusing: this endpoint emits
+`EXTRA_KEY_FOUND_IN_JSON` for unrecognized keys, but the **action pattern check
+runs first**, so a bogus action masks it. `action=forward` is the ideal probe
+vehicle instead — it passes the pattern check, always fails internally, and so
+never creates a draft while still exercising key validation. That mapped the
+accepted vocabulary (`toAddress`, `ccAddress`, `bccAddress`, `subject`,
+`attachments`, `inReplyTo`, `refHeader`, `priority`, `mailFormat`, `encoding`,
+`askReceipt`) and the attachment object's inner keys (`storeName`,
+`attachmentName`, `attachmentPath` recognized; `attachmentId` not).
+
+### The web client doesn't use `action=forward` either
+
+Ground truth from Zoho Mail's own network traffic: forwarding posts
+form-urlencoded to the internal **`/zm/send.do`**, not the public REST API,
+carrying `accId`, `mymId` (the original message id), `fwdInlineMode=7`,
+`originalMode=draft`, `from`/`to`/`cc`/`bcc`/`subject`, and a `content` field
+holding **the entire forward body assembled in the browser** — the
+`============ Forwarded message ============` header block plus the original
+inside `<blockquote id="blockquote_zmail">`. That endpoint authenticates with
+session cookies and an `x-zcsrf-token`, so it is unreachable from an OAuth
+client and is not a contract to depend on.
+
+The lesson for our own design: **assembling the forward body ourselves is not a
+workaround, it is what the vendor's own client does.** The server-side path
+exists in the API but is broken.
+
+One detail only the traffic reveals: the web client rewrites inline images to
+absolute `https://us4-zmud.zoho.com/zm/ImageDisplay?...` URLs, whereas the
+content API returns them **relative** (`/mail/ImageDisplay?na=...&mode=inline`).
+Copying that HTML verbatim into a new draft therefore leaves image `src`s that
+resolve nowhere. Zoho appears to resolve them at send time from `mymId` +
+`fwdInlineMode`, neither of which the public API accepts — so a self-assembled
+forward should expect inline images not to survive for the recipient, and real
+attachments not to carry at all.
 
 ### `fromAddress` comes from `primaryEmailAddress`
 

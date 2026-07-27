@@ -86,7 +86,7 @@ That produces a `zoho-mcp.mcpb` you can install from Claude Desktop's Extensions
 
 You still register an application in the Zoho API Console (step 1) and paste its client id and secret into the extension's settings, where the secret is stored in your OS credential store. Then call the **`authenticate`** tool once: it opens Zoho's own consent page in your browser, and the resulting token goes to the credential store too. Nothing is typed into the conversation.
 
-Two lifecycle quirks of the host, both worth knowing before you install:
+Several lifecycle quirks of the host, all worth knowing before you install:
 
 **You have to enable it manually.** Because the extension has required configuration, Claude Desktop installs it *disabled* and logs `has missing required configuration, not enabling automatically`. Filling the fields in afterwards does not flip the toggle — you have to switch it on yourself. Until you do, the server never launches, none of its tools appear, and requests about your mail silently go to whatever other mail connector you have enabled.
 
@@ -96,7 +96,20 @@ The server itself exits promptly when the host closes its stdin, which is the on
 
 **Uninstalling clears your settings.** The client id, secret, port and toggle live in the host's per-extension settings file, which is deleted with the extension; reinstalling means re-entering them. The refresh token is separate — it's in your OS credential store — so it survives an uninstall and you won't need to run `authenticate` again.
 
-`ZOHO_ALLOW_AUTO_SEND` is deliberately *not* a setting in that form. It stays an environment variable you set by hand, because a labelled toggle is a much smaller act than editing a server's environment, and the friction is the point.
+**Installing a bundle whose version matches the installed one uninstalls it.** Opening a `zoho-mcp-0.1.0.mcpb` while `0.1.0` is already installed does not replace it in place: the host removes the extension directory *and* its settings file, then waits for you to confirm a fresh install. Combined with the quirk above, that means re-entering the client id and secret. Bump the version before rebuilding if you want to test an upgrade rather than perform an uninstall — observed on macOS with Claude Desktop 1.24012.9.
+
+**Changing a setting doesn't restart the server, and neither does reinstalling.** The host substitutes `user_config` values into the environment when it *spawns* the server process, and `_build_zoho_clients_from_env` reads them once at startup. A running server therefore keeps the environment it was launched with: tick the send checkbox and the live process still has the old value — or, after a reinstall, no value at all for a variable the new manifest introduced. Quit and reopen Claude Desktop to pick up a settings change. Nothing surfaces as an error, so the symptom is a setting that appears on and behaves off.
+
+**How the host renders each `user_config` type into the environment** — read out of a live server's own process environment rather than inferred from the spec, since the substitution happens in the host and nothing documents it:
+
+| Declared type | Stored in settings as | Arrives in the environment as |
+| --- | --- | --- |
+| `boolean` | JSON `true` / `false` | `true` / `false`, lowercase |
+| `number` | JSON `8765` | `8765` — no decimal point |
+
+Both parsers here are written for that and fail closed on anything else, so a host that ever changed this would leave a toggle inert rather than silently on.
+
+Sending email is one of those settings — a checkbox, off when you install it. It used to be withheld from the settings form on the theory that hand-editing `.env` was useful friction, but for a bundle install the file would have to live inside the installed extension directory, which every update replaces. That isn't friction, it's a feature you can't reach. What keeps mail in your account is that the box starts unticked and nothing but you can tick it — no tool changes server settings.
 
 ## Tools
 
@@ -124,7 +137,7 @@ Only needed if the server was started without a stored token — the case for a 
 | `create_draft` | Save a new email as a draft *(write)* |
 | `reply_draft` | Save a reply to an existing email as a draft *(write)* |
 | `forward_draft` | Forward an email as a draft, keeping its formatting and attachments *(write)* |
-| `send_email` | Send immediately — **disabled unless opted in** *(write)* |
+| `send_email` | Send immediately — **drafts it instead unless opted in** *(write)* |
 | `mark_as_read` / `mark_as_unread` | Flip read status on one or many messages *(write)* |
 | `move_email` | Move one or many messages to a folder *(write)* |
 | `add_label` / `remove_label` | Apply or remove a label on one or many messages *(write)* |
@@ -197,13 +210,13 @@ Each resource has an email address; invite it via `create_event`'s `attendees` t
 
 Mail composition is draft-first by design, because sending is the one operation here that's irreversible and reaches another person.
 
-`create_draft`, `reply_draft` and `forward_draft` always work and always save to Drafts. `send_email` exists but refuses unless the operator sets:
+`create_draft`, `reply_draft` and `forward_draft` always work and always save to Drafts. `send_email` only delivers if the operator has turned sending on — the "Let the assistant send email without your review" checkbox in a bundle install, or:
 
 ```
 ZOHO_ALLOW_AUTO_SEND=true
 ```
 
-When that's unset, `send_email` fails before making any network call, so nothing can leave the account.
+With sending off, `send_email` doesn't fail: it saves the message to Drafts and returns `"sent": false` with a note saying where it went. You get the composed mail to review in your own client, where you can see the real recipients and rendering, rather than losing the work to an error. Nothing can leave the account either way — the request Zoho receives carries `mode: "draft"` on every gated call.
 
 There is intentionally **no send-a-reply or send-a-forward tool at all**, in any configuration. Both carry an incoming email, and email bodies are untrusted input — a message in your mailbox can contain text trying to talk an assistant into sending something on your behalf. Replies and forwards always stop at Drafts for a human to read.
 
@@ -213,7 +226,7 @@ There's more machinery behind that than the name suggests. Zoho's own `action=fo
 
 Inline images survive too: Zoho turns the original's image references into real MIME parts when the message is finally sent. That was confirmed by sending one and reading the delivered source, not assumed.
 
-Leave `ZOHO_ALLOW_AUTO_SEND` off unless you specifically want an assistant able to email people without review.
+Leave sending off unless you specifically want an assistant able to email people without review.
 
 One practical note: drafts don't show up in `search_emails` at all (a Zoho quirk, not a bug here). Find them with `list_emails(folder_id=...)` using the Drafts folder id from `list_folders`.
 
@@ -225,7 +238,7 @@ One practical note: drafts don't show up in `search_emails` at all (a Zoho quirk
 | --- | --- | --- |
 | `ZOHO_ACCOUNT_ID` | *discovered* | Your Zoho Mail account id. Left unset, the server looks it up on first use and caches it for the life of the process. Setting it saves one API call per start. |
 | `ZOHO_CALENDAR_UID` | *discovered* | Your default calendar's uid, same story — looked up only when a calendar tool is called without an explicit `calendar_id`. |
-| `ZOHO_ALLOW_AUTO_SEND` | `false` | Allow `send_email` to actually send. See above. |
+| `ZOHO_ALLOW_AUTO_SEND` | `false` | Allow `send_email` to actually send. Left off, it saves to Drafts instead. Exposed as a checkbox in a bundle install. See above. |
 | `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Strip the invisible Unicode padding some marketing mail uses to inflate preview text — from `get_email` bodies and from the `snippet` of every `search_emails`/`list_emails` result. Subjects are left alone; senders don't pad those, since it would look broken in any mail client. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
 | `ZOHO_OAUTH_CALLBACK_PORT` | `8765` | Local port for the one-time OAuth redirect. |
 

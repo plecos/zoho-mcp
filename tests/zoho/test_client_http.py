@@ -2939,15 +2939,66 @@ async def test_create_draft_works_without_auto_send_enabled(respx_mock, zoho_cli
     assert route.called
 
 
-async def test_send_email_refuses_and_makes_no_request_when_not_enabled(
+async def test_send_email_sets_draft_mode_when_not_enabled(respx_mock, zoho_client):
+    # The critical safety test. A disabled client still posts -- it saves the
+    # message to Drafts rather than erroring -- so "made no request" is no
+    # longer the property that keeps mail in the account. This is: the one
+    # field that decides send-vs-draft must be "draft" on every gated call.
+    route = mock_compose_endpoints(respx_mock)
+
+    await zoho_client.send_email(to=["a@example.com"], subject="Hi", content="B")
+
+    assert json.loads(route.calls.last.request.content)["mode"] == "draft"
+
+
+async def test_send_email_reports_that_it_did_not_send_when_not_enabled(
     respx_mock, zoho_client
 ):
-    # The critical safety test: a disabled client must not reach Zoho at all,
-    # so no email can escape even if every other layer is bypassed.
+    # Without an explicit flag the caller sees only an id, which is exactly
+    # what a real send returns -- an LLM would report "sent" either way.
+    mock_compose_endpoints(respx_mock)
+
+    result = await zoho_client.send_email(
+        to=["a@example.com"], subject="Hi", content="B"
+    )
+
+    assert result["sent"] is False
+    assert result["id"] == "msg-new-1"
+    assert "draft" in result["detail"].lower()
+
+
+async def test_send_email_keeps_the_whole_message_in_the_gated_draft(
+    respx_mock, zoho_client
+):
+    # A draft that silently dropped cc/bcc would look like a successful save
+    # and then go out incomplete when the user sends it by hand.
+    route = mock_compose_endpoints(respx_mock)
+
+    await zoho_client.send_email(
+        to=["a@example.com", "b@example.com"],
+        subject="Hi",
+        content="Body",
+        cc=["c@example.com"],
+        bcc=["d@example.com"],
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["toAddress"] == "a@example.com,b@example.com"
+    assert sent["ccAddress"] == "c@example.com"
+    assert sent["bccAddress"] == "d@example.com"
+    assert sent["subject"] == "Hi"
+    assert sent["content"] == "Body"
+
+
+async def test_send_email_still_rejects_missing_recipients_when_not_enabled(
+    respx_mock, zoho_client
+):
+    # Falling back to a draft must not turn a malformed call into a silent
+    # half-success -- a draft with no recipient helps nobody.
     route = respx_mock.post(f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages")
 
-    with pytest.raises(ZohoAPIError, match="ZOHO_ALLOW_AUTO_SEND"):
-        await zoho_client.send_email(to=["a@example.com"], subject="Hi", content="B")
+    with pytest.raises(ZohoAPIError, match="recipient"):
+        await zoho_client.send_email(to=[], subject="Hi", content="B")
 
     assert not route.called
 
@@ -2962,7 +3013,7 @@ async def test_send_email_omits_mode_so_zoho_actually_sends(respx_mock, sending_
     sent = json.loads(route.calls.last.request.content)
     assert "mode" not in sent
     assert sent["toAddress"] == "a@example.com"
-    assert result == {"id": "msg-new-1"}
+    assert result == {"id": "msg-new-1", "sent": True}
 
 
 async def test_send_email_rejects_missing_recipients_without_a_request(

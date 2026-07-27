@@ -105,13 +105,42 @@ def test_the_client_id_is_not_marked_sensitive(manifest):
     assert manifest["user_config"]["zoho_client_id"].get("sensitive", False) is False
 
 
-def test_auto_send_is_not_exposed_as_a_setting(manifest):
-    # Deliberate: ZOHO_ALLOW_AUTO_SEND stays an environment variable the
-    # operator sets by hand. A labelled toggle in a settings pane is a much
-    # smaller act than editing the server's environment, and the friction is
-    # the point -- see SECURITY.md.
-    assert "zoho_allow_auto_send" not in manifest["user_config"]
-    assert "ZOHO_ALLOW_AUTO_SEND" not in json.dumps(manifest["server"])
+def test_auto_send_is_exposed_as_a_setting_that_defaults_to_off(manifest):
+    # It used to be withheld from the settings pane on the theory that
+    # hand-editing the environment was useful friction. For a bundle install
+    # it wasn't friction, it was unreachable: `.env` would have to live inside
+    # the installed extension directory, which every update replaces. The
+    # protection that does the work is the default, not the obscurity.
+    setting = manifest["user_config"]["zoho_allow_auto_send"]
+
+    assert setting["type"] == "boolean"
+    assert setting["default"] is False
+    assert setting["required"] is False
+    assert (
+        manifest["server"]["mcp_config"]["env"]["ZOHO_ALLOW_AUTO_SEND"]
+        == "${user_config.zoho_allow_auto_send}"
+    )
+
+
+def test_the_auto_send_setting_says_what_turning_it_on_means(manifest):
+    # The label is now the entire basis for the decision -- there's no README
+    # in front of someone ticking a checkbox in a settings pane.
+    setting = manifest["user_config"]["zoho_allow_auto_send"]
+
+    assert "review" in setting["description"].lower()
+    assert "draft" in setting["description"].lower()
+
+
+def test_no_declared_tool_offers_to_change_the_servers_settings(manifest):
+    # The invariant that outlived the old "not exposed as a setting" test:
+    # whoever turns sending on, it must not be the model. A tool that edits
+    # configuration would hand the gate to the thing the gate exists to stop.
+    for tool in manifest["tools"]:
+        assert "config" not in tool["name"], tool["name"]
+        assert "setting" not in tool["name"], tool["name"]
+        assert not tool["name"].startswith(("enable_", "disable_", "set_")), tool[
+            "name"
+        ]
 
 
 def test_every_configured_env_var_maps_to_a_declared_user_config_key(manifest):

@@ -46,7 +46,11 @@ Read-only tools use `_READ_ONLY = ToolAnnotations(readOnlyHint=True)`. Write too
 
 ### Sending email is gated on purpose
 
-`send_email` refuses unless the operator sets `ZOHO_ALLOW_AUTO_SEND=true`, and **the check lives in `ZohoClient`**, the layer that issues the request — not in the tool wrapper. That placement is the point: a gate in a wrapper only protects callers who go through that wrapper.
+`send_email` delivers only if the operator set `ZOHO_ALLOW_AUTO_SEND=true`; otherwise it saves the message to Drafts and returns `"sent": False`. **The check lives in `ZohoClient`**, the layer that issues the request — not in the tool wrapper. That placement is the point: a gate in a wrapper only protects callers who go through that wrapper.
+
+The gated path used to raise, so the safety test could assert "issued no request at all". Falling back to a draft is friendlier — the user gets the composed mail to review in a client that shows real recipients and rendering — but it means the guarantee is now carried by a *field* rather than by the absence of a call: gated calls go to the same compose endpoint with `mode: "draft"`. When you soften a gate from "refuses" to "does something safer", identify the new invariant and re-point the test at it; a test still asserting the old one passes while guarding nothing.
+
+Two things that must stay true of the flag: it is read once at startup, and **nothing inside a conversation can change it**. Exposing it as an MCPB checkbox is fine — a human is at the settings pane. A tool that edited server config, or any `os.environ[...] = ...` in `src/`, would hand the gate to the thing the gate exists to stop. Pinned by `test_no_tool_can_turn_sending_on`.
 
 There is deliberately no send-a-reply tool in any configuration. A reply quotes an incoming email, and incoming email is untrusted input that can contain text trying to talk an assistant into sending something. Replies always stop at Drafts.
 

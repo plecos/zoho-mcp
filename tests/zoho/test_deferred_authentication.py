@@ -4,16 +4,26 @@ An MCPB bundle has one entry point, so `zoho-mcp-setup` isn't reachable from
 an installed extension. The server therefore has to start unauthenticated and
 gain its token later, via the `authenticate` tool.
 
-`get_access_token` is the seam that makes that cheap: all 39 tools reach Zoho
+`get_access_token` is the seam that makes that cheap: all 40 tools reach Zoho
 through it, so one clear error there covers every one of them without a
 per-tool change. Same reasoning as the send gate living in the client rather
 than in a wrapper -- put the check where the traffic actually passes.
 """
 
 import httpx
+import keyring.errors
 import pytest
 
 from zoho_mcp.zoho.auth import ZohoAuthError, ZohoTokenManager
+
+
+class _NoKeyringBackend:
+    """Stand-in for keyring on a machine with no usable backend."""
+
+    @staticmethod
+    def get_password(service, username):
+        raise keyring.errors.NoKeyringError("no backend")
+
 
 TOKEN_URL = "https://accounts.zoho.com/oauth/v2/token"
 
@@ -202,15 +212,17 @@ async def test_an_empty_store_still_names_the_authenticate_tool(
         await manager(http_client).get_access_token()
 
 
-async def test_a_broken_credential_store_does_not_mask_the_real_advice(
-    http_client, monkeypatch
+async def test_an_unreachable_credential_store_still_names_authenticate(
+    respx_mock, http_client, monkeypatch
 ):
-    # keyring raises on some locked/unavailable backends. That's still "not
-    # authenticated", and the actionable message beats a keyring traceback.
-    def boom():
-        raise RuntimeError("no usable keyring backend")
-
-    monkeypatch.setattr("zoho_mcp.zoho.auth.load_refresh_token", boom)
+    # A machine with no Secret Service backend -- headless Linux, WSL, a
+    # container. `load_refresh_token` absorbs that and reports no token, so
+    # the user gets the actionable message rather than a keyring traceback.
+    # The absorbing is tested at its own level in tests/zoho/test_auth.py.
+    route = mock_token_endpoint(respx_mock)
+    monkeypatch.setattr("zoho_mcp.zoho.auth.keyring", _NoKeyringBackend)
 
     with pytest.raises(ZohoAuthError, match="authenticate"):
         await manager(http_client).get_access_token()
+
+    assert not route.called

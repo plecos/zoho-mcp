@@ -21,6 +21,7 @@ This one is narrow on purpose: local stdio with no third-party relay, draft-firs
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) — required for both install methods, including the packaged extension
+- **On Linux, a Secret Service keyring backend** (gnome-keyring, KWallet, or the `keyrings.alt` package). The refresh token lives in the OS credential store, and headless servers, minimal desktops, WSL and containers often have no backend at all. Without one the server still starts and reports itself unauthenticated, but `authenticate` cannot save its result. macOS and Windows always have one.
 - Python 3.12+ — only if you run from a checkout; uv provides its own interpreter for the extension
 - A Zoho account, plus a registered application in the [Zoho API Console](https://accounts.zoho.com/developerconsole)
 

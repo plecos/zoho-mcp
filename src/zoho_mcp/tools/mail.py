@@ -185,9 +185,10 @@ async def list_folders(client: ZohoClient) -> dict:
 
     Returns:
         ``{"folders": [...], "count": int}``. Each folder has id, name,
-        path (e.g. "/Inbox/Work" -- the hierarchy signal), and type. Pass
-        a folder's name to ``search_emails``'s ``in:`` qualifier to
-        search it.
+        path (e.g. "/Inbox/Work" -- the readable hierarchy signal), type,
+        and parent_id (another folder's id, or ``""`` for a top-level
+        folder). Pass a folder's name to ``search_emails``'s ``in:``
+        qualifier to search it.
 
     Raises:
         ZohoAPIError: if the Zoho Mail API rejects or fails the request.

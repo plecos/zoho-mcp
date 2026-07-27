@@ -592,12 +592,21 @@ def normalize_signature(raw: dict) -> dict:
 def normalize_folder(raw: dict) -> dict:
     """Normalize one folder from Zoho Mail's Folders API.
 
-    ``path`` (e.g. "/Inbox/Work") is the hierarchy signal -- ``folderId``/
-    ``previousFolderId`` is NOT a parent reference despite the name; it's
-    a display-order "previous sibling" pointer (confirmed live: Drafts'
+    Two different fields here look like parent references and only one is.
+    ``parentFolderId`` genuinely is the parent, and becomes ``parent_id``.
+    ``previousFolderId`` is NOT, despite the name -- it's a display-order
+    "previous sibling" pointer (confirmed live: Drafts'
     ``previousFolderId`` is Inbox's own folderId, Templates' is Drafts',
-    and so on -- a linked list, not a tree), so it's deliberately excluded
-    here rather than mislabeled as a parent id.
+    and so on -- a linked list, not a tree), so it stays excluded rather
+    than being mislabeled or used as a fallback. The two frequently hold
+    the same id on real subfolders, which is what would make a fallback
+    look correct right up until it wasn't. See
+    docs/zoho-api-notes.md.
+
+    ``parent_id`` is ``""`` for a top-level folder, which is how Zoho
+    reports one: the key is simply absent. ``path`` remains a valid
+    hierarchy signal and needs no lookup, so prefer it for display;
+    ``parent_id`` is for walking the tree by id.
 
     Raises:
         ZohoAPIError: if ``raw`` is missing ``folderId``/``folderName``/
@@ -609,6 +618,7 @@ def normalize_folder(raw: dict) -> dict:
             "name": raw["folderName"],
             "path": raw["path"],
             "type": raw["folderType"],
+            "parent_id": raw.get("parentFolderId", ""),
         }
     except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed folder from Zoho: {e}") from e

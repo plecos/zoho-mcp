@@ -1770,7 +1770,13 @@ async def test_list_folders_fetches_and_normalizes(respx_mock, zoho_client):
         == "Zoho-oauthtoken fake-access-token"
     )
     assert results == [
-        {"id": "folder-1", "name": "Inbox", "path": "/Inbox", "type": "Inbox"}
+        {
+            "id": "folder-1",
+            "name": "Inbox",
+            "path": "/Inbox",
+            "type": "Inbox",
+            "parent_id": "",
+        }
     ]
 
 

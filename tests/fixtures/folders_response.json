@@ -12,6 +12,7 @@
       "folderName": "Work",
       "folderType": "Inbox",
       "folderId": "folder-2",
+      "parentFolderId": "folder-1",
       "previousFolderId": "folder-1"
     }
   ]

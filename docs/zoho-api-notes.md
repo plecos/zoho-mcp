@@ -91,6 +91,29 @@ has a real `status` filter (`read`/`unread`/`all`) *and* `start`/`limit`
 pagination. `list_emails` wraps this; `search_emails` wraps Search. Use List
 for anything that must enumerate *every* match.
 
+### Nothing in the Mail API reports an unread total
+
+There is no unread (or total) message count anywhere the obvious places would
+put one — verified live against a 26-folder account, not inferred from the
+docs:
+
+- `GET /accounts/{id}/folders` rows carry exactly `HIDE`, `URI`, `VW`,
+  `archivePolicyId`, `folderIcon`, `folderId`, `folderName`, `folderType`,
+  `imapAccess`, `isArchived`, `path`, and (per row) `parentFolderId` /
+  `previousFolderId`. No `unreadCount`, no `totalCount`, nothing count-shaped.
+- `GET /accounts/{id}/folders/{folderId}` returns the same key set for one
+  folder. The detail endpoint carries nothing extra.
+- The response envelope holds only `data` and `status`, and `status` is just
+  `{"code", "description"}` — no paging block, no total, on either the folders
+  or the `messages/view` endpoint.
+
+So a mailbox-wide unread count can only be obtained by paging
+`list_emails(status="unread")` and summing each page's `count`. That's the
+reason the count is computed server-side per page and `has_more` drives the
+paging: there's no authoritative total to check the sum against, which makes
+an LLM's own tally of the returned rows the *only* other option and the worse
+one.
+
 ### Drafts are invisible to the search API
 
 `in:Drafts` returns an empty list even when drafts demonstrably exist. To find

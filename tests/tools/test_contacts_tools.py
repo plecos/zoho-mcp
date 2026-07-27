@@ -40,7 +40,11 @@ async def test_search_contacts_delegates_to_client_and_shapes_result():
     result = await search_contacts(client, query="Jamie", limit=5)
 
     assert client.search_calls == [{"query": "Jamie", "limit": 5, "status": "active"}]
-    assert result == {"contacts": client.search_result[0], "has_more": False}
+    assert result == {
+        "contacts": client.search_result[0],
+        "count": 1,
+        "has_more": False,
+    }
 
 
 async def test_search_contacts_surfaces_has_more_true():

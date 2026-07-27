@@ -5,6 +5,7 @@ Zoho client is injected by the caller (``server.py``), never constructed
 here.
 """
 
+from zoho_mcp.tools.envelope import counted
 from zoho_mcp.zoho.client import ZohoClient
 
 
@@ -29,12 +30,12 @@ async def list_tasks(
             list. Cannot be combined with group_id.
 
     Returns:
-        ``{"tasks": [...], "has_more": bool}``. Each task has id, title,
-        description, status, priority, due_date, project, assignee, tags,
-        subtask_count, recurring, created_at, modified_at. ``has_more`` is
-        True if more tasks exist beyond ``limit`` -- raise limit or
-        increase offset rather than assuming the count you got back is
-        the full total.
+        ``{"tasks": [...], "count": int, "has_more": bool}``. Each task
+        has id, title, description, status, priority, due_date, project,
+        assignee, tags, subtask_count, recurring, created_at,
+        modified_at. ``count`` is this page's size; ``has_more`` is True
+        if more tasks exist beyond ``limit`` -- raise limit or increase
+        offset rather than treating ``count`` as the full total.
 
     Raises:
         ZohoAPIError: if limit/offset are out of range, view isn't a
@@ -44,7 +45,7 @@ async def list_tasks(
     tasks, has_more = await client.list_tasks(
         limit=limit, offset=offset, group_id=group_id, view=view
     )
-    return {"tasks": tasks, "has_more": has_more}
+    return counted("tasks", tasks, has_more=has_more)
 
 
 async def create_task(

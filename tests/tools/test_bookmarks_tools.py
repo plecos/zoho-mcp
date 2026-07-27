@@ -42,7 +42,7 @@ async def test_list_bookmarks_delegates_to_client():
     assert client.list_bookmarks_calls == [
         {"limit": 5, "after": 10, "group_id": None, "oldest_first": False}
     ]
-    assert result == client.list_bookmarks_result
+    assert result == {"bookmarks": client.list_bookmarks_result, "count": 1}
 
 
 async def test_list_bookmarks_defaults_limit_and_after():

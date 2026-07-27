@@ -29,7 +29,7 @@ async def test_list_branches_delegates_to_client():
     result = await list_branches(client)
 
     assert client.list_branches_calls == 1
-    assert result == client.list_branches_result
+    assert result == {"branches": client.list_branches_result, "count": 1}
 
 
 async def test_list_resources_delegates_to_client_with_ids():
@@ -42,4 +42,4 @@ async def test_list_resources_delegates_to_client_with_ids():
     assert client.list_resources_calls == [
         {"branch_id": "branch-1", "building_id": "building-1", "floor_id": "floor-1"}
     ]
-    assert result == client.list_resources_result
+    assert result == {"resources": client.list_resources_result, "count": 1}

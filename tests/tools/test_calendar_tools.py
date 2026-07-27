@@ -113,7 +113,7 @@ async def test_list_events_parses_iso8601_utc_strings_and_delegates():
             "calendar_id": None,
         }
     ]
-    assert result == client.list_events_result
+    assert result == {"events": client.list_events_result, "count": 1}
 
 
 async def test_list_events_converts_non_utc_offset_to_utc():
@@ -190,7 +190,7 @@ async def test_list_calendars_delegates_to_client():
     result = await list_calendars(client)
 
     assert client.list_calendars_calls == 1
-    assert result == client.list_calendars_result
+    assert result == {"calendars": client.list_calendars_result, "count": 1}
 
 
 async def test_get_freebusy_parses_iso8601_and_delegates():
@@ -210,7 +210,7 @@ async def test_get_freebusy_parses_iso8601_and_delegates():
             "end": datetime(2026, 7, 22, tzinfo=timezone.utc),
         }
     ]
-    assert result == client.get_freebusy_result
+    assert result == {"busy_slots": client.get_freebusy_result, "count": 1}
 
 
 async def test_get_freebusy_rejects_malformed_date_string():

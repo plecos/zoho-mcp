@@ -4,12 +4,13 @@ Shapes LLM-facing input/output only. No HTTP calls, no token logic -- the
 Zoho client is injected by the caller (``server.py``), never constructed here.
 """
 
+from zoho_mcp.tools.envelope import counted
 from zoho_mcp.zoho.client import ZohoClient
 
 
 async def search_emails(
     client: ZohoClient, query: str = "", limit: int = 20, days_back: int | None = None
-) -> list[dict]:
+) -> dict:
     """Search the user's mailbox for emails matching a query and/or a recency window.
 
     Args:
@@ -26,18 +27,26 @@ async def search_emails(
             only), resolved using the mailbox's own timezone.
 
     Returns:
-        Compact email summaries: id, from, subject, date, snippet,
-        folder_id, read (bool). ``date`` is in the mailbox's own local
-        timezone, not UTC -- see ``ZohoClient._get_mailbox_timezone``.
-        Excludes Sent/Drafts/Templates by default (see
-        ``ZohoClient._get_excluded_folder_ids``); use an explicit ``in:``
-        qualifier in ``query`` to search one of those folders instead.
+        ``{"emails": [...], "count": int}``. Each summary has id, from,
+        subject, date, snippet, folder_id, read (bool). ``date`` is in
+        the mailbox's own local timezone, not UTC -- see
+        ``ZohoClient._get_mailbox_timezone``. Excludes Sent/Drafts/
+        Templates by default (see ``ZohoClient._get_excluded_folder_ids``);
+        use an explicit ``in:`` qualifier in ``query`` to search one of
+        those folders instead. ``count`` is how many matched this call:
+        Search has no pagination and returns the top ``limit`` by
+        recency, so a ``count`` equal to ``limit`` means results were
+        very likely cut off -- use ``list_emails`` to enumerate
+        exhaustively.
 
     Raises:
         ZohoAPIError: if query and days_back are both empty, days_back is
             negative, or the Zoho Mail API rejects or fails the request.
     """
-    return await client.search_emails(query=query, limit=limit, days_back=days_back)
+    return counted(
+        "emails",
+        await client.search_emails(query=query, limit=limit, days_back=days_back),
+    )
 
 
 async def list_emails(
@@ -46,7 +55,7 @@ async def list_emails(
     folder_id: str | None = None,
     limit: int = 20,
     start: int = 1,
-) -> list[dict]:
+) -> dict:
     """List emails by read/unread status, with real pagination.
 
     Use this instead of search_emails when you need to reliably
@@ -62,21 +71,26 @@ async def list_emails(
             Drafts/Templates by default (same as search_emails).
         limit: maximum results per page (1-200).
         start: 1-based starting sequence number -- call again with
-            start += limit to fetch the next page, repeating until a
-            page comes back with fewer than limit results.
+            start += limit to fetch the next page, repeating while
+            has_more is True.
 
     Returns:
-        Compact email summaries: id, from, subject, date, snippet,
-        folder_id, read (bool). Same shape as search_emails.
+        ``{"emails": [...], "count": int, "has_more": bool}``. Summaries
+        have the same shape as search_emails. ``count`` is this page's
+        size, and it is *not* an end-of-results signal: Sent/Drafts/
+        Templates are filtered out after the page is fetched, so a short
+        page can still be followed by more. Page while ``has_more`` is
+        True, and sum ``count`` across pages for a mailbox total.
 
     Raises:
         ZohoAPIError: if status isn't one of "read"/"unread"/"all",
             limit/start are out of range, or the Zoho Mail API rejects
             or fails the request.
     """
-    return await client.list_emails(
+    emails, has_more = await client.list_emails(
         status=status, folder_id=folder_id, limit=limit, start=start
     )
+    return counted("emails", emails, has_more=has_more)
 
 
 async def get_email(client: ZohoClient, message_id: str, folder_id: str) -> dict:
@@ -96,9 +110,7 @@ async def get_email(client: ZohoClient, message_id: str, folder_id: str) -> dict
     return await client.get_email(message_id=message_id, folder_id=folder_id)
 
 
-async def list_attachments(
-    client: ZohoClient, message_id: str, folder_id: str
-) -> list[dict]:
+async def list_attachments(client: ZohoClient, message_id: str, folder_id: str) -> dict:
     """List attachment metadata (name, size) for one email.
 
     Args:
@@ -107,13 +119,17 @@ async def list_attachments(
         folder_id: that same email's ``folder_id`` from ``search_emails``.
 
     Returns:
-        ``[{"id": ..., "name": ..., "size_bytes": ...}, ...]``. Metadata
-        only -- pass an ``id`` to ``get_attachment`` to read the content.
+        ``{"attachments": [{"id", "name", "size_bytes"}, ...], "count":
+        int}``. Metadata only -- pass an ``id`` to ``get_attachment`` to
+        read the content.
 
     Raises:
         ZohoAPIError: if the Zoho Mail API rejects or fails the request.
     """
-    return await client.list_attachments(message_id=message_id, folder_id=folder_id)
+    return counted(
+        "attachments",
+        await client.list_attachments(message_id=message_id, folder_id=folder_id),
+    )
 
 
 async def get_email_source(
@@ -161,37 +177,39 @@ async def get_attachment(
     )
 
 
-async def list_folders(client: ZohoClient) -> list[dict]:
+async def list_folders(client: ZohoClient) -> dict:
     """List all folders in the mailbox, including custom subfolders.
 
     Args:
         client: injected Zoho client.
 
     Returns:
-        Each folder has id, name, path (e.g. "/Inbox/Work" -- the
-        hierarchy signal), and type. Pass a folder's name to
-        ``search_emails``'s ``in:`` qualifier to search it.
+        ``{"folders": [...], "count": int}``. Each folder has id, name,
+        path (e.g. "/Inbox/Work" -- the hierarchy signal), and type. Pass
+        a folder's name to ``search_emails``'s ``in:`` qualifier to
+        search it.
 
     Raises:
         ZohoAPIError: if the Zoho Mail API rejects or fails the request.
     """
-    return await client.list_folders()
+    return counted("folders", await client.list_folders())
 
 
-async def list_labels(client: ZohoClient) -> list[dict]:
+async def list_labels(client: ZohoClient) -> dict:
     """List all labels/tags configured in the mailbox.
 
     Args:
         client: injected Zoho client.
 
     Returns:
-        Each label has id, name, color. Pass a label's name to
-        ``search_emails``'s ``label:`` qualifier to search it.
+        ``{"labels": [...], "count": int}``. Each label has id, name,
+        color. Pass a label's name to ``search_emails``'s ``label:``
+        qualifier to search it.
 
     Raises:
         ZohoAPIError: if the Zoho Mail API rejects or fails the request.
     """
-    return await client.list_labels()
+    return counted("labels", await client.list_labels())
 
 
 async def create_draft(
@@ -400,16 +418,17 @@ async def remove_label(
     await client.remove_label(message_ids=message_ids, label_id=label_id)
 
 
-async def list_signatures(client: ZohoClient) -> list[dict]:
+async def list_signatures(client: ZohoClient) -> dict:
     """List all configured email signatures.
 
     Args:
         client: injected Zoho client.
 
     Returns:
-        Each signature has id, name, content (plain text).
+        ``{"signatures": [...], "count": int}``. Each signature has id,
+        name, content (plain text).
 
     Raises:
         ZohoAPIError: if the Zoho Mail API rejects or fails the request.
     """
-    return await client.list_signatures()
+    return counted("signatures", await client.list_signatures())

@@ -1687,7 +1687,7 @@ class ZohoClient:
         folder_id: str | None = None,
         limit: int = 20,
         start: int = 1,
-    ) -> list[dict]:
+    ) -> tuple[list[dict], bool]:
         """List emails by read/unread status, with real pagination.
 
         Unlike ``search_emails`` (Zoho's Search API, which has no status
@@ -1709,6 +1709,13 @@ class ZohoClient:
             start: 1-based starting sequence number, for paging past the
                 first ``limit`` results (e.g. ``start=21`` with
                 ``limit=20`` fetches the second page).
+
+        Returns:
+            ``(emails, has_more)``. ``has_more`` is measured against the
+            raw page Zoho returned, *before* the Sent/Drafts/Templates
+            filter below -- once that filter has run, a returned list
+            shorter than ``limit`` no longer means the mailbox is
+            exhausted, so length is not a usable end-of-results signal.
 
         Raises:
             ZohoAPIError: if ``status`` isn't one of "read"/"unread"/
@@ -1739,6 +1746,7 @@ class ZohoClient:
             params=params,
         )
         raw_items = payload.get("data", [])
+        has_more = len(raw_items) == limit
         results = [
             normalize_email_summary(
                 item,
@@ -1752,7 +1760,7 @@ class ZohoClient:
             excluded_folder_ids = await self._get_excluded_folder_ids()
             results = [r for r in results if r["folder_id"] not in excluded_folder_ids]
 
-        return results
+        return results, has_more
 
     async def _get_from_address(self) -> str:
         """The account's outgoing address, fetched once per client and cached.

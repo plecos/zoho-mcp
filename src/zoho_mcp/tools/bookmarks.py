@@ -5,6 +5,7 @@ Zoho client is injected by the caller (``server.py``), never constructed
 here.
 """
 
+from zoho_mcp.tools.envelope import counted
 from zoho_mcp.zoho.client import ZohoClient
 
 
@@ -14,7 +15,7 @@ async def list_bookmarks(
     after: int = 0,
     group_id: str | None = None,
     oldest_first: bool = False,
-) -> list[dict]:
+) -> dict:
     """List Zoho Mail bookmarks -- the user's personal ones, or a group's.
 
     Args:
@@ -27,17 +28,21 @@ async def list_bookmarks(
             the default newest-first.
 
     Returns:
-        Normalized bookmarks: id, title, url, summary, collection, owner,
-        is_favorite, tags. There is no has_more signal for this endpoint
-        -- getting back fewer than limit results is the only reliable
-        sign you've reached the end.
+        ``{"bookmarks": [...], "count": int}``. Each bookmark has id,
+        title, url, summary, collection, owner, is_favorite, tags.
+        ``count`` is this page's size, not the account total: there is no
+        has_more signal for this endpoint, so a ``count`` below ``limit``
+        is the only reliable sign you've reached the end.
 
     Raises:
         ZohoAPIError: if limit/after are out of range, or the Bookmarks
             API rejects or fails the request.
     """
-    return await client.list_bookmarks(
-        limit=limit, after=after, group_id=group_id, oldest_first=oldest_first
+    return counted(
+        "bookmarks",
+        await client.list_bookmarks(
+            limit=limit, after=after, group_id=group_id, oldest_first=oldest_first
+        ),
     )
 
 

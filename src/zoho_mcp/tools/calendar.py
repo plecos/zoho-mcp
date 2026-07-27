@@ -6,6 +6,7 @@ Zoho client is injected by the caller (``server.py``), never constructed here.
 
 from datetime import datetime, timezone
 
+from zoho_mcp.tools.envelope import counted
 from zoho_mcp.zoho.client import ZohoClient
 
 
@@ -32,7 +33,7 @@ def _parse_iso8601_utc(value: str, *, field_name: str) -> datetime:
 
 async def list_events(
     client: ZohoClient, start: str, end: str, calendar_id: str | None = None
-) -> list[dict]:
+) -> dict:
     """List calendar events in a time range (max 31-day span).
 
     Args:
@@ -44,18 +45,24 @@ async def list_events(
             to see what else is available.
 
     Returns:
-        Normalized events: id, title, start, end, attendees. ``start``/
-        ``end`` are in the mailbox's own local timezone, not UTC -- see
-        ``ZohoClient._get_mailbox_timezone``.
+        ``{"events": [...], "count": int}``. Each event has id, title,
+        start, end, attendees. ``start``/``end`` are in the mailbox's own
+        local timezone, not UTC -- see
+        ``ZohoClient._get_mailbox_timezone``. ``count`` counts
+        occurrences in the range, so a recurring event contributes one
+        per occurrence.
 
     Raises:
         ValueError: if start/end aren't valid ISO 8601 strings with a UTC offset.
         ZohoAPIError: if the range exceeds 31 days or the Calendar API fails.
     """
-    return await client.list_events(
-        start=_parse_iso8601_utc(start, field_name="start"),
-        end=_parse_iso8601_utc(end, field_name="end"),
-        calendar_id=calendar_id,
+    return counted(
+        "events",
+        await client.list_events(
+            start=_parse_iso8601_utc(start, field_name="start"),
+            end=_parse_iso8601_utc(end, field_name="end"),
+            calendar_id=calendar_id,
+        ),
     )
 
 
@@ -86,26 +93,25 @@ async def get_event(
     return await client.get_event(uid, calendar_id=calendar_id)
 
 
-async def list_calendars(client: ZohoClient) -> list[dict]:
+async def list_calendars(client: ZohoClient) -> dict:
     """List all calendars the user has access to.
 
     Args:
         client: injected Zoho client.
 
     Returns:
-        Each calendar has id, name, is_default, timezone, privilege. Pass
-        a calendar's id to list_events/get_event's calendar_id argument
-        to target it instead of the default.
+        ``{"calendars": [...], "count": int}``. Each calendar has id,
+        name, is_default, timezone, privilege. Pass a calendar's id to
+        list_events/get_event's calendar_id argument to target it instead
+        of the default.
 
     Raises:
         ZohoAPIError: if the Calendar API rejects or fails the request.
     """
-    return await client.list_calendars()
+    return counted("calendars", await client.list_calendars())
 
 
-async def get_freebusy(
-    client: ZohoClient, email: str, start: str, end: str
-) -> list[dict]:
+async def get_freebusy(client: ZohoClient, email: str, start: str, end: str) -> dict:
     """Get busy time slots for a user's calendar in a time range.
 
     Args:
@@ -115,19 +121,25 @@ async def get_freebusy(
         end: ISO 8601 datetime string with UTC offset, range end.
 
     Returns:
-        Busy slots: start, end (mailbox's own local timezone, not UTC),
-        status. Only available for calendars that person has explicitly
-        enabled "include in my Free/Busy sharing" for.
+        ``{"busy_slots": [...], "count": int}``. Each slot has start, end
+        (mailbox's own local timezone, not UTC), status. Only available
+        for calendars that person has explicitly enabled "include in my
+        Free/Busy sharing" for; an unshared calendar raises rather than
+        returning ``count: 0``, so ``count: 0`` does mean genuinely free
+        across the range.
 
     Raises:
         ValueError: if start/end aren't valid ISO 8601 strings with a UTC offset.
         ZohoAPIError: if free/busy sharing isn't enabled for email, or
             the Calendar API rejects or fails the request.
     """
-    return await client.get_freebusy(
-        email=email,
-        start=_parse_iso8601_utc(start, field_name="start"),
-        end=_parse_iso8601_utc(end, field_name="end"),
+    return counted(
+        "busy_slots",
+        await client.get_freebusy(
+            email=email,
+            start=_parse_iso8601_utc(start, field_name="start"),
+            end=_parse_iso8601_utc(end, field_name="end"),
+        ),
     )
 
 

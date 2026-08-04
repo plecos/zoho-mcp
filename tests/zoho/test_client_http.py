@@ -3752,6 +3752,60 @@ async def test_batch_write_strips_blank_message_ids(respx_mock, zoho_client):
     assert sent["messageId"] == ["111", "222"]
 
 
+# Zoho's real success body, verified live 2026-08-04 (docs/zoho-api-notes.md).
+# It is byte-identical for one message and for fifty, and identical again for a
+# messageId that doesn't exist -- so the ids we submitted are the only record of
+# what the request covered, and they have to come back out.
+_UPDATEMESSAGE_SUCCESS = {"status": {"code": 200, "description": "success"}}
+
+
+async def test_batch_write_returns_the_ids_it_submitted(respx_mock, zoho_client):
+    respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(200, json=_UPDATEMESSAGE_SUCCESS))
+
+    assert await zoho_client.mark_as_read(message_ids=["111", "222"]) == ["111", "222"]
+
+
+async def test_batch_write_returns_the_stripped_ids_not_the_ones_passed_in(
+    respx_mock, zoho_client
+):
+    """What comes back describes the request Zoho got, not the caller's input.
+
+    The blank-stripping above means those can differ. If the return value were
+    the caller's list, a count derived from it would claim four messages were
+    covered by a request that named two.
+    """
+    respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(200, json=_UPDATEMESSAGE_SUCCESS))
+
+    submitted = await zoho_client.mark_as_read(message_ids=["111", "", "  ", "222"])
+
+    assert submitted == ["111", "222"]
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        lambda c: c.mark_as_read(message_ids=["111"]),
+        lambda c: c.mark_as_unread(message_ids=["111"]),
+        lambda c: c.move_email(message_ids=["111"], folder_id="f-1"),
+        lambda c: c.add_label(message_ids=["111"], label_id="l-1"),
+        lambda c: c.remove_label(message_ids=["111"], label_id="l-1"),
+    ],
+    ids=["mark_as_read", "mark_as_unread", "move_email", "add_label", "remove_label"],
+)
+async def test_every_batch_write_returns_its_submitted_ids(
+    respx_mock, zoho_client, write
+):
+    respx_mock.put(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/updatemessage"
+    ).mock(return_value=httpx.Response(200, json=_UPDATEMESSAGE_SUCCESS))
+
+    assert await write(zoho_client) == ["111"]
+
+
 @pytest.mark.parametrize("blank_ids", [[""], ["   "], ["", "  ", "\t"]])
 async def test_batch_write_rejects_all_blank_message_ids_without_a_request(
     respx_mock, zoho_client, blank_ids

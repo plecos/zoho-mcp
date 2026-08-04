@@ -1,3 +1,5 @@
+import pytest
+
 from zoho_mcp.tools.mail import (
     add_label,
     create_draft,
@@ -44,6 +46,7 @@ class FakeZohoClient:
         self.move_email_calls = []
         self.add_label_calls = []
         self.remove_label_calls = []
+        self.submitted_ids = ["msg-1", "msg-2"]
 
     async def search_emails(self, query="", limit=20, days_back=None):
         self.search_calls.append(
@@ -117,24 +120,33 @@ class FakeZohoClient:
         )
         return self.compose_result
 
+    # Every batch write returns the ids it actually submitted, which is not
+    # necessarily the ids it was given -- blanks are stripped first. These
+    # return a different list than they were passed so a wrapper echoing its
+    # own argument instead of the client's result shows up as a mismatch.
     async def mark_as_read(self, message_ids):
         self.mark_as_read_calls.append({"message_ids": message_ids})
+        return self.submitted_ids
 
     async def mark_as_unread(self, message_ids):
         self.mark_as_unread_calls.append({"message_ids": message_ids})
+        return self.submitted_ids
 
     async def move_email(self, message_ids, folder_id):
         self.move_email_calls.append(
             {"message_ids": message_ids, "folder_id": folder_id}
         )
+        return self.submitted_ids
 
     async def add_label(self, message_ids, label_id):
         self.add_label_calls.append({"message_ids": message_ids, "label_id": label_id})
+        return self.submitted_ids
 
     async def remove_label(self, message_ids, label_id):
         self.remove_label_calls.append(
             {"message_ids": message_ids, "label_id": label_id}
         )
+        return self.submitted_ids
 
 
 async def test_search_emails_delegates_to_client_and_returns_result():
@@ -267,7 +279,7 @@ async def test_mark_as_read_delegates_to_client():
     result = await mark_as_read(client, message_ids=["msg-1", "msg-2"])
 
     assert client.mark_as_read_calls == [{"message_ids": ["msg-1", "msg-2"]}]
-    assert result is None
+    assert result == {"marked_read": ["msg-1", "msg-2"], "count": 2}
 
 
 async def test_mark_as_unread_delegates_to_client():
@@ -276,7 +288,7 @@ async def test_mark_as_unread_delegates_to_client():
     result = await mark_as_unread(client, message_ids=["msg-1", "msg-2"])
 
     assert client.mark_as_unread_calls == [{"message_ids": ["msg-1", "msg-2"]}]
-    assert result is None
+    assert result == {"marked_unread": ["msg-1", "msg-2"], "count": 2}
 
 
 async def test_move_email_delegates_to_client():
@@ -289,7 +301,11 @@ async def test_move_email_delegates_to_client():
     assert client.move_email_calls == [
         {"message_ids": ["msg-1", "msg-2"], "folder_id": "folder-2"}
     ]
-    assert result is None
+    assert result == {
+        "moved": ["msg-1", "msg-2"],
+        "count": 2,
+        "folder_id": "folder-2",
+    }
 
 
 async def test_add_label_delegates_to_client():
@@ -300,7 +316,11 @@ async def test_add_label_delegates_to_client():
     assert client.add_label_calls == [
         {"message_ids": ["msg-1", "msg-2"], "label_id": "label-2"}
     ]
-    assert result is None
+    assert result == {
+        "labeled": ["msg-1", "msg-2"],
+        "count": 2,
+        "label_id": "label-2",
+    }
 
 
 async def test_remove_label_delegates_to_client():
@@ -313,7 +333,42 @@ async def test_remove_label_delegates_to_client():
     assert client.remove_label_calls == [
         {"message_ids": ["msg-1", "msg-2"], "label_id": "label-2"}
     ]
-    assert result is None
+    assert result == {
+        "unlabeled": ["msg-1", "msg-2"],
+        "count": 2,
+        "label_id": "label-2",
+    }
+
+
+@pytest.mark.parametrize(
+    "call, key",
+    [
+        (lambda c: mark_as_read(c, message_ids=["a", "b", "c"]), "marked_read"),
+        (lambda c: mark_as_unread(c, message_ids=["a", "b", "c"]), "marked_unread"),
+        (lambda c: move_email(c, message_ids=["a", "b", "c"], folder_id="f"), "moved"),
+        (lambda c: add_label(c, message_ids=["a", "b", "c"], label_id="l"), "labeled"),
+        (
+            lambda c: remove_label(c, message_ids=["a", "b", "c"], label_id="l"),
+            "unlabeled",
+        ),
+    ],
+    ids=["mark_as_read", "mark_as_unread", "move_email", "add_label", "remove_label"],
+)
+async def test_batch_write_reports_what_was_submitted_not_what_was_asked(call, key):
+    """The count has to come from the client's result, not the tool's argument.
+
+    A wrapper that counted its own `message_ids` would report three here, for a
+    request that reached Zoho naming one -- the blank-stripping in
+    `_update_message` is exactly where the two lists diverge. Wrapping the
+    argument would look correct in every test where nothing was stripped.
+    """
+    client = FakeZohoClient()
+    client.submitted_ids = ["a"]
+
+    result = await call(client)
+
+    assert result[key] == ["a"]
+    assert result["count"] == 1
 
 
 async def test_create_draft_delegates_to_client():

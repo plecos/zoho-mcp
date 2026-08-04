@@ -442,59 +442,81 @@ def create_server(
         )
 
     @mcp.tool(title="Mark email as read", annotations=_MAIL_UPDATE)
-    async def mark_as_read(message_ids: list[str]) -> None:
+    async def mark_as_read(message_ids: list[str]) -> dict:
         """Mark one or more emails as read, given ids from search_emails.
 
         Pass every id that needs marking in one call (e.g. all unread
         results from a single search_emails call) -- this handles the
         whole batch in one request rather than needing to be called once
         per email.
+
+        Returns {"marked_read": [ids], "count": N}. Report that count
+        rather than one you tallied: it is the number of ids submitted.
+        Zoho returns no per-message result, so it is not a confirmation
+        that each message changed state -- to verify, read them back.
         """
-        await mail_tools.mark_as_read(client, message_ids=message_ids)
+        return await mail_tools.mark_as_read(client, message_ids=message_ids)
 
     @mcp.tool(title="Mark email as unread", annotations=_MAIL_UPDATE)
-    async def mark_as_unread(message_ids: list[str]) -> None:
+    async def mark_as_unread(message_ids: list[str]) -> dict:
         """Mark one or more emails as unread, given ids from search_emails.
 
         Pass every id that needs marking in one call rather than calling
         this once per email -- it handles the whole batch in one request.
+
+        Returns {"marked_unread": [ids], "count": N} -- the number of ids
+        submitted, not a per-message confirmation. Report that count.
         """
-        await mail_tools.mark_as_unread(client, message_ids=message_ids)
+        return await mail_tools.mark_as_unread(client, message_ids=message_ids)
 
     @mcp.tool(title="Move email to a folder", annotations=_MAIL_UPDATE)
-    async def move_email(message_ids: list[str], folder_id: str) -> None:
+    async def move_email(message_ids: list[str], folder_id: str) -> dict:
         """Move one or more emails to a different folder.
 
         message_ids: email ids from a prior search_emails result. Pass
         every id that needs moving in one call rather than calling this
         once per email -- it handles the whole batch in one request.
         folder_id: the destination folder's id, from list_folders.
+
+        Returns {"moved": [ids], "count": N, "folder_id": ...} -- the
+        number of ids submitted, not a per-message confirmation. Report
+        that count.
         """
-        await mail_tools.move_email(
+        return await mail_tools.move_email(
             client, message_ids=message_ids, folder_id=folder_id
         )
 
     @mcp.tool(title="Add a label to email", annotations=_MAIL_UPDATE)
-    async def add_label(message_ids: list[str], label_id: str) -> None:
+    async def add_label(message_ids: list[str], label_id: str) -> dict:
         """Apply one label to one or more emails.
 
         message_ids: email ids from a prior search_emails result. Pass
         every id that needs labeling in one call rather than calling
         this once per email -- it handles the whole batch in one request.
         label_id: the label's id, from list_labels.
+
+        Returns {"labeled": [ids], "count": N, "label_id": ...} -- the
+        number of ids submitted, not a per-message confirmation. Report
+        that count.
         """
-        await mail_tools.add_label(client, message_ids=message_ids, label_id=label_id)
+        return await mail_tools.add_label(
+            client, message_ids=message_ids, label_id=label_id
+        )
 
     @mcp.tool(title="Remove a label from email", annotations=_MAIL_UPDATE)
-    async def remove_label(message_ids: list[str], label_id: str) -> None:
+    async def remove_label(message_ids: list[str], label_id: str) -> dict:
         """Remove one label from one or more emails.
 
         message_ids: email ids from a prior search_emails result. Pass
         every id that needs unlabeling in one call rather than calling
         this once per email -- it handles the whole batch in one request.
         label_id: the label's id, from list_labels.
+
+        Returns {"unlabeled": [ids], "count": N, "label_id": ...} -- the
+        number of ids submitted, not a per-message confirmation. Report
+        that count.
         """
-        await mail_tools.remove_label(
+        return await mail_tools.remove_label(
             client, message_ids=message_ids, label_id=label_id
         )
 

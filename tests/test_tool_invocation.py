@@ -501,6 +501,43 @@ async def test_enumeration_tool_reports_zero_rather_than_an_empty_list_alone(
     assert payload["count"] == 0
 
 
+# The five tools sharing Zoho's `updatemessage` endpoint, and the key each one
+# reports its submitted ids under.
+BATCH_WRITE_KEYS = {
+    "mark_as_read": "marked_read",
+    "mark_as_unread": "marked_unread",
+    "move_email": "moved",
+    "add_label": "labeled",
+    "remove_label": "unlabeled",
+}
+
+
+@pytest.mark.parametrize("tool", sorted(BATCH_WRITE_KEYS))
+async def test_batch_write_reports_a_count_of_the_ids_it_submitted(
+    server, clients, tool
+):
+    """A write tool returning nothing has the enumeration bug, one layer over.
+
+    These returned `None`, so a client that marked 35 emails read got `null`
+    back and had to compose "35" from the request it had just written -- the
+    same unchecked number the counted envelope exists to eliminate, and one
+    that reads as confirmation because the call succeeded.
+
+    What `count` is *not*: a per-message confirmation. Zoho's response is a
+    constant, and it says "success" for ids that don't exist
+    (docs/zoho-api-notes.md), so this counts what was submitted and accepted --
+    which is why the value comes from the client's return, not from `args`.
+    """
+    zoho, _ = clients
+    args, method = _ARGS_AND_METHOD[tool]
+    getattr(zoho, method).return_value = ["m-1", "m-2", "m-3"]
+
+    payload = json.loads((await server.call_tool(tool, args))[0].text)
+
+    assert payload[BATCH_WRITE_KEYS[tool]] == ["m-1", "m-2", "m-3"]
+    assert payload["count"] == 3
+
+
 async def test_no_registered_tool_returns_a_bare_list(server):
     """The rule tool #43 has to obey, enforced instead of remembered.
 

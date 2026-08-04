@@ -149,7 +149,7 @@ collide in both files over a line that carries no functional meaning, and until
 the batch is done you don't know whether it's a minor or a patch. Pre-1.0, a new
 tool is additive: minor slot.
 
-`0.3.0` lives in four places, and only two of them can fail loudly:
+`0.3.1` lives in five places, and only two of them can fail loudly:
 
 - [ ] `pyproject.toml` — pinned to the manifest by
       `test_the_manifest_version_matches_the_package_version`. This is also
@@ -160,9 +160,13 @@ tool is additive: minor slot.
       as soon as `pyproject.toml` changes. Nothing asks you to do it, so run
       `uv sync` after the bump rather than discovering the lockfile
       disagreeing with the package it locks.
-- [ ] `README.md` — the `dist/zoho-mcp-<version>.mcpb` smoke-test example.
-      **Nothing verifies this one**; it's a filename in prose, so it goes stale
-      silently. It's the one to check by hand.
+- [ ] `README.md` — the `dist/zoho-mcp-<version>.mcpb` smoke-test example, and
+      the `git tag` line above it. **Nothing verifies these**; they're prose, so
+      they go stale silently.
+- [ ] **This file** — the line you're reading and the `git tag` example below.
+      The checklist said "four places" while sitting in the fifth, which is the
+      failure mode it warns about everywhere else: a doc that describes the
+      release is part of the release. Also unverified.
 - [ ] `manifest.json`'s `long_description` and README's tool count ("42 tools")
       when the release adds or removes a tool. Now pinned by
       `test_the_advertised_tool_count_matches_the_tool_list`, which counts
@@ -175,7 +179,7 @@ release at something that isn't in `main`'s history.
 
 ```
 git checkout main && git pull --ff-only origin main
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.3.1 && git push origin v0.3.1
 ```
 
 `workflow_dispatch` builds and verifies without publishing, so the pipeline can

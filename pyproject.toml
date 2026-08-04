@@ -13,7 +13,11 @@ dependencies = [
     "beautifulsoup4>=4.15.0",
     "httpx>=0.28.1",
     "keyring>=25.7.0",
-    "mcp>=1.28.1",
+    # Capped at <2 because 2.0.0 deletes `mcp.server.fastmcp` outright --
+    # server.py's import fails at module load, so the cap is what the code
+    # actually supports rather than caution. Lifting it is a port to
+    # `mcp.server.mcpserver`'s MCPServer, not a version bump.
+    "mcp>=1.28.1,<2",
     "python-dotenv>=1.2.2",
     "tzdata>=2026.3",
 ]

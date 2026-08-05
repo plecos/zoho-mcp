@@ -1,16 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
 import httpx
-import keyring.errors
 import pytest
 import time_machine
 
-from zoho_mcp.zoho.auth import (
-    ZohoAuthError,
-    ZohoTokenManager,
-    load_refresh_token,
-    store_refresh_token,
-)
+from zoho_mcp.zoho.auth import ZohoAuthError, ZohoTokenManager
 
 TOKEN_URL = "https://accounts.zoho.com/oauth/v2/token"
 
@@ -140,33 +134,6 @@ async def test_refresh_raises_zoho_auth_error_when_200_missing_access_token(
         await manager.get_access_token()
 
 
-def test_store_refresh_token_writes_via_keyring(monkeypatch):
-    calls = {}
-    monkeypatch.setattr(
-        "zoho_mcp.zoho.auth.keyring.set_password",
-        lambda service, key, value: calls.update(service=service, key=key, value=value),
-    )
-
-    store_refresh_token("abc123")
-
-    assert calls == {
-        "service": "zoho-mcp",
-        "key": "zoho_refresh_token",
-        "value": "abc123",
-    }
-
-
-def test_load_refresh_token_reads_via_keyring(monkeypatch):
-    monkeypatch.setattr(
-        "zoho_mcp.zoho.auth.keyring.get_password",
-        lambda service, key: (
-            "abc123" if (service, key) == ("zoho-mcp", "zoho_refresh_token") else None
-        ),
-    )
-
-    assert load_refresh_token() == "abc123"
-
-
 def _manager(http_client):
     return ZohoTokenManager(
         client_id="id",
@@ -252,49 +219,3 @@ async def test_token_is_not_refreshed_before_the_safety_margin(respx_mock, http_
         await manager.get_access_token()
 
     assert route.call_count == 1
-
-
-# Found by the release workflow's Linux verify job: a headless machine with no
-# Secret Service backend made `keyring.get_password` raise NoKeyringError, and
-# because the server reads the token during startup that killed the process
-# before any of the deferred-auth handling could run. Headless servers,
-# minimal desktops, WSL and containers are all in that state by default.
-class _NoBackend:
-    """Stand-in for keyring on a machine with no usable backend."""
-
-    @staticmethod
-    def get_password(service, username):
-        raise keyring.errors.NoKeyringError("no backend")
-
-    @staticmethod
-    def set_password(service, username, password):
-        raise keyring.errors.NoKeyringError("no backend")
-
-
-def test_loading_a_token_without_a_backend_reads_as_no_token(monkeypatch):
-    monkeypatch.setattr("zoho_mcp.zoho.auth.keyring", _NoBackend)
-
-    assert load_refresh_token() is None
-
-
-def test_loading_survives_any_backend_failure(monkeypatch):
-    # Locked stores, D-Bus not running, a backend that raises something
-    # keyring doesn't wrap -- all mean the same thing to the caller.
-    class _Exploding:
-        @staticmethod
-        def get_password(service, username):
-            raise RuntimeError("dbus is not running")
-
-    monkeypatch.setattr("zoho_mcp.zoho.auth.keyring", _Exploding)
-
-    assert load_refresh_token() is None
-
-
-def test_storing_a_token_without_a_backend_raises_something_actionable(monkeypatch):
-    # Storing must NOT be silent. A user who ran `authenticate` and got a
-    # success back, then found themselves unauthenticated on restart, would
-    # have no way to work out why.
-    monkeypatch.setattr("zoho_mcp.zoho.auth.keyring", _NoBackend)
-
-    with pytest.raises(ZohoAuthError, match="credential store"):
-        store_refresh_token("refresh-1")

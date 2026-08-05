@@ -22,11 +22,12 @@ def env(monkeypatch):
     """Minimal viable environment, with the auth flow stubbed out.
 
     `load_env` is neutered so a developer's real .env can't leak into the
-    assertions, and the keyring lookup is stubbed so no OS credential store
-    is touched.
+    assertions, and the token comes from the environment-backed store so no
+    OS credential store is touched.
     """
     monkeypatch.setattr(server, "load_env", lambda: None)
-    monkeypatch.setattr(server, "load_refresh_token", lambda: "fake-refresh-token")
+    monkeypatch.setenv("ZOHO_TOKEN_STORE", "env")
+    monkeypatch.setenv("ZOHO_REFRESH_TOKEN", "fake-refresh-token")
     monkeypatch.setenv("ZOHO_CLIENT_ID", "id")
     monkeypatch.setenv("ZOHO_CLIENT_SECRET", "secret")
     monkeypatch.setenv("ZOHO_ACCOUNT_ID", "acct")
@@ -107,7 +108,7 @@ async def test_starts_unauthenticated_rather_than_refusing_to_start(env):
     # only way an MCPB install can be authorized at all. The error surfaces
     # per-call from get_access_token instead -- see
     # tests/zoho/test_deferred_authentication.py.
-    env.setattr(server, "load_refresh_token", lambda: None)
+    env.delenv("ZOHO_REFRESH_TOKEN")
 
     _, _, token_manager, _ = server._build_zoho_clients_from_env()
 

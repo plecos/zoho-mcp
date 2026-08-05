@@ -20,11 +20,16 @@ dependencies = [
     "mcp>=1.28.1,<2",
     "python-dotenv>=1.2.2",
     "tzdata>=2026.3",
+    # Only `zoho-mcp-http` needs it, and it arrives transitively with `mcp`
+    # anyway -- declared because server.py imports it by name, and a
+    # transitive dependency is a promise nobody made.
+    "uvicorn>=0.51.0",
 ]
 
 [project.scripts]
 zoho-mcp = "zoho_mcp.server:main"
 zoho-mcp-setup = "zoho_mcp.setup_auth:main"
+zoho-mcp-http = "zoho_mcp.server:main_http"
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]

@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contact
 
 ## Status
 
-Single-user, local stdio transport, personal-scale. It works and is in daily use, but there's no hosting, no multi-tenancy, and no auth beyond one account's OAuth token.
+Single-user and personal-scale. Local stdio is the default and the well-worn path; there's also an opt-in HTTP transport for clients that can't spawn a local process ([Running it for a phone](#running-it-for-a-phone)). Either way it's one account's OAuth token — no multi-tenancy, and no per-user authorization.
 
 ## Why not Zoho's own MCP?
 
@@ -269,8 +269,42 @@ Two more folders are missing from unscoped results, for the same reason: **Spam 
 | `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Strip the invisible Unicode padding some marketing mail uses to inflate preview text — from `get_email` bodies and from the `snippet` of every `search_emails`/`list_emails` result. Subjects are left alone; senders don't pad those, since it would look broken in any mail client. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
 | `ZOHO_CHECK_FOR_UPDATES` | `false` | Let `check_for_updates` ask GitHub's releases API whether a newer version exists. The one setting that permits an outbound call to a host other than Zoho. Exposed as a checkbox in a bundle install. See [Updating](#updating). |
 | `ZOHO_OAUTH_CALLBACK_PORT` | `8765` | Local port for the one-time OAuth redirect. |
+| `ZOHO_TOKEN_STORE` | `keyring` | Where the refresh token is read from. `keyring` is the OS credential store; `env` reads `ZOHO_REFRESH_TOKEN` instead, for hosts that have no credential store. Any other value refuses to start. |
+| `ZOHO_REFRESH_TOKEN` | — | Only read when `ZOHO_TOKEN_STORE=env`. See [Running it for a phone](#running-it-for-a-phone). |
+| `ZOHO_HTTP_AUTH_TOKEN` | — | Shared secret every HTTP request must present. **`zoho-mcp-http` refuses to start without it.** Unused by the stdio server. |
+| `ZOHO_HTTP_HOST` | `127.0.0.1` | Interface `zoho-mcp-http` binds. Loopback by default on purpose. |
+| `ZOHO_HTTP_PORT` | `8000` | Port `zoho-mcp-http` binds. |
 
 Both booleans are matched case-insensitively with surrounding whitespace ignored, so `true`, `True`, and `TRUE` all enable them. Any other value leaves them off.
+
+## Running it for a phone
+
+The Claude mobile apps can't spawn a local process, so neither the stdio server nor the MCPB bundle reaches them. What they can talk to is a remote MCP server. `zoho-mcp-http` serves the same 42 tools over streamable HTTP for that case:
+
+```bash
+ZOHO_TOKEN_STORE=env \
+ZOHO_REFRESH_TOKEN=1000.xxxx \
+ZOHO_HTTP_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+uv run zoho-mcp-http
+```
+
+**Getting the refresh token onto the host.** Run `zoho-mcp-setup` on a machine that has a browser — the consent flow needs one, and the redirect lands on `localhost`. That writes the token to *that* machine's credential store, so read it back out and move it over:
+
+```bash
+keyring get zoho-mcp zoho_refresh_token
+```
+
+Treat it like a password in transit; it doesn't expire on its own. On the host it's read-only: with `ZOHO_TOKEN_STORE=env` nothing in the process can write a token back, and the `authenticate` tool refuses immediately rather than opening a browser on a machine nobody is sitting at.
+
+**It will not start without `ZOHO_HTTP_AUTH_TOKEN`,** and callers must send it as `Authorization: Bearer <token>`. There's no default and none is generated for you — either would be a credential you didn't choose. A request without it reaches no tool.
+
+**Put TLS in front of it.** It binds loopback by default; reaching it from a phone means a tunnel (Cloudflare Tunnel, Tailscale) or a reverse proxy, and the shared secret travels in a header, so plain HTTP across a network you don't control leaks it.
+
+### What this doesn't do yet
+
+- **It isn't the OAuth flow a hosted MCP client expects.** A static bearer token is what makes the socket safe to open; a client that requires the MCP OAuth handshake needs FastMCP's `token_verifier`/`AuthSettings` seam, which this deliberately leaves alone. Check what your client accepts before deploying.
+- **It's still single-user.** One token, one mailbox, no per-caller identity. Anyone holding the shared secret is, as far as this server is concerned, you.
+- **Nothing here has run against a real phone client.** Every claim above is verified by tests and by the code; the end-to-end path — a custom connector in a Claude mobile app talking to this endpoint — is not, and per [the house rule](CLAUDE.md) about verifying against the live thing, treat it as unproven until it has.
 
 ## Development
 

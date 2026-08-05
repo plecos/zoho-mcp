@@ -289,7 +289,7 @@ CI runs all of the above on every push and PR. A separate `build-validation.yml`
 Bump `version` in both `pyproject.toml` and `manifest.json` (a test enforces that they match), then push a tag:
 
 ```bash
-git tag v0.3.1 && git push origin v0.3.1
+git tag v0.3.2 && git push origin v0.3.2
 ```
 
 `release.yml` validates the manifest, checks the version against the tag, packs the bundle, refuses to publish one containing a `.env` or a virtualenv, smoke-tests it on all three platforms, and only then creates the GitHub release with the `.mcpb` attached. `workflow_dispatch` runs everything except the publish, so the pipeline can be exercised without minting a release.
@@ -297,7 +297,7 @@ git tag v0.3.1 && git push origin v0.3.1
 To smoke-test a bundle yourself:
 
 ```bash
-uv run python scripts/smoke_bundle.py dist/zoho-mcp-0.3.1.mcpb
+uv run python scripts/smoke_bundle.py dist/zoho-mcp-0.3.2.mcpb
 ```
 
 It launches the bundle using the command its own `manifest.json` declares, so a broken `mcp_config` fails there rather than after someone installs it.

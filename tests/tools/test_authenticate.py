@@ -17,8 +17,23 @@ import pytest
 
 from zoho_mcp.tools.auth import authenticate
 from zoho_mcp.zoho.auth import SCOPES, ZohoAuthError, ZohoTokenManager
+from zoho_mcp.zoho.token_store import KeyringTokenStore, TokenStoreError
 
 TOKEN_URL = "https://accounts.zoho.com/oauth/v2/token"
+
+
+class _ReadOnlyStore:
+    """A store that cannot persist anything -- e.g. a hosted run's env var."""
+
+    @property
+    def is_writable(self) -> bool:
+        return False
+
+    def load(self) -> str | None:
+        return None
+
+    def store(self, refresh_token: str) -> None:
+        raise TokenStoreError("ZOHO_REFRESH_TOKEN is read-only")
 
 
 @pytest.fixture
@@ -39,10 +54,14 @@ def token_manager(http_client):
 
 @pytest.fixture
 def stored(monkeypatch):
-    """Capture what would have gone into the OS credential store."""
+    """Capture what would have gone into the OS credential store.
+
+    Patches the default store rather than injecting one, so these tests keep
+    exercising the path a desktop install actually takes.
+    """
     captured: list[str] = []
     monkeypatch.setattr(
-        "zoho_mcp.tools.auth.store_refresh_token", lambda token: captured.append(token)
+        KeyringTokenStore, "store", lambda self, token: captured.append(token)
     )
     return captured
 
@@ -102,6 +121,58 @@ async def test_the_token_is_both_stored_and_adopted(
     await run(token_manager, http_client)
 
     assert stored == ["refresh-abc"]
+    assert token_manager.is_authenticated is True
+
+
+async def test_a_read_only_store_is_refused_before_the_browser_opens(
+    respx_mock, token_manager, http_client
+):
+    # Ordering is the whole point. Discovering that the result can't be saved
+    # *after* a human has read a consent screen and clicked Approve wastes the
+    # consent and teaches them nothing -- and on a hosted run the browser
+    # would open on the server, where nobody is sitting.
+    route = mock_exchange(respx_mock)
+    opened: list[str] = []
+
+    with pytest.raises(ZohoAuthError, match="ZOHO_REFRESH_TOKEN"):
+        await authenticate(
+            token_manager,
+            http_client,
+            client_id="client-id",
+            client_secret="client-secret",
+            obtain_authorization_code=code_from(opened),
+            token_store=_ReadOnlyStore(),
+        )
+
+    assert opened == []
+    assert not route.called
+    assert token_manager.is_authenticated is False
+
+
+async def test_the_token_goes_to_the_injected_store(
+    respx_mock, token_manager, http_client
+):
+    mock_exchange(respx_mock, refresh_token="refresh-abc")
+    written: list[str] = []
+
+    class _Recording(_ReadOnlyStore):
+        @property
+        def is_writable(self) -> bool:
+            return True
+
+        def store(self, refresh_token: str) -> None:
+            written.append(refresh_token)
+
+    await authenticate(
+        token_manager,
+        http_client,
+        client_id="client-id",
+        client_secret="client-secret",
+        obtain_authorization_code=code_from([]),
+        token_store=_Recording(),
+    )
+
+    assert written == ["refresh-abc"]
     assert token_manager.is_authenticated is True
 
 

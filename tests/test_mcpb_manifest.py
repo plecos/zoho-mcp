@@ -162,6 +162,40 @@ def test_the_long_description_owns_up_to_the_one_non_zoho_call(manifest):
     assert "off when you install it" in long_description
 
 
+def test_the_bundle_still_only_ships_the_stdio_entry_point(manifest):
+    """The listing's "no listening socket" promise is about the *bundle*.
+
+    `zoho-mcp-http` is in the same package, so that sentence stays true only
+    because an MCPB bundle has one entry point and this is the one it names.
+    Repoint `mcp_config` at the HTTP entry point and the promise silently
+    becomes false, which is exactly the kind of change nothing else here
+    would catch.
+    """
+    args = manifest["server"]["mcp_config"]["args"]
+
+    assert manifest["server"]["entry_point"] == "src/zoho_mcp/server.py"
+    assert args[-1] == "src/zoho_mcp/server.py"
+    assert "no listening socket" in manifest["long_description"]
+
+
+def test_the_security_policy_qualifies_its_no_socket_claim():
+    """A doc claim is an invariant, and this one stopped being unconditional.
+
+    SECURITY.md said the server "runs locally over stdio -- no listening
+    socket, no hosted endpoint", which is what someone weighing this against a
+    hosted MCP option reads. Adding an HTTP transport makes that false for
+    anyone who runs it, so the prose has to name the transport and its gate as
+    long as the entry point exists.
+    """
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    security = (REPO_ROOT / "SECURITY.md").read_text(encoding="utf-8")
+
+    ships_http_transport = "zoho-mcp-http" in pyproject
+
+    assert ("zoho-mcp-http" in security) is ships_http_transport
+    assert ("ZOHO_HTTP_AUTH_TOKEN" in security) is ships_http_transport
+
+
 def test_the_advertised_tool_count_matches_the_tool_list(manifest):
     """The release checklist called this out as unverified, and it was.
 

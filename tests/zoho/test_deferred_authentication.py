@@ -15,6 +15,7 @@ import keyring.errors
 import pytest
 
 from zoho_mcp.zoho.auth import ZohoAuthError, ZohoTokenManager
+from zoho_mcp.zoho.token_store import KeyringTokenStore
 
 
 class _NoKeyringBackend:
@@ -23,6 +24,25 @@ class _NoKeyringBackend:
     @staticmethod
     def get_password(service, username):
         raise keyring.errors.NoKeyringError("no backend")
+
+
+class _FakeStore:
+    """A token store with a fixed answer, counting how often it's asked."""
+
+    def __init__(self, token: str | None) -> None:
+        self._token = token
+        self.loads = 0
+
+    @property
+    def is_writable(self) -> bool:
+        return True
+
+    def load(self) -> str | None:
+        self.loads += 1
+        return self._token
+
+    def store(self, refresh_token: str) -> None:
+        self._token = refresh_token
 
 
 TOKEN_URL = "https://accounts.zoho.com/oauth/v2/token"
@@ -34,12 +54,13 @@ async def http_client():
         yield client
 
 
-def manager(http_client, refresh_token=None):
+def manager(http_client, refresh_token=None, token_store=None):
     return ZohoTokenManager(
         client_id="id",
         client_secret="secret",
         refresh_token=refresh_token,
         http_client=http_client,
+        token_store=token_store,
     )
 
 
@@ -172,55 +193,56 @@ async def test_credentials_are_checked_before_the_missing_token(http_client):
 # unauthenticated moments earlier, went on refusing every call until it was
 # restarted. Re-reading the store before giving up costs one keyring lookup
 # on a path that was about to fail anyway.
-async def test_a_token_stored_by_another_process_is_picked_up(
-    respx_mock, http_client, monkeypatch
-):
+async def test_a_token_stored_by_another_process_is_picked_up(respx_mock, http_client):
     mock_token_endpoint(respx_mock)
-    monkeypatch.setattr(
-        "zoho_mcp.zoho.auth.load_refresh_token", lambda: "refresh-from-sibling"
-    )
-    token_manager = manager(http_client)
+    token_manager = manager(http_client, token_store=_FakeStore("refresh-from-sibling"))
 
     assert await token_manager.get_access_token() == "access-1"
     assert token_manager.is_authenticated is True
 
 
 async def test_the_store_is_only_consulted_when_there_is_no_token(
-    respx_mock, http_client, monkeypatch
+    respx_mock, http_client
 ):
     # The stored token must not override one already in hand -- that would
     # undo `set_refresh_token` after a re-authentication granting new scopes.
     mock_token_endpoint(respx_mock)
-    calls: list[int] = []
-    monkeypatch.setattr(
-        "zoho_mcp.zoho.auth.load_refresh_token",
-        lambda: calls.append(1) or "refresh-stale",
-    )
-    token_manager = manager(http_client, "refresh-current")
+    store = _FakeStore("refresh-stale")
+    token_manager = manager(http_client, "refresh-current", token_store=store)
 
     await token_manager.get_access_token()
 
-    assert calls == []
+    assert store.loads == 0
 
 
-async def test_an_empty_store_still_names_the_authenticate_tool(
-    http_client, monkeypatch
-):
-    monkeypatch.setattr("zoho_mcp.zoho.auth.load_refresh_token", lambda: None)
-
+async def test_an_empty_store_still_names_the_authenticate_tool(http_client):
     with pytest.raises(ZohoAuthError, match="authenticate"):
-        await manager(http_client).get_access_token()
+        await manager(http_client, token_store=_FakeStore(None)).get_access_token()
+
+
+@pytest.mark.parametrize("stored", ["", "   ", "\n"])
+async def test_a_blank_token_from_the_store_is_not_adopted(http_client, stored):
+    # A store that hands back whitespace must read as "no token", not as a
+    # token that Zoho will later reject with a content-free `invalid_client`.
+    with pytest.raises(ZohoAuthError, match="authenticate"):
+        await manager(http_client, token_store=_FakeStore(stored)).get_access_token()
+
+
+async def test_the_manager_defaults_to_the_os_credential_store(http_client):
+    # Nothing injected, so a desktop install keeps working exactly as before
+    # the store became pluggable.
+    assert isinstance(manager(http_client)._token_store, KeyringTokenStore)
 
 
 async def test_an_unreachable_credential_store_still_names_authenticate(
     respx_mock, http_client, monkeypatch
 ):
     # A machine with no Secret Service backend -- headless Linux, WSL, a
-    # container. `load_refresh_token` absorbs that and reports no token, so
-    # the user gets the actionable message rather than a keyring traceback.
-    # The absorbing is tested at its own level in tests/zoho/test_auth.py.
+    # container. `KeyringTokenStore.load` absorbs that and reports no token,
+    # so the user gets the actionable message rather than a keyring traceback.
+    # The absorbing is tested at its own level in tests/zoho/test_token_store.py.
     route = mock_token_endpoint(respx_mock)
-    monkeypatch.setattr("zoho_mcp.zoho.auth.keyring", _NoKeyringBackend)
+    monkeypatch.setattr("zoho_mcp.zoho.token_store.keyring", _NoKeyringBackend)
 
     with pytest.raises(ZohoAuthError, match="authenticate"):
         await manager(http_client).get_access_token()

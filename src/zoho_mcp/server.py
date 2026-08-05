@@ -151,11 +151,17 @@ def create_server(
         (or read) email, use list_emails instead, which supports a real
         status filter and pagination.
 
-        Results exclude Sent, Drafts, and Templates by default (mail
-        moved into other folders by your own rules is still included --
-        only those three are dropped). Use an explicit in:Sent (or
-        in:Drafts / in:Templates) qualifier in query to search one of
-        those specifically.
+        Results exclude Sent, Drafts, Templates, Spam and Trash by
+        default. Mail moved into other folders by your own rules is
+        still included -- only those five are dropped. Use an explicit
+        in: qualifier to search one of them specifically (in:Spam,
+        in:Trash, in:Sent, in:Templates).
+
+        Spam and Trash are dropped by Zoho itself, not by a filter here,
+        so an unscoped search is never evidence that a message doesn't
+        exist -- it may simply be sitting in one of those two. If a user
+        asks where a message went, or expects mail that isn't turning
+        up, search in:Spam and in:Trash before reporting it missing.
 
         Each result carries priority ("highest"/"high"/"normal"/"low"/
         "lowest", from the sender's own importance setting) and flag (the
@@ -192,8 +198,13 @@ def create_server(
         status (optional): "unread", "read", or "all" (default).
         folder_id (optional): restrict to one folder's id, from
         list_folders. If omitted, searches the whole mailbox and
-        excludes Sent/Drafts/Templates by default (same as
-        search_emails).
+        excludes Sent/Drafts/Templates *and Spam/Trash* by default
+        (same as search_emails) -- pass a folder_id explicitly to
+        enumerate one of those. Unread mail sitting in Spam or Trash
+        therefore does not appear in an unscoped call and is not
+        counted in it; scope to those folders by id if the user's
+        question is about the whole mailbox rather than about mail
+        they'd actually want to read.
         limit (optional): maximum results per page (1-200).
         start (optional): 1-based starting sequence number -- call again
         with start += limit to fetch the next page.
@@ -202,9 +213,13 @@ def create_server(
         count as this page's size rather than tallying the list yourself.
         Keep paging while has_more is true and add up count for a
         mailbox total; do NOT stop because a page came back with fewer
-        than limit results, since Sent/Drafts/Templates are filtered out
-        after the page is fetched and can shorten a page that has more
-        behind it.
+        than limit results. has_more is measured on the raw page before
+        filtering, so it -- not the length of the list you got back --
+        is the only end-of-results signal.
+
+        A "mailbox total" summed this way excludes Spam and Trash, per
+        folder_id above. Say so when reporting one, rather than implying
+        it covers everything.
         """
         return await mail_tools.list_emails(
             client, status=status, folder_id=folder_id, limit=limit, start=start

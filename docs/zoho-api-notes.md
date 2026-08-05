@@ -153,6 +153,48 @@ subfolders, reports type `Inbox`. That's what makes excluding
 Sent/Drafts/Templates *by type* safe — it can never accidentally catch a user's
 own folder.
 
+### Unscoped queries silently omit Spam and Trash — on **both** list APIs
+
+Neither `GET .../messages/view` without a `folderId` nor
+`GET .../messages/search` without an `in:` qualifier returns anything from Spam
+or Trash. Zoho scopes an unscoped query to received mail; nothing in the
+request says so and nothing in the response marks it.
+
+This is Zoho's behavior, not ours. `EXCLUDED_FOLDER_TYPES` is exactly
+`{Sent, Drafts, Templates}`, and Spam/Trash report `folderType` `Spam` and
+`Trash` — so `_get_excluded_folder_ids` never touches them.
+
+Verified live, and specifically distinguished from the two readings that would
+have explained it away:
+
+- **Not a recency artifact.** A 200-row unscoped `view` page spanned
+  2026-07-28 → 08-05. Spam rows from 08-05 06:50/06:28 and Trash rows from
+  08-05 03:09, 07-31 and 07-29 all fall *inside* that window and none appeared.
+- **Not "Inbox only".** That same page carried four folders — `Inbox` plus
+  three custom ones (two rule destinations and a nested subfolder), all
+  `folderType: "Inbox"`. Custom folders are included, so the exclusion is
+  Spam/Trash specifically.
+- Search behaves the same: `days_back=0` at `limit=50` returned 8 rows (so, not
+  truncation) with that day's two Spam messages absent.
+
+Both escape hatches work and are verified: `list_emails(folder_id=...)` and
+`search_emails(query="in:Spam")` each return Spam and Trash normally.
+
+#### Corollary: the Sent/Drafts/Templates filter is a no-op in `list_emails`
+
+That 200-row page came back **200 raw and 200 after filtering**, while Sent held
+messages on 08-04, 08-02 and 08-01 — inside the window. So `view` already omits
+Sent/Drafts/Templates itself, and the filter at the end of
+`ZohoClient.list_emails` removes nothing. It is load-bearing only in
+`search_emails`, which wraps the separate Search API.
+
+Two reasons it stays anyway: it fails in the safe direction if Zoho ever widens
+what `view` returns, and `has_more` is computed on the raw page *before* it, so
+the paging contract holds either way. Worth knowing mainly so the next person
+reading that filter doesn't conclude it's what excludes Spam — it isn't. This
+corollary rests on one page against one account; confirm it again before acting
+on it for any other reason.
+
 ### "Notification" is a real folder *and* a label
 
 Zoho files certain mail into a genuine `/Notification` folder (`folderType:

@@ -98,6 +98,8 @@ def mock_folder_types_endpoint(respx_mock, folder_types=None):
         "drafts-folder-id": "Drafts",
         "templates-folder-id": "Templates",
         "newsletter-folder-id": "Inbox",
+        "spam-folder-id": "Spam",
+        "trash-folder-id": "Trash",
     }
     return respx_mock.get(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/folders"
@@ -491,6 +493,73 @@ async def test_search_emails_filters_out_sent_drafts_and_templates(
     results = await zoho_client.search_emails(query="roadmap")
 
     assert {r["id"] for r in results} == {"1", "5"}
+
+
+async def test_search_emails_does_not_itself_filter_spam_or_trash(
+    respx_mock, zoho_client
+):
+    """Spam/Trash are missing from unscoped results because *Zoho* drops
+    them, not because this layer does -- see "Unscoped queries silently
+    omit Spam and Trash" in docs/zoho-api-notes.md.
+
+    Pinned because the distinction is invisible in production (both
+    mechanisms look identical from the outside: no Spam in the results)
+    and because the docstrings now assert whose behavior it is. If
+    someone "fixes" the exclusion by adding Spam/Trash to
+    EXCLUDED_FOLDER_TYPES, the docs become wrong and an explicitly
+    folder-scoped fetch starts dropping the rows it was asked for.
+    """
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    _raw_email(message_id="1", folder_id="1122334455"),
+                    _raw_email(message_id="6", folder_id="spam-folder-id"),
+                    _raw_email(message_id="7", folder_id="trash-folder-id"),
+                ]
+            },
+        )
+    )
+
+    results = await zoho_client.search_emails(query="roadmap")
+
+    assert {r["id"] for r in results} == {"1", "6", "7"}
+
+
+async def test_list_emails_does_not_itself_filter_spam_or_trash(
+    respx_mock, zoho_client
+):
+    """Same invariant on the List API's whole-mailbox path.
+
+    ``list_emails`` runs the folder filter whenever ``folder_id`` is
+    None, so this is the call that would silently start dropping rows if
+    Spam/Trash were added to the excluded types.
+    """
+    mock_pacific_accounts_endpoint(respx_mock)
+    mock_folder_types_endpoint(respx_mock)
+    respx_mock.get(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/view"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    _raw_email(message_id="1", folder_id="1122334455"),
+                    _raw_email(message_id="6", folder_id="spam-folder-id"),
+                    _raw_email(message_id="7", folder_id="trash-folder-id"),
+                ]
+            },
+        )
+    )
+
+    emails, _ = await zoho_client.list_emails(status="unread")
+
+    assert {e["id"] for e in emails} == {"1", "6", "7"}
 
 
 async def test_search_emails_skips_folder_filter_when_query_scopes_a_folder(

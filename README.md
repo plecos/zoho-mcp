@@ -255,6 +255,8 @@ Leave sending off unless you specifically want an assistant able to email people
 
 One practical note: drafts don't show up in `search_emails` at all (a Zoho quirk, not a bug here). Find them with `list_emails(folder_id=...)` using the Drafts folder id from `list_folders`.
 
+Two more folders are missing from unscoped results, for the same reason: **Spam and Trash** are dropped by Zoho from any `search_emails` query without an `in:` qualifier and any `list_emails` call without a `folder_id` — on top of the Sent/Drafts/Templates this server filters itself. So "no unread mail" from an unscoped call means no unread mail *you'd want to read*, and an unread total summed by paging `list_emails` doesn't count Spam or Trash. Reach either with `search_emails(query="in:Spam")` or `list_emails(folder_id=...)`. Details and the live verification are in [docs/zoho-api-notes.md](docs/zoho-api-notes.md).
+
 ## Configuration
 
 `ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET` are required (a bundle install collects them in its settings form instead of `.env`). Everything else is optional:

@@ -349,6 +349,11 @@ Templates by default — documented in the [README](../README.md#tools) — beca
 general mailbox search that surfaces your own outbound mail is almost never what
 was meant. Theirs returns it, and the folder id is the only signal.
 
+(Spam and Trash are absent from both projects' unscoped results, but that one
+isn't a design choice either of us made — Zoho's own APIs drop them. Worth
+separating from the comparison above, since it's the vendor and not the
+wrapper.)
+
 ## What we still could not verify
 
 Stated plainly, because this project's first rule is that documentation isn't

@@ -31,9 +31,12 @@ async def search_emails(
         subject, date, snippet, folder_id, read (bool). ``date`` is in
         the mailbox's own local timezone, not UTC -- see
         ``ZohoClient._get_mailbox_timezone``. Excludes Sent/Drafts/
-        Templates by default (see ``ZohoClient._get_excluded_folder_ids``);
-        use an explicit ``in:`` qualifier in ``query`` to search one of
-        those folders instead. ``count`` is how many matched this call:
+        Templates (see ``ZohoClient._get_excluded_folder_ids``) and also
+        Spam/Trash, which Zoho's Search API drops from any query with no
+        ``in:`` qualifier -- see "Unscoped queries silently omit Spam and
+        Trash" in docs/zoho-api-notes.md. Use an explicit ``in:``
+        qualifier in ``query`` to search any of the five.
+        ``count`` is how many matched this call:
         Search has no pagination and returns the top ``limit`` by
         recency, so a ``count`` equal to ``limit`` means results were
         very likely cut off -- use ``list_emails`` to enumerate
@@ -68,7 +71,9 @@ async def list_emails(
         status: "unread", "read", or "all" (default).
         folder_id: restrict to one folder's id, from list_folders. If
             omitted, searches the whole mailbox and excludes Sent/
-            Drafts/Templates by default (same as search_emails).
+            Drafts/Templates *and* Spam/Trash by default (same as
+            search_emails) -- the latter two dropped by Zoho rather
+            than by this layer.
         limit: maximum results per page (1-200).
         start: 1-based starting sequence number -- call again with
             start += limit to fetch the next page, repeating while
@@ -77,10 +82,11 @@ async def list_emails(
     Returns:
         ``{"emails": [...], "count": int, "has_more": bool}``. Summaries
         have the same shape as search_emails. ``count`` is this page's
-        size, and it is *not* an end-of-results signal: Sent/Drafts/
-        Templates are filtered out after the page is fetched, so a short
-        page can still be followed by more. Page while ``has_more`` is
-        True, and sum ``count`` across pages for a mailbox total.
+        size, and it is *not* an end-of-results signal: filtering runs
+        after the page is fetched, so a short page can still be followed
+        by more. Page while ``has_more`` is True (it's measured on the
+        raw page), and sum ``count`` across pages for a mailbox total --
+        one that excludes Spam and Trash, per ``folder_id`` above.
 
     Raises:
         ZohoAPIError: if status isn't one of "read"/"unread"/"all",

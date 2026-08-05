@@ -346,6 +346,45 @@ differing only by `mode` plus mode-specific extras (`destfolderId`,
 Zoho's docs are internally inconsistent on `labelId`'s shape — the apply sample
 shows an array, the remove sample a single value. An array works for both.
 
+#### Its success response says nothing about the messages
+
+Verified live, 2026-08-04, by issuing each case against a real mailbox and
+reading the raw body (the docs describe the request only, and say nothing about
+the response):
+
+| request | HTTP | body |
+| --- | --- | --- |
+| one real id, `markAsRead` | 200 | `{"status":{"code":200,"description":"success"}}` |
+| two real ids | 200 | *byte-identical to above* |
+| **one nonexistent id** | **200** | *byte-identical to above* |
+| **one real + one nonexistent** | **200** | *byte-identical to above* |
+| **`"messageId": []`** | **200** | *byte-identical to above* |
+| `"mode": "markAsBogus"` | 400 | `{"status":{"code":400,…},"data":{"moreInfo":"Invalid mode"}}` |
+| `moveMessage` to a nonexistent folder | 500 | `{"status":{"code":500,…},"data":{"moreInfo":"An internal error occurred"}}` |
+
+Two consequences, and they pull in opposite directions:
+
+- **The 200 body is a constant.** It is the same bytes for one message as for
+  fifty, so there is nothing in it to parse, count, or report. Reading it would
+  add a dependency on a field that carries no information — the case for
+  discarding it, which `_update_message` does.
+- **Unknown ids are accepted silently**, in exactly the shape this vendor's
+  other endpoints do. A batch that is entirely garbage is indistinguishable
+  from one that is entirely real, so `mark_as_read` **cannot confirm any
+  individual message changed state** — only that Zoho accepted the request.
+  An empty array is likewise a "success", which is why the client's own
+  `message_ids must contain at least one message id` check has to stay: Zoho
+  will not raise that for us.
+
+The mode itself *is* validated (400, distinct `moreInfo`), so a wrong `mode`
+fails loudly while a wrong `messageId` does not. This is the general pattern
+here: vocabulary is checked, referents are not.
+
+Consequently the write tools return the ids they submitted, not a
+confirmation — see `_update_message` and the `counted()` envelopes in
+`tools/mail.py`. Verifying that a message really changed state needs a separate
+read; there is no per-id result to be had from this endpoint.
+
 ### Forwarding must go through `action=forward`, not a recomposed body
 
 `POST .../messages/{id}` takes `action`: `reply`, `replyall`, `forward`. Zoho

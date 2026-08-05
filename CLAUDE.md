@@ -129,6 +129,10 @@ If a piece of math (timezone conversion, date-boundary resolution, unit conversi
 
 Counting is that same math. Every enumeration tool returns `{"<domain>": [...], "count": N}` via `tools/envelope.py`'s `counted()` — never a bare list. This came from a live session that reported "21 unread emails" for a list of 20: with only a list in the payload, the total is something the model composes while writing prose rather than something it derives, and a fabricated number in the right shape reads as correct. `test_no_registered_tool_returns_a_bare_list` enforces the shape for the next tool, since a convention that lives only in the other 16 wrappers is one copy-paste from lapsing.
 
+**A write tool returning nothing has the same bug, and hides it better.** The five batch writes over Zoho's `updatemessage` returned `None`, so a client that marked 35 emails read got `null` back and had to compose "35" from the request it had just written — an unchecked number, published next to a call that plainly succeeded. They now return `{"marked_read": [...ids], "count": N}` through the same `counted()`. Whenever a tool's answer is `None`, ask what the model will say afterwards and where that sentence's numbers come from.
+
+What that `count` may claim is bounded by what the vendor actually tells us, which here is nothing: `updatemessage` returns a constant success body and says "success" for ids that don't exist, so the count is **ids submitted**, not messages confirmed. That's why the value is the client's return rather than the wrapper's own argument — the two differ once blank ids are stripped, and the wrapper counting its own input would be the fabricated-number bug wearing the fix's clothes. When you add a field to stop a model from inventing a number, name the thing you can actually stand behind.
+
 Two things about `count` that its neighbors don't share: it describes the page it ships with, never a mailbox total, and it is **not** an end-of-results signal. `list_emails` filters Sent/Drafts/Templates out *after* fetching a page, so a short page can still have more behind it — which is why `has_more` is computed from the raw page, before that filter, and why paging must follow `has_more` rather than `count < limit`. Whenever a result is filtered after the window that produced it, the surviving count stops answering "was that everything?" and something else has to.
 
 ## Git workflow
@@ -145,7 +149,7 @@ collide in both files over a line that carries no functional meaning, and until
 the batch is done you don't know whether it's a minor or a patch. Pre-1.0, a new
 tool is additive: minor slot.
 
-`0.3.0` lives in four places, and only two of them can fail loudly:
+`0.3.1` lives in five places, and only two of them can fail loudly:
 
 - [ ] `pyproject.toml` — pinned to the manifest by
       `test_the_manifest_version_matches_the_package_version`. This is also
@@ -156,9 +160,13 @@ tool is additive: minor slot.
       as soon as `pyproject.toml` changes. Nothing asks you to do it, so run
       `uv sync` after the bump rather than discovering the lockfile
       disagreeing with the package it locks.
-- [ ] `README.md` — the `dist/zoho-mcp-<version>.mcpb` smoke-test example.
-      **Nothing verifies this one**; it's a filename in prose, so it goes stale
-      silently. It's the one to check by hand.
+- [ ] `README.md` — the `dist/zoho-mcp-<version>.mcpb` smoke-test example, and
+      the `git tag` line above it. **Nothing verifies these**; they're prose, so
+      they go stale silently.
+- [ ] **This file** — the line you're reading and the `git tag` example below.
+      The checklist said "four places" while sitting in the fifth, which is the
+      failure mode it warns about everywhere else: a doc that describes the
+      release is part of the release. Also unverified.
 - [ ] `manifest.json`'s `long_description` and README's tool count ("42 tools")
       when the release adds or removes a tool. Now pinned by
       `test_the_advertised_tool_count_matches_the_tool_list`, which counts
@@ -171,7 +179,7 @@ release at something that isn't in `main`'s history.
 
 ```
 git checkout main && git pull --ff-only origin main
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.3.1 && git push origin v0.3.1
 ```
 
 `workflow_dispatch` builds and verifies without publishing, so the pipeline can

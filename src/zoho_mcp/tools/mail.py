@@ -333,7 +333,7 @@ async def send_email(
     )
 
 
-async def mark_as_read(client: ZohoClient, message_ids: list[str]) -> None:
+async def mark_as_read(client: ZohoClient, message_ids: list[str]) -> dict:
     """Mark one or more emails as read in a single request.
 
     Args:
@@ -343,14 +343,21 @@ async def mark_as_read(client: ZohoClient, message_ids: list[str]) -> None:
             this once per email -- Zoho's API handles the whole batch
             in a single request.
 
+    Returns:
+        ``{"marked_read": [ids], "count": N}``, where the ids are the ones
+        submitted to Zoho -- which is what the count describes, and all it
+        describes. Zoho reports no per-message result (see
+        docs/zoho-api-notes.md), so this is not a confirmation that N
+        messages changed state.
+
     Raises:
         ZohoAPIError: if message_ids is empty, or the Zoho Mail API
             rejects or fails the request.
     """
-    await client.mark_as_read(message_ids=message_ids)
+    return counted("marked_read", await client.mark_as_read(message_ids=message_ids))
 
 
-async def mark_as_unread(client: ZohoClient, message_ids: list[str]) -> None:
+async def mark_as_unread(client: ZohoClient, message_ids: list[str]) -> dict:
     """Mark one or more emails as unread in a single request.
 
     Args:
@@ -360,16 +367,22 @@ async def mark_as_unread(client: ZohoClient, message_ids: list[str]) -> None:
             this once per email -- Zoho's API handles the whole batch
             in a single request.
 
+    Returns:
+        ``{"marked_unread": [ids], "count": N}`` -- see ``mark_as_read``
+        for what that count does and doesn't assert.
+
     Raises:
         ZohoAPIError: if message_ids is empty, or the Zoho Mail API
             rejects or fails the request.
     """
-    await client.mark_as_unread(message_ids=message_ids)
+    return counted(
+        "marked_unread", await client.mark_as_unread(message_ids=message_ids)
+    )
 
 
 async def move_email(
     client: ZohoClient, message_ids: list[str], folder_id: str
-) -> None:
+) -> dict:
     """Move one or more emails to a different folder in a single request.
 
     Args:
@@ -380,14 +393,22 @@ async def move_email(
             in a single request.
         folder_id: the destination folder's id, from list_folders.
 
+    Returns:
+        ``{"moved": [ids], "count": N, "folder_id": ...}`` -- see
+        ``mark_as_read`` for what that count does and doesn't assert.
+
     Raises:
         ZohoAPIError: if message_ids is empty, or the Zoho Mail API
             rejects or fails the request.
     """
-    await client.move_email(message_ids=message_ids, folder_id=folder_id)
+    return counted(
+        "moved",
+        await client.move_email(message_ids=message_ids, folder_id=folder_id),
+        folder_id=folder_id,
+    )
 
 
-async def add_label(client: ZohoClient, message_ids: list[str], label_id: str) -> None:
+async def add_label(client: ZohoClient, message_ids: list[str], label_id: str) -> dict:
     """Apply one label to one or more emails in a single request.
 
     Args:
@@ -398,16 +419,24 @@ async def add_label(client: ZohoClient, message_ids: list[str], label_id: str) -
             in a single request.
         label_id: the label's id, from list_labels.
 
+    Returns:
+        ``{"labeled": [ids], "count": N, "label_id": ...}`` -- see
+        ``mark_as_read`` for what that count does and doesn't assert.
+
     Raises:
         ZohoAPIError: if message_ids is empty, or the Zoho Mail API
             rejects or fails the request.
     """
-    await client.add_label(message_ids=message_ids, label_id=label_id)
+    return counted(
+        "labeled",
+        await client.add_label(message_ids=message_ids, label_id=label_id),
+        label_id=label_id,
+    )
 
 
 async def remove_label(
     client: ZohoClient, message_ids: list[str], label_id: str
-) -> None:
+) -> dict:
     """Remove one label from one or more emails in a single request.
 
     Args:
@@ -418,11 +447,19 @@ async def remove_label(
             batch in a single request.
         label_id: the label's id, from list_labels.
 
+    Returns:
+        ``{"unlabeled": [ids], "count": N, "label_id": ...}`` -- see
+        ``mark_as_read`` for what that count does and doesn't assert.
+
     Raises:
         ZohoAPIError: if message_ids is empty, or the Zoho Mail API
             rejects or fails the request.
     """
-    await client.remove_label(message_ids=message_ids, label_id=label_id)
+    return counted(
+        "unlabeled",
+        await client.remove_label(message_ids=message_ids, label_id=label_id),
+        label_id=label_id,
+    )
 
 
 async def list_signatures(client: ZohoClient) -> dict:

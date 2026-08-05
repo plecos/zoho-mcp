@@ -1714,7 +1714,10 @@ class ZohoClient:
                 If omitted, searches the whole mailbox and excludes
                 Sent/Drafts/Templates by default (same as
                 ``search_emails``) -- pass a folder_id explicitly to
-                include one of those.
+                include one of those. Zoho additionally omits Spam and
+                Trash from any ``folderId``-less call, which no filter
+                here does or can undo; see "Unscoped queries silently
+                omit Spam and Trash" in docs/zoho-api-notes.md.
             limit: maximum number of results per page (1-200).
             start: 1-based starting sequence number, for paging past the
                 first ``limit`` results (e.g. ``start=21`` with
@@ -1726,6 +1729,14 @@ class ZohoClient:
             filter below -- once that filter has run, a returned list
             shorter than ``limit`` no longer means the mailbox is
             exhausted, so length is not a usable end-of-results signal.
+
+            That filter is, as of the live check recorded in the notes,
+            a no-op on this endpoint: ``view`` already omits those three
+            itself, so it has nothing left to remove. It stays because
+            it fails in the safe direction if Zoho widens what ``view``
+            returns, and computing ``has_more`` ahead of it keeps the
+            paging contract true either way. It is *not* what excludes
+            Spam and Trash -- that's Zoho, above.
 
         Raises:
             ZohoAPIError: if ``status`` isn't one of "read"/"unread"/

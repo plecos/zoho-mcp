@@ -14,6 +14,7 @@ access-vs-refresh distinction -- and turning every joserfc failure into one
 """
 
 import json
+import os
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -28,6 +29,14 @@ from joserfc.jwt import JWTClaimsRegistry
 # Verification is pinned to this one algorithm. Accepting a set would reopen
 # the downgrade the `alg: none` test guards against.
 _ALGORITHM = "HS256"
+
+# RFC 7518 requires an HS256 key at least as large as the hash output (256
+# bits / 32 bytes); a shorter one is weak, not merely non-standard. The upper
+# bound is a sanity guard: HMAC folds any key past the 64-byte block size down
+# to that size, so a much longer one buys no strength and is almost always a
+# paste mistake (a whole file, a PEM blob).
+MIN_SIGNING_KEY_BYTES = 32
+MAX_SIGNING_KEY_BYTES = 512
 
 ACCESS_TOKEN_USE = "access"
 REFRESH_TOKEN_USE = "refresh"
@@ -91,8 +100,10 @@ class TokenSigner:
         """Build a signer.
 
         Args:
-            signing_key: the HS256 secret. Must be non-blank; a short or empty
-                key is the one construction-time error worth failing on.
+            signing_key: the HS256 secret. Must be non-blank and between
+                ``MIN_SIGNING_KEY_BYTES`` and ``MAX_SIGNING_KEY_BYTES`` bytes;
+                a weak or malformed key is the one construction-time error
+                worth failing on.
             issuer: the ``iss`` this server stamps and demands back.
             audience: the ``aud`` -- this server's own resource URL, so a token
                 minted for a different resource can't be replayed here
@@ -102,10 +113,19 @@ class TokenSigner:
                 depends on it outliving the access tokens issued beside it.
 
         Raises:
-            TokenError: if ``signing_key`` is blank.
+            TokenError: if ``signing_key`` is blank or outside the length
+                bounds for HS256.
         """
         if not signing_key or not signing_key.strip():
             raise TokenError("A blank signing key cannot sign or verify tokens")
+        # Measured in bytes, not characters: HMAC consumes the encoded key, and
+        # a non-ASCII passphrase has more bytes than characters.
+        key_bytes = len(signing_key.encode("utf-8"))
+        if not MIN_SIGNING_KEY_BYTES <= key_bytes <= MAX_SIGNING_KEY_BYTES:
+            raise TokenError(
+                f"Signing key must be between {MIN_SIGNING_KEY_BYTES} and "
+                f"{MAX_SIGNING_KEY_BYTES} bytes for HS256; got {key_bytes}"
+            )
         self._key = OctKey.import_key(signing_key)
         self._issuer = issuer
         self._audience = audience
@@ -158,7 +178,11 @@ class TokenSigner:
         """
         try:
             decoded = jwt.decode(token, self._key, algorithms=[_ALGORITHM])
-        except (JoseError, ValueError) as e:
+        except JoseError as e:
+            # Every malformed/tampered/wrong-algorithm input joserfc sees is a
+            # JoseError. A non-string token would raise TypeError instead, but
+            # that is caller misuse (the gate only ever passes a str) and
+            # should surface as the bug it is rather than be masked here.
             raise TokenError(f"Token could not be decoded or verified: {e}") from e
 
         claims = decoded.claims
@@ -197,9 +221,15 @@ def load_or_create_signing_key(path: Path) -> str:
     The key is auto-generated (the chosen no-hoop default: an operator sets no
     key of their own) and persisted, because a key that changed on restart
     would silently invalidate every token already issued -- forcing Claude to
-    re-authorize on every process bounce. It is written ``0600``: this is the
-    secret that forges access to every tool, so it must not be readable by
-    other users on a shared host.
+    re-authorize on every process bounce. It is created ``0600`` atomically:
+    this is the secret that forges access to every tool, so it must never be
+    readable by other users on a shared host, not even for the instant between
+    creating the file and restricting it.
+
+    Concurrent first starts are tolerated. Two server processes launched
+    together -- the documented "two clients meant two server processes"
+    case -- can both find the file absent and both try to create it; the one
+    that loses the exclusive create reads the winner's key instead of failing.
 
     Args:
         path: JSON file to read the key from, or create it at.
@@ -208,17 +238,22 @@ def load_or_create_signing_key(path: Path) -> str:
         The signing key.
     """
     if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data[_SIGNING_KEY_FIELD]
+        return _read_signing_key(path)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     key = secrets.token_urlsafe(32)
-    # Create with 0600 from the start rather than writing then chmod-ing, so
-    # the secret is never briefly world-readable between the two steps.
-    fd = path.open("x", encoding="utf-8")
     try:
-        path.chmod(0o600)
-        json.dump({_SIGNING_KEY_FIELD: key}, fd)
-    finally:
-        fd.close()
+        # O_EXCL makes creation fail rather than clobber if another process got
+        # here first; the 0o600 mode is applied at creation, so the file is
+        # never momentarily group/world-readable (umask can only remove bits,
+        # and 0o600 already has none to spare).
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return _read_signing_key(path)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({_SIGNING_KEY_FIELD: key}, f)
     return key
+
+
+def _read_signing_key(path: Path) -> str:
+    return json.loads(path.read_text(encoding="utf-8"))[_SIGNING_KEY_FIELD]

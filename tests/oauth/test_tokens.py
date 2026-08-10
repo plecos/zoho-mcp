@@ -15,6 +15,7 @@ import base64
 import json
 import stat
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 import time_machine
@@ -23,6 +24,8 @@ from joserfc.jwk import OctKey
 
 from zoho_mcp.oauth.tokens import (
     ACCESS_TOKEN_USE,
+    MAX_SIGNING_KEY_BYTES,
+    MIN_SIGNING_KEY_BYTES,
     REFRESH_TOKEN_USE,
     TokenError,
     TokenInfo,
@@ -229,6 +232,32 @@ def test_a_blank_signing_key_is_refused_at_construction():
         signer(signing_key="   ")
 
 
+def test_a_signing_key_below_the_minimum_length_is_refused():
+    # RFC 7518: an HS256 key must be at least as large as the hash output
+    # (256 bits / 32 bytes). A shorter one is a weak key, not a valid one.
+    with pytest.raises(TokenError):
+        signer(signing_key="x" * (MIN_SIGNING_KEY_BYTES - 1))
+
+
+def test_a_signing_key_at_the_minimum_length_is_accepted():
+    s = signer(signing_key="x" * MIN_SIGNING_KEY_BYTES)
+
+    assert s.verify(s.mint_access_token("owner", ["a"])).subject == "owner"
+
+
+def test_a_signing_key_at_the_maximum_length_is_accepted():
+    s = signer(signing_key="x" * MAX_SIGNING_KEY_BYTES)
+
+    assert s.verify(s.mint_access_token("owner", ["a"])).subject == "owner"
+
+
+def test_a_signing_key_above_the_maximum_length_is_refused():
+    # Past HMAC's block size a longer key adds no strength, so an oversized one
+    # is a paste mistake (a whole file, a PEM blob) worth catching early.
+    with pytest.raises(TokenError):
+        signer(signing_key="x" * (MAX_SIGNING_KEY_BYTES + 1))
+
+
 # --- the signing key on disk -----------------------------------------------
 
 
@@ -286,3 +315,19 @@ def test_the_key_file_is_json_with_the_key_under_a_named_field(tmp_path):
 
     data = json.loads(path.read_text())
     assert data["signing_key"] == key
+
+
+def test_a_process_that_loses_the_create_race_reads_the_winners_key(
+    tmp_path, monkeypatch
+):
+    # The documented "two server processes" scenario: both check for the file
+    # before either writes it, so the loser still tries to create and must
+    # recover by reading the winner's key rather than crashing on the
+    # exclusive-create collision. Simulated by forcing the create path even
+    # though the file already exists.
+    path = tmp_path / "signing_key.json"
+    winner = load_or_create_signing_key(path)
+
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+
+    assert load_or_create_signing_key(path) == winner

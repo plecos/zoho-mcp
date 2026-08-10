@@ -11,10 +11,13 @@ through it, then the grants and token generation, then assembly.
 """
 
 import hmac
+from typing import Any
 
 from authlib.oauth2.rfc6749 import ClientMixin
+from authlib.oauth2.rfc6750 import BearerTokenGenerator
 
-from zoho_mcp.oauth.store import RegisteredClient
+from zoho_mcp.oauth.store import RefreshTokenStore, RegisteredClient
+from zoho_mcp.oauth.tokens import REFRESH_TOKEN_USE, TokenSigner
 
 # The single scope this server grants for now. Kept as a tuple so widening to
 # per-tool scopes later is a data change, not a shape change.
@@ -78,3 +81,49 @@ class AuthlibClient(ClientMixin):
             return ""
         granted = [s for s in scope.split() if s in self._supported_scopes]
         return " ".join(granted)
+
+
+def build_token_generator(
+    signer: TokenSigner, access_ttl_seconds: int
+) -> BearerTokenGenerator:
+    """Wire our JWT signer into Authlib's bearer-token generator.
+
+    Authlib calls the two generators with ``(client, grant_type, user, scope)``
+    when issuing a token; ``user`` is whatever the grant's ``authenticate_user``
+    returned (the operator subject), and ``scope`` is the granted, space-joined
+    scope. We turn those into our own signed JWTs -- the tokens stay stateless
+    and this stays the only place minting is wired to the OAuth flow.
+    """
+
+    def access(client: Any, grant_type: str, user: str, scope: str) -> str:
+        return signer.mint_access_token(user, scope.split() if scope else [])
+
+    def refresh(client: Any, grant_type: str, user: str, scope: str) -> str:
+        return signer.mint_refresh_token(user, scope.split() if scope else [])
+
+    def expires(client: Any, grant_type: str) -> int:
+        return access_ttl_seconds
+
+    return BearerTokenGenerator(access, refresh, expires)
+
+
+def record_issued_refresh_token(
+    store: RefreshTokenStore, signer: TokenSigner, token: dict, client_id: str
+) -> None:
+    """Record a freshly issued refresh token as the client's current one.
+
+    Called from ``save_token`` -- the one hook every issued token passes
+    through, whether from the initial code exchange or a later refresh -- so
+    the rotation ledger is advanced in exactly one place. Recording the new
+    ``jti`` is also what strands the previous one: :meth:`RefreshTokenStore.
+    remember` overwrites the slot, so the old refresh token stops being
+    current the instant a new one is minted.
+
+    A token dict without a refresh token (a grant issued without rotation) is a
+    no-op.
+    """
+    refresh_token = token.get("refresh_token")
+    if not refresh_token:
+        return
+    info = signer.verify(refresh_token, expect_use=REFRESH_TOKEN_USE)
+    store.remember(client_id, info.jti, info.expires_at)

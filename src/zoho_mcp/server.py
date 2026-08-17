@@ -9,6 +9,7 @@ environment/keyring config and runs the server over stdio.
 """
 
 import os
+from pathlib import Path
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -21,6 +22,14 @@ from zoho_mcp.http_app import (
     build_http_app,
     require_auth_token,
 )
+from zoho_mcp.oauth.asgi import MCP_PATH, build_oauth_app
+from zoho_mcp.oauth.server import create_authorization_server
+from zoho_mcp.oauth.store import (
+    AuthorizationCodeStore,
+    ClientStore,
+    RefreshTokenStore,
+)
+from zoho_mcp.oauth.tokens import TokenSigner, load_or_create_signing_key
 from zoho_mcp.releases import ReleaseChecker, installed_version
 from zoho_mcp.tools import auth as auth_tools
 from zoho_mcp.tools import bookmarks as bookmarks_tools
@@ -1183,6 +1192,105 @@ def main() -> None:
     _build_server_from_env().run(transport="stdio")
 
 
+AUTH_MODE_VAR = "ZOHO_HTTP_AUTH_MODE"
+OAUTH_ISSUER_VAR = "ZOHO_OAUTH_ISSUER"
+OAUTH_OPERATOR_PASSWORD_VAR = "ZOHO_OAUTH_OPERATOR_PASSWORD"
+OAUTH_STATE_DIR_VAR = "ZOHO_OAUTH_STATE_DIR"
+
+
+def _http_port() -> int:
+    raw = os.environ.get("ZOHO_HTTP_PORT", "8000").strip()
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"ZOHO_HTTP_PORT is set to {raw!r}, which is not a port number."
+        ) from e
+
+
+def _build_oauth_app_from_env() -> ASGIApp:
+    """Build the OAuth-mode app, validating its settings before building anything.
+
+    The issuer and operator passphrase are checked first: there is no point
+    creating a signing key, opening the stores and registering 42 tools only to
+    discover the server can't identify itself or gate its consent page. Neither
+    has a safe default -- the issuer is the deployment's own public URL, and a
+    built-in passphrase would be a published one.
+
+    Raises:
+        ValueError: if ``ZOHO_OAUTH_ISSUER`` is missing or not an https URL
+            (http is allowed only for localhost testing), or if
+            ``ZOHO_OAUTH_OPERATOR_PASSWORD`` is missing or blank.
+    """
+    issuer = os.environ.get(OAUTH_ISSUER_VAR, "").strip()
+    if not issuer:
+        raise ValueError(
+            f"{OAUTH_ISSUER_VAR} is not set. OAuth mode needs this server's own "
+            f"public URL (e.g. https://mail.example.com) to name itself in its "
+            f"discovery metadata and tokens."
+        )
+    if not (
+        issuer.startswith("https://")
+        or issuer.startswith("http://localhost")
+        or issuer.startswith("http://127.0.0.1")
+    ):
+        raise ValueError(
+            f"{OAUTH_ISSUER_VAR} must be an https URL -- Claude's connector "
+            f"requires it -- with http allowed only for localhost testing; "
+            f"got {issuer!r}."
+        )
+    password = os.environ.get(OAUTH_OPERATOR_PASSWORD_VAR, "")
+    if not password.strip():
+        raise ValueError(
+            f"{OAUTH_OPERATOR_PASSWORD_VAR} is not set. It is the passphrase you "
+            f"enter to approve a connection on the consent page; without it "
+            f"anyone reaching the page could authorize access."
+        )
+
+    state_dir = Path(
+        os.environ.get(OAUTH_STATE_DIR_VAR, "").strip()
+        or Path.home() / ".zoho-mcp" / "oauth"
+    )
+    signer = TokenSigner(
+        signing_key=load_or_create_signing_key(state_dir / "signing_key.json"),
+        issuer=issuer,
+        audience=issuer + MCP_PATH,
+    )
+    authorization_server = create_authorization_server(
+        signer=signer,
+        client_store=ClientStore(state_dir / "clients.json"),
+        code_store=AuthorizationCodeStore(),
+        refresh_store=RefreshTokenStore(state_dir / "refresh_tokens.json"),
+    )
+    return build_oauth_app(
+        _build_server_from_env(),
+        server=authorization_server,
+        signer=signer,
+        issuer=issuer,
+        operator_password=password,
+    )
+
+
+def _build_hosted_app(mode: str) -> ASGIApp:
+    """Build the app for the chosen auth mode, failing fast on a bad setting.
+
+    ``bearer`` (the default) gates on a shared secret -- the smallest thing
+    that makes a single-user endpoint safe to expose. ``oauth`` runs the
+    self-contained authorization server so a client that only speaks OAuth,
+    such as Claude's phone connector, can obtain a token.
+    """
+    if mode == "bearer":
+        auth_token = require_auth_token(os.environ.get(AUTH_TOKEN_VAR, ""))
+        return build_http_app(_build_server_from_env(), auth_token=auth_token)
+    if mode == "oauth":
+        return _build_oauth_app_from_env()
+    raise ValueError(
+        f"{AUTH_MODE_VAR} is set to {mode!r}, which is not an auth mode. "
+        f"Use 'bearer' (a shared secret, the default) or 'oauth' (the "
+        f"self-contained authorization server)."
+    )
+
+
 def main_http() -> None:
     """Serve over streamable HTTP, for clients that can't spawn a local process.
 
@@ -1192,26 +1300,17 @@ def main_http() -> None:
     the moment a firewall rule went missing.
 
     Raises:
-        ValueError: if ``ZOHO_HTTP_AUTH_TOKEN`` is unset or blank, or
-            ``ZOHO_HTTP_PORT`` isn't a number. Both refuse to start rather
-            than degrade -- an unauthenticated mailbox on a socket is worse
-            than a server that didn't come up.
+        ValueError: if the chosen auth mode's required settings are missing,
+            or ``ZOHO_HTTP_PORT`` isn't a number. Every one refuses to start
+            rather than degrade -- an unauthenticated mailbox on a socket is
+            worse than a server that didn't come up.
     """
     load_env()
-    # Both settings are validated before anything is built: there is nothing
-    # to gain by opening an http client and registering 42 tools first, only
-    # a confusing order of failures.
-    auth_token = require_auth_token(os.environ.get(AUTH_TOKEN_VAR, ""))
-    raw_port = os.environ.get("ZOHO_HTTP_PORT", "8000").strip()
-    try:
-        port = int(raw_port)
-    except ValueError as e:
-        raise ValueError(
-            f"ZOHO_HTTP_PORT is set to {raw_port!r}, which is not a port number."
-        ) from e
-
-    app = build_http_app(_build_server_from_env(), auth_token=auth_token)
-    _serve(app, os.environ.get("ZOHO_HTTP_HOST", "127.0.0.1").strip(), port)
+    mode = os.environ.get(AUTH_MODE_VAR, "bearer").strip().lower()
+    host = os.environ.get("ZOHO_HTTP_HOST", "127.0.0.1").strip()
+    port = _http_port()
+    app = _build_hosted_app(mode)
+    _serve(app, host, port)
 
 
 if __name__ == "__main__":

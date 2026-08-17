@@ -20,6 +20,7 @@ import pytest
 
 from zoho_mcp import server
 from zoho_mcp.http_app import BearerTokenGate, build_http_app
+from zoho_mcp.oauth.asgi import JwtAuthGate
 from zoho_mcp.zoho.token_store import EnvTokenStore, KeyringTokenStore
 
 TOKEN = "s3cret-token"
@@ -247,3 +248,82 @@ def test_main_http_serves_the_gate_not_the_bare_app(hosted):
     server.main_http()
 
     assert isinstance(hosted[0]["app"], BearerTokenGate)
+
+
+def test_bearer_is_the_default_auth_mode(hosted, monkeypatch):
+    monkeypatch.delenv("ZOHO_HTTP_AUTH_MODE", raising=False)
+
+    server.main_http()
+
+    assert isinstance(hosted[0]["app"], BearerTokenGate)
+
+
+def test_an_unknown_auth_mode_refuses_to_start(hosted, monkeypatch):
+    # Not a silent fallback to bearer: a typo'd mode should say so, not quietly
+    # run a different door than the operator asked for.
+    monkeypatch.setenv("ZOHO_HTTP_AUTH_MODE", "basic")
+
+    with pytest.raises(ValueError, match="ZOHO_HTTP_AUTH_MODE"):
+        server.main_http()
+
+    assert hosted == []
+
+
+def _use_oauth_mode(monkeypatch, tmp_path, *, issuer="https://mail.example.com"):
+    monkeypatch.setenv("ZOHO_HTTP_AUTH_MODE", "oauth")
+    monkeypatch.setenv("ZOHO_OAUTH_ISSUER", issuer)
+    monkeypatch.setenv("ZOHO_OAUTH_OPERATOR_PASSWORD", "the-passphrase")
+    monkeypatch.setenv("ZOHO_OAUTH_STATE_DIR", str(tmp_path / "oauth-state"))
+    monkeypatch.setenv("ZOHO_TOKEN_STORE", "env")
+    monkeypatch.setenv("ZOHO_REFRESH_TOKEN", "fake-refresh-token")
+
+
+def test_oauth_mode_serves_the_jwt_gate(hosted, monkeypatch, tmp_path):
+    _use_oauth_mode(monkeypatch, tmp_path)
+
+    server.main_http()
+
+    assert isinstance(hosted[0]["app"], JwtAuthGate)
+
+
+def test_oauth_mode_refuses_without_an_issuer(hosted, monkeypatch, tmp_path):
+    _use_oauth_mode(monkeypatch, tmp_path)
+    monkeypatch.delenv("ZOHO_OAUTH_ISSUER")
+
+    with pytest.raises(ValueError, match="ZOHO_OAUTH_ISSUER"):
+        server.main_http()
+
+    assert hosted == []
+
+
+def test_oauth_mode_refuses_a_non_https_issuer(hosted, monkeypatch, tmp_path):
+    # Claude's connector requires https; an http public URL would fail the
+    # token flow later, so it's caught at startup instead.
+    _use_oauth_mode(monkeypatch, tmp_path, issuer="http://mail.example.com")
+
+    with pytest.raises(ValueError, match="ZOHO_OAUTH_ISSUER"):
+        server.main_http()
+
+    assert hosted == []
+
+
+def test_oauth_mode_allows_an_http_localhost_issuer(hosted, monkeypatch, tmp_path):
+    # The one http exception: local testing before a tunnel is in front.
+    _use_oauth_mode(monkeypatch, tmp_path, issuer="http://localhost:8000")
+
+    server.main_http()
+
+    assert isinstance(hosted[0]["app"], JwtAuthGate)
+
+
+@pytest.mark.parametrize("password", ["", "   "])
+def test_oauth_mode_refuses_without_an_operator_password(
+    hosted, monkeypatch, tmp_path, password
+):
+    _use_oauth_mode(monkeypatch, tmp_path)
+    monkeypatch.setenv("ZOHO_OAUTH_OPERATOR_PASSWORD", password)
+
+    with pytest.raises(ValueError, match="ZOHO_OAUTH_OPERATOR_PASSWORD"):
+        server.main_http()
+
+    assert hosted == []

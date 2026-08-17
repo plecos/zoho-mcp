@@ -22,9 +22,11 @@ observe whether this server is even authenticated.
 What this is not: it is not the OAuth flow an MCP client performs against a
 remote server. A static shared secret is the smallest thing that makes the
 endpoint safe to expose at all, and it suits a single-user server whose
-operator and user are the same person. Clients that require OAuth need
-FastMCP's ``token_verifier``/``AuthSettings`` seam instead, which this
-deliberately leaves alone.
+operator and user are the same person -- reachable over the API's
+``authorization_token`` or behind a private tunnel. A client that can only
+authenticate through the OAuth handshake, such as Claude's phone connector,
+needs OAuth mode instead: the self-contained authorization server in
+``zoho_mcp.oauth`` (see ``server.main_http`` with ``ZOHO_HTTP_AUTH_MODE=oauth``).
 """
 
 import hmac

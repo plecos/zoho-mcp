@@ -868,11 +868,43 @@ def normalize_freebusy_slot(raw: dict, mailbox_timezone: str) -> dict:
         raise ZohoAPIError(f"Malformed free/busy slot from Zoho: {e}") from e
 
 
+# Zoho's read-only ``rsvpStatus`` int codes for the *caller's own* response to
+# an event, decoded to the same PARTSTAT vocabulary carried by
+# ``attendees[].status`` so a reader can correlate the two. This is the only
+# view of your own RSVP the OAuth API offers -- it exposes no writer for it
+# (an invitee cannot set it via OAuth; see docs/zoho-api-notes.md). Keyed by
+# ``str`` because Zoho ships these ints as strings in some payloads.
+_RSVP_STATUS_LABELS = {
+    "0": "NEEDS-ACTION",
+    "1": "ACCEPTED",
+    "2": "DECLINED",
+    "3": "TENTATIVE",
+}
+
+
+def _decode_my_rsvp(raw: dict) -> str:
+    """Decode the caller's own ``rsvpStatus`` code into a PARTSTAT label.
+
+    Returns ``""`` when the event carries no ``rsvpStatus`` (e.g. a personal
+    event with no invitation to respond to). An unrecognized code is passed
+    through as its own string rather than hidden behind a wrong label, matching
+    how ``_PRIORITY_LABELS`` treats unknown priorities.
+    """
+    value = raw.get("rsvpStatus")
+    if value is None:
+        return ""
+    return _RSVP_STATUS_LABELS.get(str(value), str(value))
+
+
 def normalize_event(raw: dict, mailbox_timezone: str) -> dict:
     """Normalize one entry from Zoho Calendar's Events List ``events`` array.
 
     ``start``/``end`` are in ``mailbox_timezone``, not UTC -- see
-    ``_zoho_event_time_to_iso8601``.
+    ``_zoho_event_time_to_iso8601``. ``my_rsvp`` is the caller's own response
+    to the event (``ACCEPTED``/``DECLINED``/``TENTATIVE``/``NEEDS-ACTION``, or
+    ``""`` when there's no invitation), decoded from Zoho's read-only
+    ``rsvpStatus`` -- see ``_decode_my_rsvp``. It is read-only: the OAuth API
+    has no way to set it (docs/zoho-api-notes.md).
 
     Raises:
         ZohoAPIError: if ``raw`` is missing an expected field or a field has
@@ -891,6 +923,7 @@ def normalize_event(raw: dict, mailbox_timezone: str) -> dict:
                 {"email": a["email"], "status": a["status"]}
                 for a in raw.get("attendees", [])
             ],
+            "my_rsvp": _decode_my_rsvp(raw),
         }
     except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed event from Zoho: {e}") from e
@@ -910,6 +943,10 @@ def normalize_event_detail(raw: dict) -> dict:
     attendee entry for an occurrence, not every invitee), organizer,
     location, description, and recurrence rule.
 
+    ``my_rsvp`` is the caller's own response, decoded from Zoho's read-only
+    ``rsvpStatus`` the same way as ``normalize_event`` -- see
+    ``_decode_my_rsvp``.
+
     Raises:
         ZohoAPIError: if ``raw`` is missing ``uid``/``title``/``organizer``,
             or an entry in ``attendees`` is missing ``email``/``status``.
@@ -926,6 +963,7 @@ def normalize_event_detail(raw: dict) -> dict:
                 {"email": a["email"], "status": a["status"]}
                 for a in raw.get("attendees") or []
             ],
+            "my_rsvp": _decode_my_rsvp(raw),
         }
     except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed event detail from Zoho: {e}") from e

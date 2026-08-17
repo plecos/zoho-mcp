@@ -557,6 +557,78 @@ wastes time; there isn't one.
 even with calendar sharing enabled. Not exposed as a tool. Unclear whether it
 needs additional account-level setup.
 
+### Responding to an invitation (RSVP) is not reachable via OAuth
+
+There is deliberately no RSVP tool. The subtlety is that Zoho's OAuth API *can*
+write attendee status — but only for events **you organize**, and it returns
+`403 OPERATION_NOT_PERMITTED` for invitations you *received*, which is the only
+case where you'd ever want to RSVP. All of this was established by live-probing
+with the server's own OAuth token, not read off the docs (which are wrong here
+in both directions — see below).
+
+The OAuth attendee-status endpoint that *does* exist:
+
+- `PATCH https://calendar.zoho.com/api/v1/calendars/{cal}/events/{uid}` (scope
+  `ZohoCalendar.event.ALL`), payload as a **query parameter** `attendeedata`
+  (like `eventdata` — the calendar write APIs take their JSON in the query
+  string), e.g.
+  `?attendeedata={"attendees":[{"email":"you@…","status":"ACCEPTED"}],"notify_attendee":0}`.
+  `status ∈ NEEDS-ACTION | ACCEPTED | DECLINED | TENTATIVE`.
+- It updates the **caller's own** status: verified live that passing a *different*
+  attendee's email still set the authenticated user's status, not the named one.
+- It works (`200`) on an event where your `role` is `organizer`, and fails
+  (`403 OPERATION_NOT_PERMITTED`) on one where your `role` is `attendee` — the
+  exact same call, the difference being ownership. Since you are never the
+  organizer of an invitation someone sent you, this endpoint cannot RSVP a real
+  invite. (The `PUT`/`eventdata` full-replace update and `update_event` hit the
+  same `403` for the same reason, so neither is a workaround.)
+- The `403` is about **role, not the event's origin**. It reproduces on a Google
+  invite (`…@google.com`), a native-style UUID event, and a third-party
+  iCal-UID event alike, whenever `role` is `attendee`. So it is *not* Zoho declining to
+  relay a response back to an external system (e.g. "write the RSVP through to
+  Google") — a non-Google invite is refused identically. The
+  `attendeedata.attendees[].permission` enum (`Owner`/`Organizer`) confirms this
+  is an organizer's attendee-management endpoint, not an invitee's RSVP.
+- `recurrenceid` is rejected both as a query param (`EXTRA_PARAM_FOUND`) and as
+  an `attendeedata` key (`EXTRA_KEY_FOUND_IN_JSON`); per-occurrence targeting for
+  attendee status via OAuth appears unsupported, though it's moot given the 403.
+
+What the web client actually uses for RSVP is a different endpoint with a
+different permission model, and it is cookie-only:
+
+- `PUT https://calendar.zoho.com/zcal/calendars/{calendarUID}/events/{eventUID}`,
+  `multipart/form-data` field `statusdata` =
+  `{"email":"<you>","recurrenceid_in_millis":"<epoch ms|"">","status":"<…>"}`
+  (Yes=`ACCEPTED`, No=`DECLINED`, Maybe=`TENTATIVE`). RSVP status is tracked
+  **per occurrence**, so a recurring series' base always reads `NEEDS-ACTION` for
+  you regardless of a per-occurrence response.
+- This `/zcal/` path is the web app backend, authed by session cookie + CSRF.
+  Replaying it with a valid `Zoho-oauthtoken` bearer (no cookies) returns
+  `400 INVALID_CSRF_TOKEN` — OAuth isn't a credential there. And `statusdata` is
+  not a recognized field on the OAuth `/api/v1/` endpoint (passing it is silently
+  ignored; the resulting `400 LESS_THAN_MIN_OCCURANCE` is just an empty
+  `eventdata`-less update, identical to sending garbage or nothing).
+
+So the invitee-RSVP permission that the web UI has lives only behind the
+cookie/CSRF endpoint, and OAuth's equivalent write is gated on organizer rights.
+Zoho's own official Calendar MCP server likewise exposes no RSVP tool — this is a
+gap in Zoho's OAuth surface, not a choice on our side. Don't re-derive any of
+this as a live path without reproducing the `role: organizer` → 200 vs
+`role: attendee` → 403 split; two earlier readings (a fabricated "statusdata
+accepted", a wrong "external Google event" cause) were mistaken until that split
+was isolated on identical calls.
+
+We *can* read the response, though. Every event carries a top-level, read-only
+`rsvpStatus` int reflecting the **caller's own** response: `0` NEEDS-ACTION, `1`
+ACCEPTED, `2` DECLINED, `3` TENTATIVE (verified live by correlating it with
+attendee status across a real calendar; Zoho ships it as an int but may send it
+as a string, so decode via `str()`). `normalize_event`/`normalize_event_detail`
+surface it as `my_rsvp` in that PARTSTAT vocabulary (`""` when absent — a
+personal event with no invitation). It is write-rejected in every placement
+(`EXTRA_PARAM_FOUND` as a query param, `EXTRA_KEY_FOUND_IN_JSON` inside
+`eventdata`/`attendeedata`), which is the whole reason there's no RSVP *write*
+tool — only this read.
+
 ---
 
 ## Tasks, Notes, Bookmarks

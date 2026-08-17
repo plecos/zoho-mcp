@@ -552,6 +552,13 @@ def create_server(
         Returns {"events": [...], "count": N}. Report count rather than
         tallying the list yourself; it counts occurrences in the range,
         so a recurring event contributes one per occurrence.
+
+        Each event includes my_rsvp -- the user's own response to it:
+        "ACCEPTED", "DECLINED", "TENTATIVE", "NEEDS-ACTION" (invited, not
+        yet answered), or "" (not an invitation). This is read-only: there
+        is no tool to set or change an RSVP -- Zoho's API exposes no way to
+        respond to an invitation, so direct the user to their Zoho client
+        to RSVP.
         """
         return await calendar_tools.list_events(
             client, start=start, end=end, calendar_id=calendar_id
@@ -569,6 +576,12 @@ def create_server(
         invitee), location, description, or recurrence rule (an iCal
         RRULE string, e.g. "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO", or "" if the
         event doesn't recur).
+
+        Also returns my_rsvp -- the user's own response ("ACCEPTED",
+        "DECLINED", "TENTATIVE", "NEEDS-ACTION", or "" when it isn't an
+        invitation). Read-only: there is no tool to set an RSVP; Zoho's API
+        has no invitation-response endpoint, so point the user to their
+        Zoho client to respond.
 
         Does NOT return start/end -- keep using the occurrence's own
         start/end from list_events for timing; this call's own date

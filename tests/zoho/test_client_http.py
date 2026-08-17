@@ -293,6 +293,8 @@ async def test_list_events_sends_json_encoded_range_param(respx_mock, zoho_clien
             "start": "2024-10-29T09:00:00-07:00",
             "end": "2024-10-29T10:00:00-07:00",
             "attendees": [],
+            # No rsvpStatus in this response -> "" (not an invitation).
+            "my_rsvp": "",
         }
     ]
 

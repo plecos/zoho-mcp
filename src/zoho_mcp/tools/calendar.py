@@ -46,9 +46,11 @@ async def list_events(
 
     Returns:
         ``{"events": [...], "count": int}``. Each event has id, title,
-        start, end, attendees. ``start``/``end`` are in the mailbox's own
-        local timezone, not UTC -- see
-        ``ZohoClient._get_mailbox_timezone``. ``count`` counts
+        start, end, attendees, and ``my_rsvp`` (the caller's own response:
+        ACCEPTED/DECLINED/TENTATIVE/NEEDS-ACTION, or "" when not an
+        invitation -- read-only, there's no OAuth way to set it).
+        ``start``/``end`` are in the mailbox's own local timezone, not UTC
+        -- see ``ZohoClient._get_mailbox_timezone``. ``count`` counts
         occurrences in the range, so a recurring event contributes one
         per occurrence.
 
@@ -80,8 +82,9 @@ async def get_event(
     Returns:
         id, title, organizer, full attendee list (list_events can report
         only the caller's own attendee entry for an occurrence, not every
-        invitee), location, description, and recurrence (an iCal RRULE
-        string, or "" if the event doesn't recur). Deliberately excludes
+        invitee), location, description, recurrence (an iCal RRULE
+        string, or "" if the event doesn't recur), and ``my_rsvp`` (the
+        caller's own response, read-only). Deliberately excludes
         start/end -- use the occurrence's own start/end from list_events,
         not this call: Zoho's single-event endpoint can return the wrong
         occurrence's dates for a recurring event.

@@ -18,6 +18,7 @@
       "createdtime": "20241020T120000-0700",
       "calendar_alarm": true,
       "duration": "0100",
+      "rsvpStatus": 1,
       "uid": "evt-998877",
       "createdby": "user@example.com",
       "organizer": "user@example.com",

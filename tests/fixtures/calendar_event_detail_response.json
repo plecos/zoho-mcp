@@ -4,6 +4,7 @@
       "uid": "evt-recurring-1",
       "title": "Team Sync",
       "organizer": "user@example.com",
+      "rsvpStatus": 3,
       "rrule": "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO",
       "location": "https://meet.example.com/abc",
       "description": null,

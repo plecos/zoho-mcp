@@ -198,6 +198,50 @@ def test_normalize_event_extracts_attendees_with_status():
     ]
 
 
+def test_normalize_event_decodes_my_rsvp_from_rsvp_status():
+    # rsvpStatus is the CALLER's own response, as an int code Zoho exposes
+    # read-only (0/1/2/3). Decoded to the same PARTSTAT vocabulary as
+    # attendees[].status so a reader can correlate the two. See
+    # docs/zoho-api-notes.md.
+    raw = load_fixture("calendar_events_response.json")["events"][0]
+
+    result = normalize_event(raw, MAILBOX_TZ)
+
+    assert result["my_rsvp"] == "ACCEPTED"
+
+
+def test_normalize_event_absent_rsvp_status_is_empty_string():
+    # The all-day personal event carries no rsvpStatus (no invitation to
+    # respond to) -- absent must default to "", not a spurious NEEDS-ACTION.
+    raw = load_fixture("calendar_events_response.json")["events"][1]
+
+    result = normalize_event(raw, MAILBOX_TZ)
+
+    assert result["my_rsvp"] == ""
+
+
+def test_normalize_event_decodes_string_form_rsvp_status():
+    # Zoho ships ints as strings in several places (status "1", color "-1"),
+    # so the decode must accept a string code too.
+    raw = load_fixture("calendar_events_response.json")["events"][0]
+    raw["rsvpStatus"] = "2"
+
+    result = normalize_event(raw, MAILBOX_TZ)
+
+    assert result["my_rsvp"] == "DECLINED"
+
+
+def test_normalize_event_unknown_rsvp_status_passes_through():
+    # An unmapped code is surfaced rather than hidden behind a confident
+    # wrong label -- same philosophy as the priority labels.
+    raw = load_fixture("calendar_events_response.json")["events"][0]
+    raw["rsvpStatus"] = 9
+
+    result = normalize_event(raw, MAILBOX_TZ)
+
+    assert result["my_rsvp"] == "9"
+
+
 def test_normalize_event_raises_clear_error_on_missing_field():
     raw = load_fixture("calendar_events_response.json")["events"][0]
     del raw["title"]
@@ -257,6 +301,22 @@ def test_normalize_event_detail_extracts_full_attendee_list():
         {"email": "jamie.rivera@example.com", "status": "accepted"},
         {"email": "morgan.lee@example.com", "status": "needsaction"},
     ]
+
+
+def test_normalize_event_detail_decodes_my_rsvp_from_rsvp_status():
+    raw = load_fixture("calendar_event_detail_response.json")["events"][0]
+
+    result = normalize_event_detail(raw)
+
+    assert result["my_rsvp"] == "TENTATIVE"
+
+
+def test_normalize_event_detail_absent_rsvp_status_is_empty_string():
+    raw = {"uid": "evt-1", "title": "Solo block", "organizer": "user@example.com"}
+
+    result = normalize_event_detail(raw)
+
+    assert result["my_rsvp"] == ""
 
 
 def test_normalize_event_detail_treats_null_description_as_empty():

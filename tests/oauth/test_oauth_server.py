@@ -9,18 +9,31 @@ matching, which grant and response types are allowed, and public-vs-confidential
 auth -- so its rejections carry the tests.
 """
 
+from urllib.parse import parse_qs, urlencode, urlparse
+
+from authlib.oauth2.rfc7636 import create_s256_code_challenge
+
 from zoho_mcp.oauth.server import (
     SUPPORTED_SCOPES,
     AuthlibClient,
+    build_oauth2_request,
     build_token_generator,
+    create_authorization_server,
     record_issued_refresh_token,
 )
-from zoho_mcp.oauth.store import RefreshTokenStore, RegisteredClient
+from zoho_mcp.oauth.store import (
+    AuthorizationCodeStore,
+    ClientStore,
+    RefreshTokenStore,
+    RegisteredClient,
+)
 from zoho_mcp.oauth.tokens import ACCESS_TOKEN_USE, REFRESH_TOKEN_USE, TokenSigner
 
 REDIRECT = "https://claude.ai/api/mcp/auth_callback"
 ISSUER = "https://mail.example.com"
 AUDIENCE = "https://mail.example.com/mcp"
+# PKCE verifier: RFC 7636 requires 43-128 chars.
+VERIFIER = "test-verifier-" + "a" * 40
 
 
 def a_signer(**overrides) -> TokenSigner:
@@ -194,3 +207,151 @@ def test_recording_a_token_without_a_refresh_token_is_a_no_op(tmp_path):
     )
 
     assert store.is_current("client-1", "anything") is False
+
+
+# --- full authorization-code + refresh flow ---------------------------------
+
+
+def build_full_server(tmp_path, client_secret=None):
+    signer = a_signer()
+    clients = ClientStore(tmp_path / "clients.json")
+    clients.add(
+        RegisteredClient(
+            client_id="client-1",
+            client_secret=client_secret,
+            redirect_uris=(REDIRECT,),
+            metadata={},
+            issued_at=1_750_000_000,
+        )
+    )
+    server = create_authorization_server(
+        signer=signer,
+        client_store=clients,
+        code_store=AuthorizationCodeStore(),
+        refresh_store=RefreshTokenStore(tmp_path / "refresh.json"),
+    )
+    return server, signer
+
+
+def authorize(server, verifier=VERIFIER, client_id="client-1", redirect=REDIRECT):
+    params = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect,
+        "scope": SUPPORTED_SCOPES[0],
+        "state": "state-xyz",
+        "code_challenge": create_s256_code_challenge(verifier),
+        "code_challenge_method": "S256",
+    }
+    request = build_oauth2_request(
+        "GET", f"https://mail.example.com/authorize?{urlencode(params)}", params
+    )
+    return server.create_authorization_response(request, grant_user="owner")
+
+
+def code_from(response):
+    location = dict(response.headers)["Location"]
+    return parse_qs(urlparse(location).query)["code"][0]
+
+
+def exchange_code(
+    server, code, verifier=VERIFIER, client_id="client-1", redirect=REDIRECT
+):
+    params = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect,
+        "client_id": client_id,
+        "code_verifier": verifier,
+    }
+    return server.create_token_response(
+        build_oauth2_request("POST", "https://mail.example.com/token", params)
+    )
+
+
+def refresh(server, refresh_token, client_id="client-1"):
+    params = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+    }
+    return server.create_token_response(
+        build_oauth2_request("POST", "https://mail.example.com/token", params)
+    )
+
+
+def test_authorization_redirects_back_with_a_code(tmp_path):
+    server, _ = build_full_server(tmp_path)
+
+    response = authorize(server)
+
+    assert response.status == 302
+    location = dict(response.headers)["Location"]
+    query = parse_qs(urlparse(location).query)
+    assert location.startswith(REDIRECT)
+    assert query["state"] == ["state-xyz"]
+    assert "code" in query
+
+
+def test_a_code_exchanges_for_working_access_and_refresh_tokens(tmp_path):
+    server, signer = build_full_server(tmp_path)
+
+    token = exchange_code(server, code_from(authorize(server))).body
+
+    assert token["token_type"] == "Bearer"
+    access = signer.verify(token["access_token"], expect_use=ACCESS_TOKEN_USE)
+    assert access.subject == "owner"
+    assert access.scopes == (SUPPORTED_SCOPES[0],)
+    signer.verify(token["refresh_token"], expect_use=REFRESH_TOKEN_USE)
+
+
+def test_the_wrong_pkce_verifier_is_rejected(tmp_path):
+    server, _ = build_full_server(tmp_path)
+    code = code_from(authorize(server, verifier=VERIFIER))
+
+    response = exchange_code(server, code, verifier="a-different-verifier-" + "b" * 30)
+
+    assert response.status == 400
+    assert "error" in response.body
+
+
+def test_a_code_cannot_be_exchanged_twice(tmp_path):
+    server, _ = build_full_server(tmp_path)
+    code = code_from(authorize(server))
+
+    assert exchange_code(server, code).status == 200
+    assert exchange_code(server, code).status == 400
+
+
+def test_a_refresh_rotates_the_tokens(tmp_path):
+    server, signer = build_full_server(tmp_path)
+    first = exchange_code(server, code_from(authorize(server))).body
+
+    second = refresh(server, first["refresh_token"]).body
+
+    assert second["refresh_token"] != first["refresh_token"]
+    assert (
+        signer.verify(second["access_token"], expect_use=ACCESS_TOKEN_USE).subject
+        == "owner"
+    )
+
+
+def test_a_replayed_old_refresh_token_is_refused(tmp_path):
+    # Strict rotation with reuse detection: the previous refresh token stops
+    # working the instant a new one is issued.
+    server, _ = build_full_server(tmp_path)
+    first = exchange_code(server, code_from(authorize(server))).body
+    refresh(server, first["refresh_token"])  # rotates first -> second
+
+    replay = refresh(server, first["refresh_token"])
+
+    assert replay.status == 400
+
+
+def test_a_forged_refresh_token_is_refused(tmp_path):
+    server, _ = build_full_server(tmp_path)
+    other = TokenSigner(signing_key="d" * 43, issuer=ISSUER, audience=AUDIENCE)
+
+    response = refresh(server, other.mint_refresh_token("owner", [SUPPORTED_SCOPES[0]]))
+
+    assert response.status == 400

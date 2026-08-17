@@ -132,6 +132,11 @@ class TokenSigner:
         self._access_ttl = access_ttl
         self._refresh_ttl = refresh_ttl
 
+    @property
+    def access_ttl(self) -> timedelta:
+        """The access-token lifetime, so callers can advertise ``expires_in``."""
+        return self._access_ttl
+
     def mint_access_token(self, subject: str, scopes: Sequence[str]) -> str:
         """Issue a short-lived access token bearing ``scopes``."""
         return self._mint(subject, scopes, ACCESS_TOKEN_USE, self._access_ttl)

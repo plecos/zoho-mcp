@@ -11,13 +11,40 @@ through it, then the grants and token generation, then assembly.
 """
 
 import hmac
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from authlib.oauth2.rfc6749 import ClientMixin
+from authlib.oauth2 import AuthorizationServer
+from authlib.oauth2.rfc6749 import ClientMixin, OAuth2Request
+from authlib.oauth2.rfc6749.requests import BasicOAuth2Payload
+from authlib.oauth2.rfc6749.grants import AuthorizationCodeGrant, RefreshTokenGrant
 from authlib.oauth2.rfc6750 import BearerTokenGenerator
+from authlib.oauth2.rfc7636 import CodeChallenge
 
-from zoho_mcp.oauth.store import RefreshTokenStore, RegisteredClient
-from zoho_mcp.oauth.tokens import REFRESH_TOKEN_USE, TokenSigner
+from zoho_mcp.oauth.store import (
+    AuthorizationCode,
+    AuthorizationCodeStore,
+    ClientStore,
+    RefreshTokenStore,
+    RegisteredClient,
+)
+from zoho_mcp.oauth.tokens import REFRESH_TOKEN_USE, TokenError, TokenSigner
+
+# Authorization codes are exchanged within seconds of issue; five minutes is
+# generous headroom for a slow consent-page round trip.
+DEFAULT_CODE_TTL = timedelta(minutes=5)
+# The operator subject stamped into tokens. Single-user, so it's a constant
+# name rather than a looked-up identity.
+DEFAULT_SUBJECT = "owner"
+# Every endpoint auth method this server accepts: "none" for Claude's public
+# PKCE client, the secret-bearing methods for a confidential one.
+_TOKEN_ENDPOINT_AUTH_METHODS = ["none", "client_secret_post", "client_secret_basic"]
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 # The single scope this server grants for now. Kept as a tuple so widening to
 # per-tool scopes later is a data change, not a shape change.
@@ -127,3 +154,239 @@ def record_issued_refresh_token(
         return
     info = signer.verify(refresh_token, expect_use=REFRESH_TOKEN_USE)
     store.remember(client_id, info.jti, info.expires_at)
+
+
+@dataclass(frozen=True)
+class OAuthResponse:
+    """A framework-neutral response the HTTP layer turns into a real one.
+
+    Keeps this module free of any web framework: Authlib hands ``(status, body,
+    headers)`` to :meth:`ZohoAuthorizationServer.handle_response`, which wraps
+    them here, and ``http_app`` renders it into a Starlette response.
+    """
+
+    status: int
+    body: Any
+    headers: list
+
+
+def build_oauth2_request(
+    method: str, uri: str, params: dict, headers: dict | None = None
+) -> OAuth2Request:
+    """Build an Authlib ``OAuth2Request`` with its payload already attached.
+
+    Authlib 1.7 split the request from its parsed parameters (the "payload"),
+    and its grants read everything through ``request.payload``. Both the HTTP
+    layer and the tests build a request this way, so the payload wiring lives
+    in one place rather than being re-derived per caller.
+    """
+    request = OAuth2Request(method, uri, headers=headers)
+    fields = dict(params)
+    request.payload = BasicOAuth2Payload(fields)
+    # Authlib 1.7 reads authorize-request parameters from request.payload but
+    # still reads token-request parameters (code, redirect_uri, code_verifier,
+    # client auth) from request.form, which is backed by this. Populating both
+    # from the same fields lets one builder serve both endpoints. Assigned
+    # directly rather than through the constructor's deprecated ``body=`` so no
+    # deprecation warning fires.
+    request._body = fields
+    return request
+
+
+class _AuthlibAuthorizationCode:
+    """Adapts a stored :class:`AuthorizationCode` to what Authlib's grant reads.
+
+    Keeps ``store.py``'s record free of Authlib naming: the grant wants
+    ``get_redirect_uri``/``get_scope`` methods, ``code_challenge`` and
+    ``code_challenge_method`` attributes (read by the PKCE extension), and a
+    ``user_id``; the record stays a plain dataclass.
+    """
+
+    def __init__(self, record: AuthorizationCode) -> None:
+        self.record = record
+        self.code_challenge = record.code_challenge
+        self.code_challenge_method = record.code_challenge_method
+        self.user_id = record.subject
+
+    def get_redirect_uri(self) -> str:
+        return self.record.redirect_uri
+
+    def get_scope(self) -> str:
+        return self.record.scope
+
+
+class ZohoAuthorizationCodeGrant(AuthorizationCodeGrant):
+    """The authorization-code grant, backed by our code store.
+
+    PKCE is enforced by the ``CodeChallenge`` extension registered alongside
+    it; this class only persists and retrieves codes. ``self.server`` is the
+    :class:`ZohoAuthorizationServer`, which carries the stores.
+    """
+
+    TOKEN_ENDPOINT_AUTH_METHODS = _TOKEN_ENDPOINT_AUTH_METHODS
+
+    def save_authorization_code(self, code: str, request: Any) -> str:
+        data = request.payload.data
+        self.server.code_store.add(
+            AuthorizationCode(
+                code=code,
+                client_id=request.client.get_client_id(),
+                redirect_uri=request.payload.redirect_uri,
+                scope=request.scope or "",
+                code_challenge=data.get("code_challenge", ""),
+                code_challenge_method=data.get("code_challenge_method", ""),
+                subject=request.user,
+                expires_at=_now() + self.server.code_ttl,
+            )
+        )
+        return code
+
+    def query_authorization_code(
+        self, code: str, client: Any
+    ) -> _AuthlibAuthorizationCode | None:
+        record = self.server.code_store.get(code)
+        if record is None or record.client_id != client.get_client_id():
+            return None
+        return _AuthlibAuthorizationCode(record)
+
+    def delete_authorization_code(
+        self, authorization_code: _AuthlibAuthorizationCode
+    ) -> None:
+        self.server.code_store.delete(authorization_code.record.code)
+
+    def authenticate_user(self, authorization_code: _AuthlibAuthorizationCode) -> str:
+        return authorization_code.user_id
+
+
+class _AuthlibRefreshToken:
+    """The credential Authlib's refresh grant carries between its steps."""
+
+    def __init__(self, client_id: str, subject: str, scope: str) -> None:
+        self._client_id = client_id
+        self.user_id = subject
+        self._scope = scope
+
+    def check_client(self, client: Any) -> bool:
+        return client.get_client_id() == self._client_id
+
+    def get_scope(self) -> str:
+        return self._scope
+
+
+class ZohoRefreshTokenGrant(RefreshTokenGrant):
+    """Refresh grant with strict rotation and reuse detection.
+
+    ``authenticate_refresh_token`` verifies the JWT *and* checks it is the
+    client's current one. A token that verifies but has been rotated out is a
+    replay -- possibly a stolen token -- so the whole chain is revoked and the
+    request refused. Issuing the new token records its jti as current, which is
+    what strands the old one, so ``revoke_old_credential`` has nothing to do.
+    """
+
+    TOKEN_ENDPOINT_AUTH_METHODS = _TOKEN_ENDPOINT_AUTH_METHODS
+    INCLUDE_NEW_REFRESH_TOKEN = True
+
+    def authenticate_refresh_token(
+        self, refresh_token: str
+    ) -> _AuthlibRefreshToken | None:
+        try:
+            info = self.server.signer.verify(
+                refresh_token, expect_use=REFRESH_TOKEN_USE
+            )
+        except TokenError:
+            return None
+        client_id = self.request.client.get_client_id()
+        if not self.server.refresh_store.is_current(client_id, info.jti):
+            # Verifies but isn't current: a rotated-out token being replayed.
+            # Treat it as theft and strand the chain rather than reissue.
+            self.server.refresh_store.revoke(client_id)
+            return None
+        return _AuthlibRefreshToken(client_id, info.subject, " ".join(info.scopes))
+
+    def authenticate_user(self, credential: _AuthlibRefreshToken) -> str:
+        return credential.user_id
+
+    def revoke_old_credential(self, credential: _AuthlibRefreshToken) -> None:
+        # Deliberately empty: remembering the new refresh jti (in save_token)
+        # already overwrote the client's slot, so the old token is no longer
+        # current. Revoking here would wipe the slot we just advanced.
+        return None
+
+
+class ZohoAuthorizationServer(AuthorizationServer):
+    """Authlib's authorization server, bound to our stores and JWT signer.
+
+    Supplies the framework adapters Authlib's base leaves abstract. They stay
+    framework-neutral: requests arrive already built (the HTTP layer or a test
+    constructs the ``OAuth2Request``), and responses go out as
+    :class:`OAuthResponse` for the HTTP layer to render -- so nothing here
+    imports a web framework.
+    """
+
+    def __init__(
+        self,
+        *,
+        signer: TokenSigner,
+        client_store: ClientStore,
+        code_store: AuthorizationCodeStore,
+        refresh_store: RefreshTokenStore,
+        code_ttl: timedelta,
+    ) -> None:
+        super().__init__(scopes_supported=list(SUPPORTED_SCOPES))
+        self.signer = signer
+        self.client_store = client_store
+        self.code_store = code_store
+        self.refresh_store = refresh_store
+        self.code_ttl = code_ttl
+        self.register_token_generator(
+            "default",
+            build_token_generator(signer, int(signer.access_ttl.total_seconds())),
+        )
+        self.register_grant(ZohoAuthorizationCodeGrant, [CodeChallenge(required=True)])
+        self.register_grant(ZohoRefreshTokenGrant)
+
+    def query_client(self, client_id: str) -> AuthlibClient | None:
+        record = self.client_store.get(client_id)
+        return AuthlibClient(record) if record is not None else None
+
+    def save_token(self, token: dict, request: Any) -> None:
+        client = request.client
+        if client is not None:
+            record_issued_refresh_token(
+                self.refresh_store, self.signer, token, client.get_client_id()
+            )
+
+    def create_oauth2_request(self, request: Any) -> OAuth2Request:
+        # The request is already an OAuth2Request built by the caller; there is
+        # nothing to parse from a framework object here.
+        return request
+
+    def create_json_request(self, request: Any) -> Any:
+        return request
+
+    def handle_response(self, status: int, body: Any, headers: list) -> OAuthResponse:
+        return OAuthResponse(status=status, body=body, headers=headers)
+
+    def send_signal(self, name: str, *args: Any, **kwargs: Any) -> None:
+        # Authlib emits framework signals (e.g. token issued); this server has
+        # no signal system, so they are dropped rather than raising the base's
+        # NotImplementedError.
+        return None
+
+
+def create_authorization_server(
+    *,
+    signer: TokenSigner,
+    client_store: ClientStore,
+    code_store: AuthorizationCodeStore,
+    refresh_store: RefreshTokenStore,
+    code_ttl: timedelta = DEFAULT_CODE_TTL,
+) -> ZohoAuthorizationServer:
+    """Assemble the authorization server from the stores and signer."""
+    return ZohoAuthorizationServer(
+        signer=signer,
+        client_store=client_store,
+        code_store=code_store,
+        refresh_store=refresh_store,
+        code_ttl=code_ttl,
+    )

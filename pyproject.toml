@@ -36,8 +36,8 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "respx>=0.23.1",
-    "ruff>=0.15.22",
-    "time-machine>=3.2.0",
+    "ruff>=0.16.3",
+    "time-machine>=3.4.0",
 ]
 
 [tool.uv]

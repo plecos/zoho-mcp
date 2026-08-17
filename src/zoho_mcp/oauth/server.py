@@ -17,9 +17,10 @@ from typing import Any
 
 from authlib.oauth2 import AuthorizationServer
 from authlib.oauth2.rfc6749 import ClientMixin, OAuth2Request
-from authlib.oauth2.rfc6749.requests import BasicOAuth2Payload
 from authlib.oauth2.rfc6749.grants import AuthorizationCodeGrant, RefreshTokenGrant
+from authlib.oauth2.rfc6749.requests import BasicOAuth2Payload, JsonPayload, JsonRequest
 from authlib.oauth2.rfc6750 import BearerTokenGenerator
+from authlib.oauth2.rfc7591 import ClientRegistrationEndpoint
 from authlib.oauth2.rfc7636 import CodeChallenge
 
 from zoho_mcp.oauth.store import (
@@ -313,6 +314,73 @@ class ZohoRefreshTokenGrant(RefreshTokenGrant):
         return None
 
 
+class _JsonPayload(JsonPayload):
+    """A concrete JSON payload -- Authlib's base leaves ``data`` abstract."""
+
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    @property
+    def data(self) -> dict:
+        return self._data
+
+
+def build_json_request(
+    method: str, uri: str, json_body: dict, headers: dict | None = None
+) -> JsonRequest:
+    """Build an Authlib ``JsonRequest`` with its JSON payload attached.
+
+    The registration endpoint reads the request body from ``request.payload.
+    data``; this is the JSON counterpart of :func:`build_oauth2_request`.
+    """
+    request = JsonRequest(method, uri, headers=headers)
+    request.payload = _JsonPayload(dict(json_body))
+    return request
+
+
+class ZohoClientRegistration(ClientRegistrationEndpoint):
+    """Dynamic Client Registration (RFC 7591), backed by the client store.
+
+    Open registration: Claude self-registers without an initial access token,
+    which is fine because registration grants no access on its own -- the gate
+    that matters is the operator approving at ``/authorize``. A client that
+    asks for ``token_endpoint_auth_method: none`` (Claude's PKCE shape) is
+    stored as public, with no secret; anything else gets a generated secret.
+    """
+
+    def authenticate_token(self, request: Any) -> bool:
+        return True
+
+    def get_server_metadata(self) -> None:
+        # No server-metadata constraints on what a client may register for;
+        # our grants and the operator gate are what actually bound a client.
+        return None
+
+    def resolve_public_key(self, request: Any) -> None:
+        # Only needed to verify a software_statement JWT, which we don't accept.
+        return None
+
+    def generate_client_secret(self, request: Any) -> str:
+        if request.payload.data.get("token_endpoint_auth_method", "none") == "none":
+            return ""  # public client: PKCE stands in for a secret
+        return super().generate_client_secret(request)
+
+    def save_client(
+        self, client_info: dict, client_metadata: dict, request: Any
+    ) -> RegisteredClient:
+        record = RegisteredClient(
+            client_id=client_info["client_id"],
+            # "" (a public client) is stored as None so the endpoint-auth check
+            # treats it as public rather than as an empty-secret confidential.
+            client_secret=client_info["client_secret"] or None,
+            redirect_uris=tuple(client_metadata.get("redirect_uris", ())),
+            metadata=dict(client_metadata),
+            issued_at=client_info["client_id_issued_at"],
+        )
+        self.server.client_store.add(record)
+        return record
+
+
 class ZohoAuthorizationServer(AuthorizationServer):
     """Authlib's authorization server, bound to our stores and JWT signer.
 
@@ -344,6 +412,7 @@ class ZohoAuthorizationServer(AuthorizationServer):
         )
         self.register_grant(ZohoAuthorizationCodeGrant, [CodeChallenge(required=True)])
         self.register_grant(ZohoRefreshTokenGrant)
+        self.register_endpoint(ZohoClientRegistration)
 
     def query_client(self, client_id: str) -> AuthlibClient | None:
         record = self.client_store.get(client_id)

@@ -16,6 +16,7 @@ from authlib.oauth2.rfc7636 import create_s256_code_challenge
 from zoho_mcp.oauth.server import (
     SUPPORTED_SCOPES,
     AuthlibClient,
+    build_json_request,
     build_oauth2_request,
     build_token_generator,
     create_authorization_server,
@@ -355,3 +356,108 @@ def test_a_forged_refresh_token_is_refused(tmp_path):
     response = refresh(server, other.mint_refresh_token("owner", [SUPPORTED_SCOPES[0]]))
 
     assert response.status == 400
+
+
+# --- dynamic client registration (RFC 7591) ---------------------------------
+
+
+def register(server, body):
+    request = build_json_request("POST", "https://mail.example.com/register", body)
+    return server.create_endpoint_response("client_registration", request)
+
+
+def empty_server(tmp_path):
+    return create_authorization_server(
+        signer=a_signer(),
+        client_store=ClientStore(tmp_path / "clients.json"),
+        code_store=AuthorizationCodeStore(),
+        refresh_store=RefreshTokenStore(tmp_path / "refresh.json"),
+    )
+
+
+def test_a_public_client_can_self_register(tmp_path):
+    server = empty_server(tmp_path)
+
+    response = register(
+        server,
+        {
+            "client_name": "Claude",
+            "redirect_uris": [REDIRECT],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+        },
+    )
+
+    assert response.status == 201
+    client_id = response.body["client_id"]
+    assert client_id
+    # Stored, and stored as public (no secret) so "none" auth is accepted.
+    stored = server.client_store.get(client_id)
+    assert stored is not None
+    assert stored.client_secret is None
+    assert stored.redirect_uris == (REDIRECT,)
+
+
+def test_a_self_registered_client_completes_the_whole_flow(tmp_path):
+    # The real payoff: register the way Claude does, then drive authorize ->
+    # token with the id we were handed, no pre-seeding.
+    server = empty_server(tmp_path)
+    signer = server.signer
+    client_id = register(
+        server,
+        {
+            "redirect_uris": [REDIRECT],
+            "token_endpoint_auth_method": "none",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+        },
+    ).body["client_id"]
+
+    code = code_from(authorize(server, client_id=client_id))
+    token = exchange_code(server, code, client_id=client_id).body
+
+    assert (
+        signer.verify(token["access_token"], expect_use=ACCESS_TOKEN_USE).subject
+        == "owner"
+    )
+
+
+def test_a_confidential_client_is_issued_a_secret(tmp_path):
+    server = empty_server(tmp_path)
+
+    response = register(
+        server,
+        {
+            "redirect_uris": [REDIRECT],
+            "token_endpoint_auth_method": "client_secret_post",
+            "grant_types": ["authorization_code"],
+            "response_types": ["code"],
+        },
+    )
+
+    stored = server.client_store.get(response.body["client_id"])
+    assert stored.client_secret
+    assert response.body["client_secret"] == stored.client_secret
+
+
+def test_registration_survives_a_restart(tmp_path):
+    path = tmp_path / "clients.json"
+    server = create_authorization_server(
+        signer=a_signer(),
+        client_store=ClientStore(path),
+        code_store=AuthorizationCodeStore(),
+        refresh_store=RefreshTokenStore(tmp_path / "refresh.json"),
+    )
+    client_id = register(
+        server, {"redirect_uris": [REDIRECT], "token_endpoint_auth_method": "none"}
+    ).body["client_id"]
+
+    # A fresh store reading the same file must still know the client.
+    assert ClientStore(path).get(client_id) is not None
+
+
+def test_an_empty_registration_body_is_rejected(tmp_path):
+    server = empty_server(tmp_path)
+
+    assert register(server, {}).status != 201

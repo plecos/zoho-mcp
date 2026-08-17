@@ -13,6 +13,7 @@ from pathlib import Path
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 from zoho_mcp.config import load_env
@@ -94,6 +95,7 @@ def create_server(
     http_client: httpx.AsyncClient,
     release_checker: ReleaseChecker,
     token_store: TokenStore | None = None,
+    transport_security: TransportSecuritySettings | None = None,
 ) -> FastMCP:
     """Build the FastMCP app and register all tools against the given clients.
 
@@ -105,9 +107,14 @@ def create_server(
     to the store this server actually reads. A hosted server left with the
     default would write a token to a credential store nothing consults, and
     report success.
+
+    ``transport_security`` configures FastMCP's DNS-rebinding protection. The
+    stdio server leaves it ``None`` (it serves no HTTP); the hosted transports
+    pass one that admits their real public host, since the default allow-list
+    is localhost-only and would 421 every request to a deployed hostname.
     """
     store = token_store or KeyringTokenStore()
-    mcp = FastMCP("zoho-mcp")
+    mcp = FastMCP("zoho-mcp", transport_security=transport_security)
     # FastMCP takes no version argument, and the low-level Server it wraps
     # falls back to reporting the *MCP SDK's* version when it has none --
     # which is what `serverInfo.version` carried for all of 0.1.0. This is
@@ -1163,7 +1170,9 @@ def _build_zoho_clients_from_env() -> tuple[
     return client, contacts_client, token_manager, http_client
 
 
-def _build_server_from_env() -> FastMCP:
+def _build_server_from_env(
+    transport_security: TransportSecuritySettings | None = None,
+) -> FastMCP:
     """Build the fully wired server, shared by both entry points."""
     client, contacts_client, token_manager, http_client = _build_zoho_clients_from_env()
     return create_server(
@@ -1173,7 +1182,23 @@ def _build_server_from_env() -> FastMCP:
         http_client,
         _build_release_checker(http_client),
         token_store=_build_token_store(),
+        transport_security=transport_security,
     )
+
+
+def _hosted_transport_security() -> TransportSecuritySettings:
+    """Transport security for the HTTP transports.
+
+    FastMCP's DNS-rebinding protection defends a *localhost* MCP server against
+    a browser being tricked into posting to it; its host allow-list is
+    localhost-only, so a deployed server 421s every request to its real
+    hostname (found the hard way against Cloud Run: "Invalid Host header").
+    It is redundant here anyway -- this endpoint is remote and authenticated,
+    so every request already carries a token no rebinding attacker can forge,
+    and the platform only routes our own hostname to us. Disable the host/origin
+    check; content-type validation, the middleware's other job, stays on.
+    """
+    return TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
 
 def _serve(app: ASGIApp, host: str, port: int) -> None:
@@ -1263,7 +1288,7 @@ def _build_oauth_app_from_env() -> ASGIApp:
         refresh_store=RefreshTokenStore(state_dir / "refresh_tokens.json"),
     )
     return build_oauth_app(
-        _build_server_from_env(),
+        _build_server_from_env(transport_security=_hosted_transport_security()),
         server=authorization_server,
         signer=signer,
         issuer=issuer,
@@ -1281,7 +1306,10 @@ def _build_hosted_app(mode: str) -> ASGIApp:
     """
     if mode == "bearer":
         auth_token = require_auth_token(os.environ.get(AUTH_TOKEN_VAR, ""))
-        return build_http_app(_build_server_from_env(), auth_token=auth_token)
+        return build_http_app(
+            _build_server_from_env(transport_security=_hosted_transport_security()),
+            auth_token=auth_token,
+        )
     if mode == "oauth":
         return _build_oauth_app_from_env()
     raise ValueError(

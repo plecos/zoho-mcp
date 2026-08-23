@@ -24,10 +24,10 @@ from zoho_mcp.zoho.auth import (
     build_authorization_url,
     exchange_code_for_tokens,
     extract_authorization_code,
-    store_refresh_token,
     wait_for_callback,
 )
 from zoho_mcp.zoho.client import get_default_calendar_uid, get_primary_account_id
+from zoho_mcp.zoho.token_store import KeyringTokenStore
 
 
 async def _exchange_store_and_lookup(
@@ -46,7 +46,7 @@ async def _exchange_store_and_lookup(
             code=code,
             redirect_uri=redirect_uri,
         )
-        store_refresh_token(tokens["refresh_token"])
+        KeyringTokenStore().store(tokens["refresh_token"])
 
         token_manager = ZohoTokenManager(
             client_id=client_id,

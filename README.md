@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server that exposes Zoho Mail, Calendar, Contact
 
 ## Status
 
-Single-user, local stdio transport, personal-scale. It works and is in daily use, but there's no hosting, no multi-tenancy, and no auth beyond one account's OAuth token.
+Single-user and personal-scale. Local stdio is the default and the well-worn path; there's also an opt-in HTTP transport for clients that can't spawn a local process ([Running it for a phone](#running-it-for-a-phone)). Either way it's one account's OAuth token — no multi-tenancy, and no per-user authorization.
 
 ## Why not Zoho's own MCP?
 
@@ -269,8 +269,65 @@ Two more folders are missing from unscoped results, for the same reason: **Spam 
 | `ZOHO_STRIP_INVISIBLE_CHARS` | `false` | Strip the invisible Unicode padding some marketing mail uses to inflate preview text — from `get_email` bodies and from the `snippet` of every `search_emails`/`list_emails` result. Subjects are left alone; senders don't pad those, since it would look broken in any mail client. Never touches zero-width joiner/non-joiner, which carry real meaning in emoji and several scripts. |
 | `ZOHO_CHECK_FOR_UPDATES` | `false` | Let `check_for_updates` ask GitHub's releases API whether a newer version exists. The one setting that permits an outbound call to a host other than Zoho. Exposed as a checkbox in a bundle install. See [Updating](#updating). |
 | `ZOHO_OAUTH_CALLBACK_PORT` | `8765` | Local port for the one-time OAuth redirect. |
+| `ZOHO_TOKEN_STORE` | `keyring` | Where the refresh token is read from. `keyring` is the OS credential store; `env` reads `ZOHO_REFRESH_TOKEN` instead, for hosts that have no credential store. Any other value refuses to start. |
+| `ZOHO_REFRESH_TOKEN` | — | Only read when `ZOHO_TOKEN_STORE=env`. See [Running it for a phone](#running-it-for-a-phone). |
+| `ZOHO_HTTP_AUTH_MODE` | `bearer` | How `zoho-mcp-http` authenticates callers: `bearer` (a shared secret) or `oauth` (the self-contained authorization server the phone connector needs). Any other value refuses to start. |
+| `ZOHO_HTTP_AUTH_TOKEN` | — | Bearer mode only: the shared secret every request must present. **Bearer mode refuses to start without it.** Unused by the stdio server and by OAuth mode. |
+| `ZOHO_OAUTH_ISSUER` | — | OAuth mode only: this server's own public URL (e.g. `https://mail.example.com`). Must be https — http is allowed only for `localhost` testing. Refuses to start without it. |
+| `ZOHO_OAUTH_OPERATOR_PASSWORD` | — | OAuth mode only: the passphrase you enter on the consent page to approve a connection. No default — a built-in one would be public. Refuses to start without it. |
+| `ZOHO_OAUTH_STATE_DIR` | `~/.zoho-mcp/oauth` | OAuth mode only: where the signing key, registered clients and refresh-token ledger are kept (`0600` JSON files). |
+| `ZOHO_HTTP_HOST` | `127.0.0.1` | Interface `zoho-mcp-http` binds. Loopback by default on purpose. |
+| `ZOHO_HTTP_PORT` | `8000` | Port `zoho-mcp-http` binds. |
 
 Both booleans are matched case-insensitively with surrounding whitespace ignored, so `true`, `True`, and `TRUE` all enable them. Any other value leaves them off.
+
+## Running it for a phone
+
+The Claude mobile apps can't spawn a local process, so neither the stdio server nor the MCPB bundle reaches them. What they can talk to is a remote MCP server, added on **claude.ai in a browser** (Settings → Connectors → Add custom connector) — it then syncs to the phone. `zoho-mcp-http` serves the same 42 tools over streamable HTTP for that case.
+
+**For a complete hosted deployment, follow [docs/hosting.md](docs/hosting.md)** — a step-by-step Cloud Run walkthrough (container image, public URL, durable state, cost settings, Secret Manager), validated end to end against the real Claude connector. The essentials are summarized below.
+
+The connector's "Add custom connector" dialog offers only a URL and optional OAuth client fields — there's **no box for a static token**. So for the phone you want **OAuth mode**, which runs a self-contained authorization server (no third-party login; you approve with a passphrase you set):
+
+```bash
+ZOHO_HTTP_AUTH_MODE=oauth \
+ZOHO_OAUTH_ISSUER=https://mail.example.com \
+ZOHO_OAUTH_OPERATOR_PASSWORD='a-passphrase-you-choose' \
+ZOHO_TOKEN_STORE=env \
+ZOHO_REFRESH_TOKEN=1000.xxxx \
+uv run zoho-mcp-http
+```
+
+Then paste `https://mail.example.com/mcp` into the connector dialog, leave the OAuth client fields blank (Claude self-registers), and when it opens the consent page, enter your passphrase. The signing key, registered clients and refresh-token ledger live under `ZOHO_OAUTH_STATE_DIR` as `0600` files; refresh tokens rotate on every use and a replayed old one is refused.
+
+**On a host with ephemeral disk — anything that scales to zero, Cloud Run included — point `ZOHO_OAUTH_STATE_DIR` at durable storage.** If the signing key is regenerated on a restart, every token already issued stops verifying and the connector has to re-authorize. [docs/hosting.md](docs/hosting.md) shows how to back it with a private GCS bucket so a scale-to-zero deployment stays cheap *and* never forces a re-consent.
+
+**`ZOHO_OAUTH_ISSUER` must be your real public https URL** — it's what the server puts in its discovery metadata and tokens. Claude's cloud connects *to* this URL, so it has to be reachable from the internet (a VPS, or a Cloudflare/Tailscale-Funnel tunnel giving you a public hostname); a purely private address won't work because Anthropic can't reach it.
+
+**Bearer mode** (`ZOHO_HTTP_AUTH_MODE=bearer`, the default) is the simpler alternative when the caller isn't the phone connector — the API's `authorization_token`, a custom client, or anything behind a private tunnel that does its own auth. It gates on a single shared secret:
+
+```bash
+ZOHO_HTTP_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" \
+ZOHO_TOKEN_STORE=env ZOHO_REFRESH_TOKEN=1000.xxxx \
+uv run zoho-mcp-http
+```
+
+Callers send it as `Authorization: Bearer <token>`; it refuses to start without one, and a request without it reaches no tool.
+
+**Getting the refresh token onto the host** (both modes). Run `zoho-mcp-setup` on a machine that has a browser — the consent flow needs one, and the redirect lands on `localhost`. That writes the token to *that* machine's credential store, so read it back out and move it over:
+
+```bash
+keyring get zoho-mcp zoho_refresh_token
+```
+
+Treat it like a password in transit; it doesn't expire on its own. On the host it's read-only: with `ZOHO_TOKEN_STORE=env` nothing in the process can write a token back, and the `authenticate` tool refuses immediately rather than opening a browser on a machine nobody is sitting at.
+
+**Put TLS in front of it.** It binds loopback by default; reaching it from a phone means a tunnel (Cloudflare Tunnel, Tailscale) or a reverse proxy. In bearer mode the secret travels in a header; in OAuth mode the tokens do — either way, plain HTTP across a network you don't control leaks them.
+
+### What this doesn't do yet
+
+- **It's still single-user.** One mailbox, one operator. OAuth mode authenticates *the connection* (so a public URL isn't open to anyone who finds it), but there's no per-caller identity behind it — whoever holds the passphrase is, as far as this server is concerned, you.
+- **Each deployment still verifies itself.** The OAuth flow *has* been run end to end against the real Claude connector on a live Cloud Run deployment — register, authorize, consent, token, refresh, the access-token gate, and a real tool call round-tripping to Zoho. But hosts differ; per [the house rule](CLAUDE.md) about verifying against the live thing, confirm the connect on your own deployed instance rather than assuming, and expect the occasional platform quirk (see the notes in [docs/hosting.md](docs/hosting.md)).
 
 ## Development
 

@@ -285,6 +285,8 @@ Both booleans are matched case-insensitively with surrounding whitespace ignored
 
 The Claude mobile apps can't spawn a local process, so neither the stdio server nor the MCPB bundle reaches them. What they can talk to is a remote MCP server, added on **claude.ai in a browser** (Settings → Connectors → Add custom connector) — it then syncs to the phone. `zoho-mcp-http` serves the same 42 tools over streamable HTTP for that case.
 
+**For a complete hosted deployment, follow [docs/hosting.md](docs/hosting.md)** — a step-by-step Cloud Run walkthrough (container image, public URL, durable state, cost settings, Secret Manager), validated end to end against the real Claude connector. The essentials are summarized below.
+
 The connector's "Add custom connector" dialog offers only a URL and optional OAuth client fields — there's **no box for a static token**. So for the phone you want **OAuth mode**, which runs a self-contained authorization server (no third-party login; you approve with a passphrase you set):
 
 ```bash
@@ -297,6 +299,8 @@ uv run zoho-mcp-http
 ```
 
 Then paste `https://mail.example.com/mcp` into the connector dialog, leave the OAuth client fields blank (Claude self-registers), and when it opens the consent page, enter your passphrase. The signing key, registered clients and refresh-token ledger live under `ZOHO_OAUTH_STATE_DIR` as `0600` files; refresh tokens rotate on every use and a replayed old one is refused.
+
+**On a host with ephemeral disk — anything that scales to zero, Cloud Run included — point `ZOHO_OAUTH_STATE_DIR` at durable storage.** If the signing key is regenerated on a restart, every token already issued stops verifying and the connector has to re-authorize. [docs/hosting.md](docs/hosting.md) shows how to back it with a private GCS bucket so a scale-to-zero deployment stays cheap *and* never forces a re-consent.
 
 **`ZOHO_OAUTH_ISSUER` must be your real public https URL** — it's what the server puts in its discovery metadata and tokens. Claude's cloud connects *to* this URL, so it has to be reachable from the internet (a VPS, or a Cloudflare/Tailscale-Funnel tunnel giving you a public hostname); a purely private address won't work because Anthropic can't reach it.
 
@@ -323,7 +327,7 @@ Treat it like a password in transit; it doesn't expire on its own. On the host i
 ### What this doesn't do yet
 
 - **It's still single-user.** One mailbox, one operator. OAuth mode authenticates *the connection* (so a public URL isn't open to anyone who finds it), but there's no per-caller identity behind it — whoever holds the passphrase is, as far as this server is concerned, you.
-- **The OAuth flow hasn't run against a real phone connector.** The whole flow — register, authorize, consent, token, refresh, and the access-token gate — is verified end to end against a live local server, but the last mile, Claude's mobile connector talking to a deployed instance, is not. Per [the house rule](CLAUDE.md) about verifying against the live thing, treat that last step as unproven until you've done it, and expect a round of iteration.
+- **Each deployment still verifies itself.** The OAuth flow *has* been run end to end against the real Claude connector on a live Cloud Run deployment — register, authorize, consent, token, refresh, the access-token gate, and a real tool call round-tripping to Zoho. But hosts differ; per [the house rule](CLAUDE.md) about verifying against the live thing, confirm the connect on your own deployed instance rather than assuming, and expect the occasional platform quirk (see the notes in [docs/hosting.md](docs/hosting.md)).
 
 ## Development
 

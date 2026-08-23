@@ -9,12 +9,28 @@ environment/keyring config and runs the server over stdio.
 """
 
 import os
+from pathlib import Path
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 from zoho_mcp.config import load_env
+from zoho_mcp.http_app import (
+    AUTH_TOKEN_VAR,
+    ASGIApp,
+    build_http_app,
+    require_auth_token,
+)
+from zoho_mcp.oauth.asgi import MCP_PATH, build_oauth_app
+from zoho_mcp.oauth.server import create_authorization_server
+from zoho_mcp.oauth.store import (
+    AuthorizationCodeStore,
+    ClientStore,
+    RefreshTokenStore,
+)
+from zoho_mcp.oauth.tokens import TokenSigner, load_or_create_signing_key
 from zoho_mcp.releases import ReleaseChecker, installed_version
 from zoho_mcp.tools import auth as auth_tools
 from zoho_mcp.tools import bookmarks as bookmarks_tools
@@ -26,13 +42,15 @@ from zoho_mcp.tools import notes as notes_tools
 from zoho_mcp.tools import resources as resources_tools
 from zoho_mcp.tools import tasks as tasks_tools
 from zoho_mcp.tools import updates as updates_tools
-from zoho_mcp.zoho.auth import (
-    DEFAULT_CALLBACK_PORT,
-    ZohoTokenManager,
-    load_refresh_token,
-)
+from zoho_mcp.zoho.auth import DEFAULT_CALLBACK_PORT, ZohoTokenManager
 from zoho_mcp.zoho.client import ZohoClient
 from zoho_mcp.zoho.contacts_client import ZohoContactsClient
+from zoho_mcp.zoho.token_store import (
+    ENV_REFRESH_TOKEN_VAR,
+    EnvTokenStore,
+    KeyringTokenStore,
+    TokenStore,
+)
 
 _READ_ONLY = ToolAnnotations(readOnlyHint=True)
 _CREATE = ToolAnnotations(
@@ -76,14 +94,27 @@ def create_server(
     token_manager: ZohoTokenManager,
     http_client: httpx.AsyncClient,
     release_checker: ReleaseChecker,
+    token_store: TokenStore | None = None,
+    transport_security: TransportSecuritySettings | None = None,
 ) -> FastMCP:
     """Build the FastMCP app and register all tools against the given clients.
 
     ``token_manager`` and ``http_client`` are passed explicitly rather than
     read off ``client``'s privates, because ``authenticate`` needs to mutate
     the token manager the other tools are already using.
+
+    ``token_store`` is here for the same reason: ``authenticate`` has to write
+    to the store this server actually reads. A hosted server left with the
+    default would write a token to a credential store nothing consults, and
+    report success.
+
+    ``transport_security`` configures FastMCP's DNS-rebinding protection. The
+    stdio server leaves it ``None`` (it serves no HTTP); the hosted transports
+    pass one that admits their real public host, since the default allow-list
+    is localhost-only and would 421 every request to a deployed hostname.
     """
-    mcp = FastMCP("zoho-mcp")
+    store = token_store or KeyringTokenStore()
+    mcp = FastMCP("zoho-mcp", transport_security=transport_security)
     # FastMCP takes no version argument, and the low-level Server it wraps
     # falls back to reporting the *MCP SDK's* version when it has none --
     # which is what `serverInfo.version` carried for all of 0.1.0. This is
@@ -121,6 +152,7 @@ def create_server(
             client_id=os.environ.get("ZOHO_CLIENT_ID", ""),
             client_secret=os.environ.get("ZOHO_CLIENT_SECRET", ""),
             callback_port=_callback_port(),
+            token_store=store,
         )
 
     @mcp.tool(title="Search email", annotations=_READ_ONLY)
@@ -1060,6 +1092,31 @@ def _build_release_checker(http_client: httpx.AsyncClient) -> ReleaseChecker:
     return ReleaseChecker(http_client, enabled=_env_flag("ZOHO_CHECK_FOR_UPDATES"))
 
 
+def _build_token_store() -> TokenStore:
+    """Pick where the refresh token lives, from ``ZOHO_TOKEN_STORE``.
+
+    Deliberately independent of the transport. A hosted server is the reason
+    the environment-backed store exists, but "which socket do I listen on" and
+    "where does my credential live" are separate questions, and coupling them
+    would make one impossible to change without the other.
+
+    Raises:
+        ValueError: for an unrecognised value. Falling back to keyring would
+            start a hosted server that then reports itself unauthenticated,
+            naming a problem the operator does not have.
+    """
+    name = os.environ.get("ZOHO_TOKEN_STORE", "keyring").strip().lower()
+    if name == "keyring":
+        return KeyringTokenStore()
+    if name == "env":
+        return EnvTokenStore()
+    raise ValueError(
+        f"ZOHO_TOKEN_STORE is set to {name!r}, which is not a token store. "
+        f"Use 'keyring' (the default, an OS credential store) or 'env' "
+        f"(read {ENV_REFRESH_TOKEN_VAR} from this process's environment)."
+    )
+
+
 def _build_zoho_clients_from_env() -> tuple[
     ZohoClient, ZohoContactsClient, ZohoTokenManager, httpx.AsyncClient
 ]:
@@ -1083,11 +1140,13 @@ def _build_zoho_clients_from_env() -> tuple[
     """
     load_env()
     http_client = httpx.AsyncClient()
+    token_store = _build_token_store()
     token_manager = ZohoTokenManager(
         client_id=os.environ.get("ZOHO_CLIENT_ID", ""),
         client_secret=os.environ.get("ZOHO_CLIENT_SECRET", ""),
-        refresh_token=load_refresh_token(),
+        refresh_token=token_store.load(),
         http_client=http_client,
+        token_store=token_store,
     )
     client = ZohoClient(
         token_manager=token_manager,
@@ -1111,16 +1170,175 @@ def _build_zoho_clients_from_env() -> tuple[
     return client, contacts_client, token_manager, http_client
 
 
-def main() -> None:
+def _build_server_from_env(
+    transport_security: TransportSecuritySettings | None = None,
+) -> FastMCP:
+    """Build the fully wired server, shared by both entry points."""
     client, contacts_client, token_manager, http_client = _build_zoho_clients_from_env()
-    server = create_server(
+    return create_server(
         client,
         contacts_client,
         token_manager,
         http_client,
         _build_release_checker(http_client),
+        token_store=_build_token_store(),
+        transport_security=transport_security,
     )
-    server.run(transport="stdio")
+
+
+def _hosted_transport_security() -> TransportSecuritySettings:
+    """Transport security for the HTTP transports.
+
+    FastMCP's DNS-rebinding protection defends a *localhost* MCP server against
+    a browser being tricked into posting to it; its host allow-list is
+    localhost-only, so a deployed server 421s every request to its real
+    hostname (found the hard way against Cloud Run: "Invalid Host header").
+    It is redundant here anyway -- this endpoint is remote and authenticated,
+    so every request already carries a token no rebinding attacker can forge,
+    and the platform only routes our own hostname to us. Disable the host/origin
+    check; content-type validation, the middleware's other job, stays on.
+    """
+    return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+
+def _serve(app: ASGIApp, host: str, port: int) -> None:
+    """Run an ASGI app. Isolated so ``main_http`` is testable without a socket.
+
+    uvicorn is imported here rather than at module scope so the stdio entry
+    point -- which is every desktop install -- doesn't pay for an HTTP stack
+    it never uses.
+    """
+    import uvicorn
+
+    uvicorn.run(app, host=host, port=port)
+
+
+def main() -> None:
+    _build_server_from_env().run(transport="stdio")
+
+
+AUTH_MODE_VAR = "ZOHO_HTTP_AUTH_MODE"
+OAUTH_ISSUER_VAR = "ZOHO_OAUTH_ISSUER"
+OAUTH_OPERATOR_PASSWORD_VAR = "ZOHO_OAUTH_OPERATOR_PASSWORD"
+OAUTH_STATE_DIR_VAR = "ZOHO_OAUTH_STATE_DIR"
+
+
+def _http_port() -> int:
+    raw = os.environ.get("ZOHO_HTTP_PORT", "8000").strip()
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"ZOHO_HTTP_PORT is set to {raw!r}, which is not a port number."
+        ) from e
+
+
+def _build_oauth_app_from_env() -> ASGIApp:
+    """Build the OAuth-mode app, validating its settings before building anything.
+
+    The issuer and operator passphrase are checked first: there is no point
+    creating a signing key, opening the stores and registering 42 tools only to
+    discover the server can't identify itself or gate its consent page. Neither
+    has a safe default -- the issuer is the deployment's own public URL, and a
+    built-in passphrase would be a published one.
+
+    Raises:
+        ValueError: if ``ZOHO_OAUTH_ISSUER`` is missing or not an https URL
+            (http is allowed only for localhost testing), or if
+            ``ZOHO_OAUTH_OPERATOR_PASSWORD`` is missing or blank.
+    """
+    issuer = os.environ.get(OAUTH_ISSUER_VAR, "").strip()
+    if not issuer:
+        raise ValueError(
+            f"{OAUTH_ISSUER_VAR} is not set. OAuth mode needs this server's own "
+            f"public URL (e.g. https://mail.example.com) to name itself in its "
+            f"discovery metadata and tokens."
+        )
+    if not (
+        issuer.startswith("https://")
+        or issuer.startswith("http://localhost")
+        or issuer.startswith("http://127.0.0.1")
+    ):
+        raise ValueError(
+            f"{OAUTH_ISSUER_VAR} must be an https URL -- Claude's connector "
+            f"requires it -- with http allowed only for localhost testing; "
+            f"got {issuer!r}."
+        )
+    password = os.environ.get(OAUTH_OPERATOR_PASSWORD_VAR, "")
+    if not password.strip():
+        raise ValueError(
+            f"{OAUTH_OPERATOR_PASSWORD_VAR} is not set. It is the passphrase you "
+            f"enter to approve a connection on the consent page; without it "
+            f"anyone reaching the page could authorize access."
+        )
+
+    state_dir = Path(
+        os.environ.get(OAUTH_STATE_DIR_VAR, "").strip()
+        or Path.home() / ".zoho-mcp" / "oauth"
+    )
+    signer = TokenSigner(
+        signing_key=load_or_create_signing_key(state_dir / "signing_key.json"),
+        issuer=issuer,
+        audience=issuer + MCP_PATH,
+    )
+    authorization_server = create_authorization_server(
+        signer=signer,
+        client_store=ClientStore(state_dir / "clients.json"),
+        code_store=AuthorizationCodeStore(),
+        refresh_store=RefreshTokenStore(state_dir / "refresh_tokens.json"),
+    )
+    return build_oauth_app(
+        _build_server_from_env(transport_security=_hosted_transport_security()),
+        server=authorization_server,
+        signer=signer,
+        issuer=issuer,
+        operator_password=password,
+    )
+
+
+def _build_hosted_app(mode: str) -> ASGIApp:
+    """Build the app for the chosen auth mode, failing fast on a bad setting.
+
+    ``bearer`` (the default) gates on a shared secret -- the smallest thing
+    that makes a single-user endpoint safe to expose. ``oauth`` runs the
+    self-contained authorization server so a client that only speaks OAuth,
+    such as Claude's phone connector, can obtain a token.
+    """
+    if mode == "bearer":
+        auth_token = require_auth_token(os.environ.get(AUTH_TOKEN_VAR, ""))
+        return build_http_app(
+            _build_server_from_env(transport_security=_hosted_transport_security()),
+            auth_token=auth_token,
+        )
+    if mode == "oauth":
+        return _build_oauth_app_from_env()
+    raise ValueError(
+        f"{AUTH_MODE_VAR} is set to {mode!r}, which is not an auth mode. "
+        f"Use 'bearer' (a shared secret, the default) or 'oauth' (the "
+        f"self-contained authorization server)."
+    )
+
+
+def main_http() -> None:
+    """Serve over streamable HTTP, for clients that can't spawn a local process.
+
+    Loopback by default. Reaching this from a phone means a tunnel or a
+    reverse proxy in front, and both connect over loopback; binding every
+    interface by default would publish the mailbox to the host's whole network
+    the moment a firewall rule went missing.
+
+    Raises:
+        ValueError: if the chosen auth mode's required settings are missing,
+            or ``ZOHO_HTTP_PORT`` isn't a number. Every one refuses to start
+            rather than degrade -- an unauthenticated mailbox on a socket is
+            worse than a server that didn't come up.
+    """
+    load_env()
+    mode = os.environ.get(AUTH_MODE_VAR, "bearer").strip().lower()
+    host = os.environ.get("ZOHO_HTTP_HOST", "127.0.0.1").strip()
+    port = _http_port()
+    app = _build_hosted_app(mode)
+    _serve(app, host, port)
 
 
 if __name__ == "__main__":

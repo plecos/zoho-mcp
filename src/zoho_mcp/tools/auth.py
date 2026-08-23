@@ -22,9 +22,9 @@ from zoho_mcp.zoho.auth import (
     build_authorization_url,
     exchange_code_for_tokens,
     extract_authorization_code,
-    store_refresh_token,
     wait_for_callback,
 )
+from zoho_mcp.zoho.token_store import KeyringTokenStore, TokenStore, TokenStoreError
 
 
 def _open_browser_and_wait(authorization_url: str, port: int) -> str:
@@ -45,6 +45,7 @@ async def authenticate(
     client_secret: str,
     callback_port: int = DEFAULT_CALLBACK_PORT,
     obtain_authorization_code: Callable[[str, int], str] = _open_browser_and_wait,
+    token_store: TokenStore | None = None,
 ) -> dict:
     """Run the Zoho OAuth consent flow and adopt the resulting refresh token.
 
@@ -53,6 +54,12 @@ async def authenticate(
     token without adopting it would work until the next restart, and one that
     adopted without storing would work only until then -- both fail later and
     far from the cause.
+
+    That ordering is also why a read-only store is rejected up front rather
+    than at the write. Everything between here and the write is a human
+    reading a consent screen and clicking Approve; failing afterwards spends
+    that consent for nothing. On a hosted run it is worse than useless -- the
+    browser would open on the server, where nobody is sitting.
 
     Args:
         token_manager: the live manager to adopt the new token.
@@ -63,15 +70,28 @@ async def authenticate(
             redirect URI registered in the console.
         obtain_authorization_code: the browser round trip, injectable for
             tests.
+        token_store: where to persist the resulting token. Defaults to the OS
+            credential store.
 
     Returns:
         ``{"authenticated": True, "was_already_authenticated": bool,
         "scopes": [...]}``.
 
     Raises:
-        ZohoAuthError: if credentials are missing, the browser flow fails, or
-            Zoho rejects the exchange or returns no refresh token.
+        ZohoAuthError: if credentials are missing, the store cannot be written
+            to, the browser flow fails, or Zoho rejects the exchange or
+            returns no refresh token.
     """
+    store = token_store or KeyringTokenStore()
+    if not store.is_writable:
+        # Reported through this module's own error type: to the caller this is
+        # "authenticating cannot work here", not a storage-layer detail.
+        raise ZohoAuthError(
+            "This server cannot save a Zoho token, so authorizing it from a "
+            "conversation would achieve nothing. It reads its refresh token "
+            "from ZOHO_REFRESH_TOKEN. Run `zoho-mcp-setup` on a machine with a "
+            "browser, then set ZOHO_REFRESH_TOKEN here and restart."
+        )
     if not client_id.strip():
         raise ZohoAuthError(
             "ZOHO_CLIENT_ID is not set. Register a Server-based Application in "
@@ -108,7 +128,10 @@ async def authenticate(
         redirect_uri=redirect_uri,
     )
     refresh_token = tokens["refresh_token"]
-    store_refresh_token(refresh_token)
+    try:
+        store.store(refresh_token)
+    except TokenStoreError as e:
+        raise ZohoAuthError(str(e)) from e
     token_manager.set_refresh_token(refresh_token)
 
     return {

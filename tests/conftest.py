@@ -10,14 +10,24 @@ place.
 
 import pytest
 
+from zoho_mcp.zoho.token_store import ENV_REFRESH_TOKEN_VAR
+
 
 @pytest.fixture(autouse=True)
 def no_real_credential_store(monkeypatch):
-    """Make the OS credential store look empty to every test by default.
+    """Make every token store look empty to every test by default.
 
-    `ZohoTokenManager` reads it when it holds no refresh token, which means
-    any test touching that path would otherwise depend on whether the person
-    running it happens to be authenticated. A test that genuinely wants a
-    stored token overrides this by patching the same name.
+    `ZohoTokenManager` reads its store when it holds no refresh token, which
+    means any test touching that path would otherwise depend on whether the
+    person running it happens to be authenticated. A test that genuinely wants
+    a stored token overrides this by patching the same name, or by injecting
+    its own store.
+
+    Both stores are covered, not just keyring: a developer with
+    ZOHO_REFRESH_TOKEN exported for a hosted run is the same hazard as one
+    with a token in Credential Manager.
     """
-    monkeypatch.setattr("zoho_mcp.zoho.auth.load_refresh_token", lambda: None)
+    monkeypatch.setattr(
+        "zoho_mcp.zoho.token_store.keyring.get_password", lambda service, key: None
+    )
+    monkeypatch.delenv(ENV_REFRESH_TOKEN_VAR, raising=False)

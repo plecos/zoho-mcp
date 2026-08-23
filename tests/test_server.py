@@ -386,3 +386,68 @@ async def test_send_email_is_annotated_as_irreversible_and_outward_facing():
     assert send.annotations.destructiveHint is True
     assert send.annotations.idempotentHint is False
     assert send.annotations.openWorldHint is True
+
+
+# --- hosted transport: DNS-rebinding protection -----------------------------
+#
+# Found only by deploying: FastMCP's streamable transport allow-lists localhost
+# for DNS-rebinding protection, so a server on a real hostname 421'd every MCP
+# request ("Invalid Host header"). Every earlier test drove a stub or localhost,
+# so none caught it -- exactly the "watch a real client" gap. These pin that the
+# hosted transports admit a foreign host while stdio's default still rejects it.
+
+_INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "probe", "version": "0"},
+    },
+}
+_FOREIGN_HOST_HEADERS = {
+    "Host": "zoho-mcp-somewhere.example.com",
+    "Accept": "application/json, text/event-stream",
+    "Content-Type": "application/json",
+}
+
+
+async def _post_initialize(server):
+    app = server.streamable_http_app()
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            response = await client.post(
+                "/mcp", json=_INITIALIZE, headers=_FOREIGN_HOST_HEADERS
+            )
+            return response.status_code
+
+
+async def test_the_hosted_transport_accepts_a_foreign_host():
+    from zoho_mcp.server import _hosted_transport_security
+
+    server = create_server(
+        FakeZohoClient(),
+        FakeContactsClient(),
+        ZohoTokenManager(
+            client_id="id",
+            client_secret="secret",
+            refresh_token="refresh",
+            http_client=httpx.AsyncClient(),
+        ),
+        httpx.AsyncClient(),
+        ReleaseChecker(httpx.AsyncClient(), enabled=False),
+        transport_security=_hosted_transport_security(),
+    )
+
+    assert await _post_initialize(server) == 200
+
+
+async def test_the_default_transport_still_rejects_a_foreign_host():
+    # The relaxation is scoped to the hosted transports: a server built without
+    # it (the stdio default) keeps FastMCP's protection, so we haven't loosened
+    # anything for the common case.
+    assert await _post_initialize(build_server()) == 421

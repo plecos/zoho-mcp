@@ -1,8 +1,9 @@
-"""Zoho OAuth token refresh and refresh-token storage.
+"""Zoho's OAuth protocol: consent, code exchange, and token refresh.
 
 Knows nothing about Mail/Calendar payloads -- only how to turn a stored
-refresh token into a live access token, and where that refresh token lives
-at rest (the OS credential store via ``keyring``).
+refresh token into a live access token. *Where* that refresh token lives at
+rest is a separate question with a per-deployment answer, and lives in
+``token_store.py``.
 """
 
 import http.server
@@ -11,7 +12,8 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
-import keyring
+
+from zoho_mcp.zoho.token_store import KeyringTokenStore, TokenStore
 
 ZOHO_TOKEN_URL = "https://accounts.zoho.com/oauth/v2/token"
 ZOHO_AUTHORIZATION_URL = "https://accounts.zoho.com/oauth/v2/auth"
@@ -82,9 +84,6 @@ REFRESH_SAFETY_MARGIN_SECONDS = 60
 # expires_in can't collapse into a refresh-per-request loop.
 MIN_TOKEN_LIFETIME_SECONDS = 30
 
-_KEYRING_SERVICE = "zoho-mcp"
-_KEYRING_REFRESH_TOKEN_KEY = "zoho_refresh_token"
-
 
 class ZohoAuthError(Exception):
     """Raised when Zoho rejects a token refresh (expired/revoked/invalid refresh token)."""
@@ -99,6 +98,7 @@ class ZohoTokenManager:
         client_secret: str,
         refresh_token: str | None,
         http_client: httpx.AsyncClient,
+        token_store: TokenStore | None = None,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
@@ -108,6 +108,9 @@ class ZohoTokenManager:
         # supplies this later via ``set_refresh_token``.
         self._refresh_token = (refresh_token or "").strip() or None
         self._http_client = http_client
+        # Defaults to the OS credential store, which is what a desktop
+        # install wants and what every existing caller got implicitly.
+        self._token_store: TokenStore = token_store or KeyringTokenStore()
         self._access_token: str | None = None
         self._expires_at: datetime | None = None
 
@@ -186,10 +189,10 @@ class ZohoTokenManager:
         Only reached when no token is held, so it never overrides a live one;
         overriding would undo a ``set_refresh_token`` that had just granted
         wider scopes. An unreachable credential store needs no handling here
-        -- ``load_refresh_token`` returns ``None`` for that, by contract and
-        by test.
+        -- a store's ``load`` returns ``None`` for that, by contract and by
+        test.
         """
-        stored = load_refresh_token()
+        stored = self._token_store.load()
         if stored and stored.strip():
             self.set_refresh_token(stored)
 
@@ -323,47 +326,3 @@ def extract_authorization_code(query_params: dict[str, list[str]]) -> str:
     if "code" not in query_params:
         raise ZohoAuthError("OAuth callback did not include an authorization code")
     return query_params["code"][0]
-
-
-def load_refresh_token() -> str | None:
-    """Read the stored Zoho refresh token, or ``None`` if there isn't one.
-
-    A credential store that can't be reached counts as "no token". Plenty of
-    Linux machines have no Secret Service backend at all -- headless servers,
-    minimal desktops, WSL, containers -- and ``keyring`` raises there rather
-    than returning nothing. Since the server reads this during startup, an
-    escaping exception killed the process before any of the deferred-auth
-    handling could run, which is how a missing backend turned into "the
-    extension won't start" instead of "you need to authenticate".
-
-    Deliberately broad: a locked store, an absent D-Bus and a backend that
-    raises something keyring doesn't wrap all mean the same thing here.
-    """
-    try:
-        return keyring.get_password(_KEYRING_SERVICE, _KEYRING_REFRESH_TOKEN_KEY)
-    except Exception:  # noqa: BLE001 -- any store failure means "no token"
-        return None
-
-
-def store_refresh_token(refresh_token: str) -> None:
-    """Persist the Zoho refresh token to the OS credential store.
-
-    Unlike loading, this fails loudly. A user who ran ``authenticate``, saw it
-    succeed, and then found themselves unauthenticated after a restart would
-    have nothing to go on -- so a store that can't be written says so at the
-    moment it matters.
-
-    Raises:
-        ZohoAuthError: if the credential store is unavailable or refuses.
-    """
-    try:
-        keyring.set_password(
-            _KEYRING_SERVICE, _KEYRING_REFRESH_TOKEN_KEY, refresh_token
-        )
-    except Exception as e:  # noqa: BLE001 -- surfaced, not swallowed
-        raise ZohoAuthError(
-            f"Could not save the Zoho refresh token to this machine's "
-            f"credential store: {e}. On Linux this usually means no Secret "
-            f"Service backend is installed -- try installing gnome-keyring or "
-            f"the `keyrings.alt` package, then authenticate again."
-        ) from e

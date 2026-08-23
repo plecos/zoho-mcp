@@ -4,7 +4,7 @@ Shapes LLM-facing input/output only. No HTTP calls, no token logic -- the
 Zoho client is injected by the caller (``server.py``), never constructed here.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from zoho_mcp.tools.envelope import counted
 from zoho_mcp.zoho.client import ZohoClient
@@ -28,7 +28,7 @@ def _parse_iso8601_utc(value: str, *, field_name: str) -> datetime:
             f"{field_name} must include a UTC offset "
             f"(e.g. '2024-10-29T16:00:00+00:00'), got: {value!r}"
         )
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 async def list_events(

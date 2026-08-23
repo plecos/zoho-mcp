@@ -4,8 +4,6 @@ from zoho_mcp.tools.mail import (
     add_label,
     create_draft,
     forward_draft,
-    reply_draft,
-    send_email,
     get_email,
     list_attachments,
     list_emails,
@@ -16,7 +14,9 @@ from zoho_mcp.tools.mail import (
     mark_as_unread,
     move_email,
     remove_label,
+    reply_draft,
     search_emails,
+    send_email,
 )
 
 

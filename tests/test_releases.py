@@ -18,8 +18,8 @@ from zoho_mcp.releases import (
     CACHE_TTL_SECONDS,
     GITHUB_LATEST_RELEASE_URL,
     RELEASES_PAGE_URL,
-    ReleaseCheckError,
     ReleaseChecker,
+    ReleaseCheckError,
     installed_version,
     parse_version,
 )

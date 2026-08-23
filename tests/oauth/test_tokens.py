@@ -14,7 +14,7 @@ group is the whole security value of the layer, so it gets the most tests.
 import base64
 import json
 import stat
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -39,7 +39,7 @@ KEY = "k" * 43  # what secrets.token_urlsafe(32) produces, roughly
 
 
 def signer(**overrides) -> TokenSigner:
-    kwargs = dict(signing_key=KEY, issuer=ISSUER, audience=AUDIENCE)
+    kwargs = {"signing_key": KEY, "issuer": ISSUER, "audience": AUDIENCE}
     kwargs.update(overrides)
     return TokenSigner(**kwargs)
 
@@ -149,14 +149,14 @@ def test_a_token_signed_with_another_key_is_rejected():
 
 def test_an_expired_token_is_rejected():
     s = signer(access_ttl=timedelta(minutes=5))
-    with time_machine.travel(datetime(2026, 1, 1, tzinfo=timezone.utc), tick=False):
+    with time_machine.travel(datetime(2026, 1, 1, tzinfo=UTC), tick=False):
         token = s.mint_access_token("owner", ["a"])
 
-    with time_machine.travel(
-        datetime(2026, 1, 1, 0, 6, tzinfo=timezone.utc), tick=False
+    with (
+        time_machine.travel(datetime(2026, 1, 1, 0, 6, tzinfo=UTC), tick=False),
+        pytest.raises(TokenError),
     ):
-        with pytest.raises(TokenError):
-            s.verify(token)
+        s.verify(token)
 
 
 def test_a_token_from_another_issuer_is_rejected():

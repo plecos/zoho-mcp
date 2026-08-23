@@ -1,7 +1,7 @@
+import pytest
+
 from zoho_mcp.releases import ReleaseCheckError
 from zoho_mcp.tools.updates import check_for_updates
-
-import pytest
 
 
 class FakeReleaseChecker:

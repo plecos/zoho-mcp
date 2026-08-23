@@ -12,7 +12,7 @@ through it, then the grants and token generation, then assembly.
 
 import hmac
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from authlib.oauth2 import AuthorizationServer
@@ -44,7 +44,7 @@ _TOKEN_ENDPOINT_AUTH_METHODS = ["none", "client_secret_post", "client_secret_bas
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # The single scope this server grants for now. Kept as a tuple so widening to

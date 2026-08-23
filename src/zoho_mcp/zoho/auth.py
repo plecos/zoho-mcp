@@ -8,7 +8,7 @@ rest is a separate question with a per-deployment answer, and lives in
 
 import http.server
 import urllib.parse
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -52,7 +52,7 @@ DEFAULT_CALLBACK_PORT = 8765
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):
     """Captures the OAuth redirect's query string, then serves a plain notice."""
 
-    def do_GET(self) -> None:  # noqa: N802 (http.server's required method name)
+    def do_GET(self) -> None:
         self.server.callback_query = urllib.parse.parse_qs(  # type: ignore[attr-defined]
             urllib.parse.urlparse(self.path).query
         )
@@ -198,7 +198,7 @@ class ZohoTokenManager:
 
     def _is_expired(self) -> bool:
         assert self._expires_at is not None
-        return datetime.now(timezone.utc) >= self._expires_at
+        return datetime.now(UTC) >= self._expires_at
 
     async def _refresh(self) -> None:
         try:
@@ -246,7 +246,7 @@ class ZohoTokenManager:
         lifetime = max(
             expires_in - REFRESH_SAFETY_MARGIN_SECONDS, MIN_TOKEN_LIFETIME_SECONDS
         )
-        self._expires_at = datetime.now(timezone.utc) + timedelta(seconds=lifetime)
+        self._expires_at = datetime.now(UTC) + timedelta(seconds=lifetime)
 
 
 def build_authorization_url(

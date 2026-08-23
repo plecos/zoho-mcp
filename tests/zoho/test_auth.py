@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -58,9 +58,7 @@ async def test_get_access_token_refreshes_when_expired(respx_mock, http_client):
         http_client=http_client,
     )
 
-    with time_machine.travel(
-        datetime(2026, 1, 1, tzinfo=timezone.utc), tick=False
-    ) as traveler:
+    with time_machine.travel(datetime(2026, 1, 1, tzinfo=UTC), tick=False) as traveler:
         first = await manager.get_access_token()
         traveler.shift(timedelta(hours=2))
         second = await manager.get_access_token()
@@ -200,9 +198,7 @@ async def test_token_is_refreshed_inside_the_safety_margin(respx_mock, http_clie
     await manager.get_access_token()
 
     # 3570s in: past 3600-60, so the token is treated as expiring imminently.
-    with time_machine.travel(
-        datetime.now(timezone.utc) + timedelta(seconds=3570), tick=False
-    ):
+    with time_machine.travel(datetime.now(UTC) + timedelta(seconds=3570), tick=False):
         await manager.get_access_token()
 
     assert route.call_count == 2
@@ -213,9 +209,7 @@ async def test_token_is_not_refreshed_before_the_safety_margin(respx_mock, http_
     manager = _manager(http_client)
     await manager.get_access_token()
 
-    with time_machine.travel(
-        datetime.now(timezone.utc) + timedelta(seconds=3000), tick=False
-    ):
+    with time_machine.travel(datetime.now(UTC) + timedelta(seconds=3000), tick=False):
         await manager.get_access_token()
 
     assert route.call_count == 1

@@ -27,7 +27,7 @@ import os
 import tempfile
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -89,7 +89,7 @@ class AuthorizationCode:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _atomic_write_json(path: Path, data: object) -> None:

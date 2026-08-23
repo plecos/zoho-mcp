@@ -1254,11 +1254,7 @@ def _build_oauth_app_from_env() -> ASGIApp:
             f"public URL (e.g. https://mail.example.com) to name itself in its "
             f"discovery metadata and tokens."
         )
-    if not (
-        issuer.startswith("https://")
-        or issuer.startswith("http://localhost")
-        or issuer.startswith("http://127.0.0.1")
-    ):
+    if not issuer.startswith(("https://", "http://localhost", "http://127.0.0.1")):
         raise ValueError(
             f"{OAUTH_ISSUER_VAR} must be an https URL -- Claude's connector "
             f"requires it -- with http allowed only for localhost testing; "

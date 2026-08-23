@@ -38,7 +38,7 @@ VERIFIER = "test-verifier-" + "a" * 40
 
 
 def a_signer(**overrides) -> TokenSigner:
-    kwargs = dict(signing_key="k" * 43, issuer=ISSUER, audience=AUDIENCE)
+    kwargs = {"signing_key": "k" * 43, "issuer": ISSUER, "audience": AUDIENCE}
     kwargs.update(overrides)
     return TokenSigner(**kwargs)
 

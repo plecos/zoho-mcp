@@ -10,7 +10,7 @@ import email.parser
 import html
 import json
 import urllib.parse
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -256,7 +256,9 @@ def _zoho_event_time_to_iso8601(value: str, tz_name: str) -> str:
     local offset for the same reason as ``_epoch_ms_to_iso8601``.
     """
     if "T" not in value:
-        return datetime.strptime(value, "%Y%m%d").date().isoformat()
+        # DTZ007: a date-only all-day event carries no time or zone; .date()
+        # drops the naive time immediately, so no timezone is ever involved.
+        return datetime.strptime(value, "%Y%m%d").date().isoformat()  # noqa: DTZ007
     return (
         datetime.strptime(value, "%Y%m%dT%H%M%S%z")
         .astimezone(ZoneInfo(tz_name))
@@ -2530,8 +2532,8 @@ class ZohoClient:
             f"{ZOHO_CALENDAR_BASE_URL}/calendars/freebusy",
             params={
                 "uemail": email,
-                "sdate": start.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S"),
-                "edate": end.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S"),
+                "sdate": start.astimezone(UTC).strftime("%Y%m%dT%H%M%S"),
+                "edate": end.astimezone(UTC).strftime("%Y%m%dT%H%M%S"),
             },
         )
         if payload.get("fb_not_enabled"):
@@ -2583,12 +2585,10 @@ class ZohoClient:
         eventdata: dict = {
             "title": title,
             "dateandtime": {
-                "start": start.astimezone(timezone.utc).strftime(
+                "start": start.astimezone(UTC).strftime(
                     ZOHO_EVENT_RANGE_REQUEST_FORMAT
                 ),
-                "end": end.astimezone(timezone.utc).strftime(
-                    ZOHO_EVENT_RANGE_REQUEST_FORMAT
-                ),
+                "end": end.astimezone(UTC).strftime(ZOHO_EVENT_RANGE_REQUEST_FORMAT),
                 "timezone": "UTC",
             },
         }
@@ -2703,12 +2703,10 @@ class ZohoClient:
             eventdata["title"] = title
         if start is not None and end is not None:
             eventdata["dateandtime"] = {
-                "start": start.astimezone(timezone.utc).strftime(
+                "start": start.astimezone(UTC).strftime(
                     ZOHO_EVENT_RANGE_REQUEST_FORMAT
                 ),
-                "end": end.astimezone(timezone.utc).strftime(
-                    ZOHO_EVENT_RANGE_REQUEST_FORMAT
-                ),
+                "end": end.astimezone(UTC).strftime(ZOHO_EVENT_RANGE_REQUEST_FORMAT),
                 "timezone": "UTC",
             }
         if description is not None:

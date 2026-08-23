@@ -18,7 +18,7 @@ import os
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from joserfc import jwt
@@ -148,7 +148,7 @@ class TokenSigner:
     def _mint(
         self, subject: str, scopes: Sequence[str], token_use: str, ttl: timedelta
     ) -> str:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         claims = {
             "iss": self._issuer,
             "aud": self._audience,
@@ -214,7 +214,7 @@ class TokenSigner:
             subject=claims["sub"],
             scopes=tuple(claims.get("scope", "").split()),
             token_use=token_use,
-            expires_at=datetime.fromtimestamp(claims["exp"], timezone.utc),
+            expires_at=datetime.fromtimestamp(claims["exp"], UTC),
             jti=claims.get("jti", ""),
             claims=dict(claims),
         )

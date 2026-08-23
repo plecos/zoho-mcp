@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -275,8 +275,8 @@ async def test_list_events_sends_json_encoded_range_param(respx_mock, zoho_clien
             },
         )
     )
-    start = datetime(2024, 10, 29, 16, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2024, 10, 29, 17, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2024, 10, 29, 16, 0, 0, tzinfo=UTC)
+    end = datetime(2024, 10, 29, 17, 0, 0, tzinfo=UTC)
 
     results = await zoho_client.list_events(start=start, end=end)
 
@@ -303,7 +303,7 @@ async def test_list_events_rejects_range_over_31_days_without_a_request(
     route = respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     )
-    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    start = datetime(2024, 1, 1, tzinfo=UTC)
     end = start + timedelta(days=32)
 
     with pytest.raises(ZohoAPIError, match="31 days"):
@@ -318,8 +318,8 @@ async def test_list_events_rejects_end_before_start_without_a_request(
     route = respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     )
-    start = datetime(2024, 1, 2, tzinfo=timezone.utc)
-    end = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    start = datetime(2024, 1, 2, tzinfo=UTC)
+    end = datetime(2024, 1, 1, tzinfo=UTC)
 
     with pytest.raises(ZohoAPIError, match="end must be after start"):
         await zoho_client.list_events(start=start, end=end)
@@ -333,7 +333,7 @@ async def test_list_events_rejects_end_equal_to_start_without_a_request(
     route = respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     )
-    same_instant = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    same_instant = datetime(2024, 1, 1, tzinfo=UTC)
 
     with pytest.raises(ZohoAPIError, match="end must be after start"):
         await zoho_client.list_events(start=same_instant, end=same_instant)
@@ -405,9 +405,7 @@ async def test_search_emails_appends_fromDate_filter_for_days_back(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
     ).mock(return_value=httpx.Response(200, json={"data": []}))
 
-    with time_machine.travel(
-        datetime(2026, 7, 18, 2, 0, 0, tzinfo=timezone.utc), tick=False
-    ):
+    with time_machine.travel(datetime(2026, 7, 18, 2, 0, 0, tzinfo=UTC), tick=False):
         await zoho_client.search_emails(query="", days_back=0)
 
     assert route.calls.last.request.url.params["searchKey"] == "fromDate:17-Jul-2026"
@@ -421,9 +419,7 @@ async def test_search_emails_combines_query_and_days_back_with_double_colon(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
     ).mock(return_value=httpx.Response(200, json={"data": []}))
 
-    with time_machine.travel(
-        datetime(2026, 7, 18, 15, 0, 0, tzinfo=timezone.utc), tick=False
-    ):
+    with time_machine.travel(datetime(2026, 7, 18, 15, 0, 0, tzinfo=UTC), tick=False):
         await zoho_client.search_emails(query="subject:roadmap", days_back=1)
 
     assert (
@@ -440,9 +436,7 @@ async def test_search_emails_caches_mailbox_timezone_across_calls(
         f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages/search"
     ).mock(return_value=httpx.Response(200, json={"data": []}))
 
-    with time_machine.travel(
-        datetime(2026, 7, 18, 15, 0, 0, tzinfo=timezone.utc), tick=False
-    ):
+    with time_machine.travel(datetime(2026, 7, 18, 15, 0, 0, tzinfo=UTC), tick=False):
         await zoho_client.search_emails(query="", days_back=0)
         await zoho_client.search_emails(query="", days_back=1)
 
@@ -1763,8 +1757,8 @@ async def test_list_events_returns_empty_list_when_events_key_absent(
     respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     ).mock(return_value=httpx.Response(200, json={}))
-    start = datetime(2024, 10, 29, 16, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2024, 10, 29, 17, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2024, 10, 29, 16, 0, 0, tzinfo=UTC)
+    end = datetime(2024, 10, 29, 17, 0, 0, tzinfo=UTC)
 
     results = await zoho_client.list_events(start=start, end=end)
 
@@ -1781,8 +1775,8 @@ async def test_list_events_uses_given_calendar_id_instead_of_default(
     default_calendar_route = respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     )
-    start = datetime(2024, 10, 29, 16, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2024, 10, 29, 17, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2024, 10, 29, 16, 0, 0, tzinfo=UTC)
+    end = datetime(2024, 10, 29, 17, 0, 0, tzinfo=UTC)
 
     await zoho_client.list_events(start=start, end=end, calendar_id="other-cal")
 
@@ -2273,8 +2267,8 @@ async def test_get_freebusy_fetches_and_normalizes(respx_mock, zoho_client):
             },
         )
     )
-    start = datetime(2026, 7, 21, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 22, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 21, tzinfo=UTC)
+    end = datetime(2026, 7, 22, tzinfo=UTC)
 
     results = await zoho_client.get_freebusy(
         email="jamie@example.com", start=start, end=end
@@ -2301,8 +2295,8 @@ async def test_get_freebusy_returns_empty_list_when_freebusy_key_absent(
     respx_mock.get("https://calendar.zoho.com/api/v1/calendars/freebusy").mock(
         return_value=httpx.Response(200, json={})
     )
-    start = datetime(2026, 7, 21, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 22, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 21, tzinfo=UTC)
+    end = datetime(2026, 7, 22, tzinfo=UTC)
 
     results = await zoho_client.get_freebusy(
         email="jamie@example.com", start=start, end=end
@@ -2318,8 +2312,8 @@ async def test_get_freebusy_raises_clear_error_when_sharing_not_enabled(
     respx_mock.get("https://calendar.zoho.com/api/v1/calendars/freebusy").mock(
         return_value=httpx.Response(200, json={"fb_not_enabled": True})
     )
-    start = datetime(2026, 7, 21, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 22, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 21, tzinfo=UTC)
+    end = datetime(2026, 7, 22, tzinfo=UTC)
 
     with pytest.raises(ZohoAPIError, match="not enabled"):
         await zoho_client.get_freebusy(email="jamie@example.com", start=start, end=end)
@@ -2329,8 +2323,8 @@ async def test_get_freebusy_rejects_end_before_start_without_a_request(
     respx_mock, zoho_client
 ):
     route = respx_mock.get("https://calendar.zoho.com/api/v1/calendars/freebusy")
-    start = datetime(2026, 7, 22, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 21, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 22, tzinfo=UTC)
+    end = datetime(2026, 7, 21, tzinfo=UTC)
 
     with pytest.raises(ZohoAPIError, match="end must be after start"):
         await zoho_client.get_freebusy(email="jamie@example.com", start=start, end=end)
@@ -2345,8 +2339,8 @@ async def test_get_freebusy_wraps_http_errors_as_zoho_api_error(
     respx_mock.get("https://calendar.zoho.com/api/v1/calendars/freebusy").mock(
         return_value=httpx.Response(401, json={"error": "invalid token"})
     )
-    start = datetime(2026, 7, 21, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 22, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 21, tzinfo=UTC)
+    end = datetime(2026, 7, 22, tzinfo=UTC)
 
     with pytest.raises(ZohoAPIError):
         await zoho_client.get_freebusy(email="jamie@example.com", start=start, end=end)
@@ -2372,8 +2366,8 @@ async def test_create_event_sends_eventdata_and_normalizes_response(
             },
         )
     )
-    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=UTC)
 
     result = await zoho_client.create_event(title="Q3 Sync", start=start, end=end)
 
@@ -2410,8 +2404,8 @@ async def test_create_event_includes_optional_fields_when_given(
             },
         )
     )
-    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=UTC)
 
     await zoho_client.create_event(
         title="Q3 Sync",
@@ -2443,8 +2437,8 @@ async def test_create_event_uses_given_calendar_id_instead_of_default(
             },
         )
     )
-    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=UTC)
 
     await zoho_client.create_event(
         title="Sync", start=start, end=end, calendar_id="other-cal"
@@ -2459,8 +2453,8 @@ async def test_create_event_rejects_end_before_start_without_a_request(
     route = respx_mock.post(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     )
-    start = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 21, 17, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 21, 16, 0, 0, tzinfo=UTC)
 
     with pytest.raises(ZohoAPIError, match="end must be after start"):
         await zoho_client.create_event(title="Sync", start=start, end=end)
@@ -2474,8 +2468,8 @@ async def test_create_event_raises_clear_error_when_events_key_absent(
     respx_mock.post(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     ).mock(return_value=httpx.Response(200, json={}))
-    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=UTC)
 
     with pytest.raises(ZohoAPIError):
         await zoho_client.create_event(title="Sync", start=start, end=end)
@@ -2487,8 +2481,8 @@ async def test_create_event_wraps_http_errors_as_zoho_api_error(
     respx_mock.post(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     ).mock(return_value=httpx.Response(401, json={"error": "invalid token"}))
-    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 21, 16, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 21, 17, 0, 0, tzinfo=UTC)
 
     with pytest.raises(ZohoAPIError):
         await zoho_client.create_event(title="Sync", start=start, end=end)
@@ -2597,8 +2591,8 @@ async def test_update_event_overrides_only_given_fields(respx_mock, zoho_client)
             },
         )
     )
-    start = datetime(2026, 7, 22, 16, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 22, 17, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 22, 16, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 22, 17, 0, 0, tzinfo=UTC)
 
     await zoho_client.update_event(
         uid="evt-1",
@@ -2651,7 +2645,7 @@ async def test_update_event_rejects_start_without_end(respx_mock, zoho_client):
 
     with pytest.raises(ZohoAPIError, match="start and end must be given together"):
         await zoho_client.update_event(
-            uid="evt-1", start=datetime(2026, 7, 22, tzinfo=timezone.utc)
+            uid="evt-1", start=datetime(2026, 7, 22, tzinfo=UTC)
         )
 
     assert not route.called
@@ -2661,8 +2655,8 @@ async def test_update_event_rejects_end_before_start(respx_mock, zoho_client):
     respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events/evt-1"
     ).mock(return_value=httpx.Response(200, json={"events": [_raw_event_for_update()]}))
-    start = datetime(2026, 7, 22, 17, 0, 0, tzinfo=timezone.utc)
-    end = datetime(2026, 7, 22, 16, 0, 0, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 22, 17, 0, 0, tzinfo=UTC)
+    end = datetime(2026, 7, 22, 16, 0, 0, tzinfo=UTC)
 
     with pytest.raises(ZohoAPIError, match="end must be after start"):
         await zoho_client.update_event(uid="evt-1", start=start, end=end)
@@ -3896,7 +3890,7 @@ async def test_list_events_accepts_a_range_of_exactly_31_days(respx_mock, zoho_c
     route = respx_mock.get(
         f"https://calendar.zoho.com/api/v1/calendars/{CALENDAR_UID}/events"
     ).mock(return_value=httpx.Response(200, json={"events": []}))
-    start = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    start = datetime(2026, 7, 1, tzinfo=UTC)
 
     await zoho_client.list_events(start=start, end=start + timedelta(days=31))
 

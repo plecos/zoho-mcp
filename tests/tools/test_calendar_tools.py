@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -108,8 +108,8 @@ async def test_list_events_parses_iso8601_utc_strings_and_delegates():
 
     assert client.list_events_calls == [
         {
-            "start": datetime(2024, 10, 29, 16, 0, 0, tzinfo=timezone.utc),
-            "end": datetime(2024, 10, 29, 17, 0, 0, tzinfo=timezone.utc),
+            "start": datetime(2024, 10, 29, 16, 0, 0, tzinfo=UTC),
+            "end": datetime(2024, 10, 29, 17, 0, 0, tzinfo=UTC),
             "calendar_id": None,
         }
     ]
@@ -125,8 +125,8 @@ async def test_list_events_converts_non_utc_offset_to_utc():
 
     assert client.list_events_calls == [
         {
-            "start": datetime(2024, 10, 29, 16, 0, 0, tzinfo=timezone.utc),
-            "end": datetime(2024, 10, 29, 17, 0, 0, tzinfo=timezone.utc),
+            "start": datetime(2024, 10, 29, 16, 0, 0, tzinfo=UTC),
+            "end": datetime(2024, 10, 29, 17, 0, 0, tzinfo=UTC),
             "calendar_id": None,
         }
     ]
@@ -206,8 +206,8 @@ async def test_get_freebusy_parses_iso8601_and_delegates():
     assert client.get_freebusy_calls == [
         {
             "email": "jamie@example.com",
-            "start": datetime(2026, 7, 21, tzinfo=timezone.utc),
-            "end": datetime(2026, 7, 22, tzinfo=timezone.utc),
+            "start": datetime(2026, 7, 21, tzinfo=UTC),
+            "end": datetime(2026, 7, 22, tzinfo=UTC),
         }
     ]
     assert result == {"busy_slots": client.get_freebusy_result, "count": 1}
@@ -240,8 +240,8 @@ async def test_create_event_parses_iso8601_and_delegates():
     assert client.create_event_calls == [
         {
             "title": "Sync",
-            "start": datetime(2026, 7, 21, 16, 0, 0, tzinfo=timezone.utc),
-            "end": datetime(2026, 7, 21, 17, 0, 0, tzinfo=timezone.utc),
+            "start": datetime(2026, 7, 21, 16, 0, 0, tzinfo=UTC),
+            "end": datetime(2026, 7, 21, 17, 0, 0, tzinfo=UTC),
             "description": "",
             "location": "",
             "attendees": None,
@@ -317,8 +317,8 @@ async def test_update_event_parses_start_and_end_when_given():
     )
 
     call = client.update_event_calls[0]
-    assert call["start"] == datetime(2026, 7, 22, 16, 0, 0, tzinfo=timezone.utc)
-    assert call["end"] == datetime(2026, 7, 22, 17, 0, 0, tzinfo=timezone.utc)
+    assert call["start"] == datetime(2026, 7, 22, 16, 0, 0, tzinfo=UTC)
+    assert call["end"] == datetime(2026, 7, 22, 17, 0, 0, tzinfo=UTC)
 
 
 async def test_update_event_rejects_malformed_start_string():

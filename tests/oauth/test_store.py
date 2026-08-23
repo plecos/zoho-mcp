@@ -12,7 +12,7 @@ silently dropping state.
 """
 
 import stat
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import time_machine
@@ -26,7 +26,7 @@ from zoho_mcp.oauth.store import (
     StoreError,
 )
 
-NOW = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
 
 def a_client(client_id="client-1", secret=None) -> RegisteredClient:

@@ -39,18 +39,26 @@ _GITHUB_HEADERS = {
 # they're what turns a routine upgrade into a re-entry of credentials.
 _INSTALL_STEPS = (
     "Download the .mcpb from the release page.",
-    "In Claude Desktop, disable this extension and restart Claude before"
-    " installing over it -- a running server holds files in its own directory"
-    " open, and the uninstall can fail.",
-    "Open the downloaded .mcpb and confirm the install. Installing a bundle"
-    " whose version matches the installed one does NOT replace it -- the host"
-    " uninstalls the extension instead, so check the version first.",
-    "Re-enter your Zoho client id and client secret: the host deletes an"
-    " extension's settings when it replaces it. Your authorization survives"
-    " (the refresh token is in the OS credential store), so there is no need"
-    " to run `authenticate` again.",
-    "Quit and reopen Claude Desktop. Settings are read only when the server"
-    " process starts.",
+    (
+        "In Claude Desktop, disable this extension and restart Claude before"
+        " installing over it -- a running server holds files in its own directory"
+        " open, and the uninstall can fail."
+    ),
+    (
+        "Open the downloaded .mcpb and confirm the install. Installing a bundle"
+        " whose version matches the installed one does NOT replace it -- the host"
+        " uninstalls the extension instead, so check the version first."
+    ),
+    (
+        "Re-enter your Zoho client id and client secret: the host deletes an"
+        " extension's settings when it replaces it. Your authorization survives"
+        " (the refresh token is in the OS credential store), so there is no need"
+        " to run `authenticate` again."
+    ),
+    (
+        "Quit and reopen Claude Desktop. Settings are read only when the server"
+        " process starts."
+    ),
 )
 
 

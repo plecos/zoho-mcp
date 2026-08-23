@@ -134,8 +134,10 @@ def test_the_received_chain_is_a_list_in_order():
     # stronger assertion is also the shorter one.
     assert record["received_chain"] == [
         "by 10.0.0.1 with SMTP id abc; Fri, 24 Jul 2026 09:00:01 -0700",
-        "from mail.example.net (mail.example.net [203.0.113.7]) "
-        "by mx.example.com with ESMTPS id xyz; Fri, 24 Jul 2026 09:00:00 -0700",
+        (
+            "from mail.example.net (mail.example.net [203.0.113.7]) "
+            "by mx.example.com with ESMTPS id xyz; Fri, 24 Jul 2026 09:00:00 -0700"
+        ),
     ]
 
 

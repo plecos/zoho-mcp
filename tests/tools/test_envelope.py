@@ -43,4 +43,4 @@ def test_counted_refuses_an_extra_field_that_would_overwrite_the_count():
 
 def test_counted_refuses_an_extra_field_that_would_overwrite_the_items():
     with pytest.raises(ValueError, match="emails"):
-        counted("emails", [{"id": "1"}], **{"emails": []})
+        counted("emails", [{"id": "1"}], emails=[])

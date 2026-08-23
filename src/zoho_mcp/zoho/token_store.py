@@ -101,7 +101,7 @@ class KeyringTokenStore:
             keyring.set_password(
                 _KEYRING_SERVICE, _KEYRING_REFRESH_TOKEN_KEY, refresh_token
             )
-        except Exception as e:  # noqa: BLE001 -- surfaced, not swallowed
+        except Exception as e:
             raise TokenStoreError(
                 f"Could not save the Zoho refresh token to this machine's "
                 f"credential store: {e}. On Linux this usually means no Secret "

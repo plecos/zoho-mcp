@@ -18,7 +18,7 @@ dependencies = [
     # server.py's import fails at module load, so the cap is what the code
     # actually supports rather than caution. Lifting it is a port to
     # `mcp.server.mcpserver`'s MCPServer, not a version bump.
-    "mcp>=1.28.1,<2",
+    "mcp>=1.28.1,<3",
     "python-dotenv>=1.2.2",
     "tzdata>=2026.3",
     # Only `zoho-mcp-http` needs it, and it arrives transitively with `mcp`

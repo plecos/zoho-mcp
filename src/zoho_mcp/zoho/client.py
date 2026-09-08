@@ -1529,6 +1529,7 @@ class ZohoClient:
         calendar_uid: str | None = None,
         strip_invisible_chars: bool = False,
         allow_auto_send: bool = False,
+        from_address: str | None = None,
     ) -> None:
         self._token_manager = token_manager
         self._http_client = http_client
@@ -1545,7 +1546,15 @@ class ZohoClient:
         # around it.
         self._allow_auto_send = allow_auto_send
         self._mailbox_timezone_cache: str | None = None
-        self._from_address_cache: str | None = None
+        # An explicit override skips the live mailboxAddress lookup
+        # entirely -- see ``_get_from_address``. Real-world need: an
+        # account can have more than one mailbox-worthy address (a
+        # business domain plus a personal address added for other
+        # purposes), and nothing in Zoho's account object says which one
+        # the operator actually wants outgoing mail to carry. Pre-seeding
+        # this cache with the override means every call site that reads
+        # ``self._from_address_cache`` gets it with no code path change.
+        self._from_address_cache: str | None = from_address
         self._excluded_folder_ids_cache: frozenset[str] | None = None
 
     async def _get(self, url: str, params: dict | None = None) -> dict:

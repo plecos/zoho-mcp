@@ -1178,6 +1178,15 @@ def _build_zoho_clients_from_env() -> tuple[
         # tests/test_client_from_env.py, because a truthiness check here
         # would make ZOHO_ALLOW_AUTO_SEND=false enable live sending.
         allow_auto_send=_env_flag("ZOHO_ALLOW_AUTO_SEND"),
+        # Optional, same blank-to-None shape as ZOHO_ACCOUNT_ID above.
+        # When set, this is the ONLY address create_draft/reply_draft/
+        # send_email will ever compose as -- it skips the live
+        # mailboxAddress lookup (see get_primary_email_address)
+        # entirely. Exists because an account can carry more than one
+        # mailbox-worthy address (a business domain plus a personal
+        # address added separately), and Zoho's account object gives no
+        # signal for which one outgoing mail should actually use.
+        from_address=os.environ.get("ZOHO_FROM_ADDRESS", "").strip() or None,
     )
     contacts_client = ZohoContactsClient(
         token_manager=token_manager, http_client=http_client

@@ -161,6 +161,36 @@ async def test_blank_ids_are_treated_as_unconfigured(env, blank):
     assert client._calendar_uid_cache is None
 
 
+async def test_explicit_from_address_is_passed_through(env):
+    # ZOHO_FROM_ADDRESS pre-seeds ZohoClient's from-address cache, which
+    # means it's used verbatim and the live mailboxAddress lookup never
+    # runs -- see get_primary_email_address's docstring for why this
+    # override exists (an account can carry more than one mailbox-worthy
+    # address with no signal for which one outgoing mail should use).
+    env.setenv("ZOHO_FROM_ADDRESS", "partnerships@example.com")
+
+    client, *_ = server._build_zoho_clients_from_env()
+
+    assert client._from_address_cache == "partnerships@example.com"
+
+
+async def test_missing_from_address_is_left_for_live_lookup(env):
+    env.delenv("ZOHO_FROM_ADDRESS", raising=False)
+
+    client, *_ = server._build_zoho_clients_from_env()
+
+    assert client._from_address_cache is None
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_blank_from_address_is_treated_as_unconfigured(env, blank):
+    env.setenv("ZOHO_FROM_ADDRESS", blank)
+
+    client, *_ = server._build_zoho_clients_from_env()
+
+    assert client._from_address_cache is None
+
+
 # An MCPB host substitutes a `number` user_config value into the environment,
 # and the rendering isn't pinned by the spec -- "8765" and "8765.0" are both
 # plausible. Getting this wrong means listening on the default port while the

@@ -3182,6 +3182,29 @@ async def test_from_address_uses_mailbox_address_not_primary_email_address(
     # primaryEmailAddress ("personal@example.com" in the fixture)
 
 
+async def test_explicit_from_address_override_skips_the_live_lookup_entirely(
+    respx_mock, http_client
+):
+    # ZOHO_FROM_ADDRESS (wired through ZohoClient's from_address kwarg) must
+    # not just win over primaryEmailAddress/mailboxAddress -- it must never
+    # even fetch the accounts endpoint, so the compose call succeeds even if
+    # that endpoint is completely unmocked here (would 404 in respx if hit).
+    route = respx_mock.post(
+        f"https://mail.zoho.com/api/accounts/{ACCOUNT_ID}/messages"
+    ).mock(return_value=httpx.Response(200, json={"data": {"messageId": "msg-new-1"}}))
+    client = ZohoClient(
+        token_manager=FakeTokenManager(),
+        http_client=http_client,
+        account_id=ACCOUNT_ID,
+        from_address="partnerships@monarcmediahq.com",
+    )
+
+    await client.create_draft(to=["a@example.com"], subject="Hi", content="B")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["fromAddress"] == "partnerships@monarcmediahq.com"
+
+
 async def test_send_email_can_include_signature_on_a_real_send(
     respx_mock, sending_client
 ):

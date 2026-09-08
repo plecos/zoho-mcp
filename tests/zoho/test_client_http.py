@@ -59,7 +59,8 @@ def mock_compose_endpoints(respx_mock):
                         "accountId": ACCOUNT_ID,
                         "isDefaultAccount": True,
                         "timeZone": "America/Los_Angeles",
-                        "primaryEmailAddress": "me@example.com",
+                        "primaryEmailAddress": "personal@example.com",
+                        "mailboxAddress": "me@example.com",
                     }
                 ]
             },
@@ -3162,6 +3163,74 @@ async def test_send_email_omits_mode_so_zoho_actually_sends(respx_mock, sending_
     assert result == {"id": "msg-new-1", "sent": True}
 
 
+async def test_from_address_uses_mailbox_address_not_primary_email_address(
+    respx_mock, zoho_client
+):
+    # Regression test for a real live-send bug (2026-09-08): a personal
+    # address added to the account can carry isPrimary: true in
+    # emailAddress, making primaryEmailAddress resolve to it instead of the
+    # actual business mailbox. mailboxAddress is the field that actually
+    # names the mailbox this client is authenticated as. The fixture
+    # deliberately sets the two fields to different values so this test
+    # only passes if the code reads the right one.
+    route = mock_compose_endpoints(respx_mock)
+
+    await zoho_client.create_draft(to=["a@example.com"], subject="Hi", content="B")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["fromAddress"] == "me@example.com"  # mailboxAddress, not
+    # primaryEmailAddress ("personal@example.com" in the fixture)
+
+
+async def test_send_email_can_include_signature_on_a_real_send(
+    respx_mock, sending_client
+):
+    # Verified live 2026-09-08: includeSignature=True only actually appends
+    # the account's configured signature card when paired with
+    # mailFormat="html" on a real send. See client.py's _compose docstring.
+    route = mock_compose_endpoints(respx_mock)
+
+    await sending_client.send_email(
+        to=["a@example.com"], subject="Hi", content="Body", include_signature=True
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["includeSignature"] is True
+    assert sent["mailFormat"] == "html"
+
+
+async def test_send_email_omits_include_signature_by_default(
+    respx_mock, sending_client
+):
+    route = mock_compose_endpoints(respx_mock)
+
+    await sending_client.send_email(to=["a@example.com"], subject="Hi", content="Body")
+
+    sent = json.loads(route.calls.last.request.content)
+    assert "includeSignature" not in sent
+    assert "mailFormat" not in sent
+
+
+async def test_include_signature_never_applies_to_the_gated_draft_fallback(
+    respx_mock, zoho_client
+):
+    # zoho_client has allow_auto_send unset (False) -- send_email must fall
+    # back to a draft, and include_signature must have no effect on that
+    # path, since that combination (includeSignature + mode=draft) was
+    # never verified live and this repo's own scheduler spec says drafts
+    # intentionally carry no signature.
+    route = mock_compose_endpoints(respx_mock)
+
+    result = await zoho_client.send_email(
+        to=["a@example.com"], subject="Hi", content="Body", include_signature=True
+    )
+
+    sent = json.loads(route.calls.last.request.content)
+    assert "includeSignature" not in sent
+    assert sent["mode"] == "draft"
+    assert result["sent"] is False
+
+
 async def test_send_email_rejects_missing_recipients_without_a_request(
     respx_mock, sending_client
 ):
@@ -3183,7 +3252,8 @@ async def test_compose_wraps_http_errors_as_zoho_api_error(respx_mock, zoho_clie
                         "accountId": ACCOUNT_ID,
                         "isDefaultAccount": True,
                         "timeZone": "America/Los_Angeles",
-                        "primaryEmailAddress": "me@example.com",
+                        "primaryEmailAddress": "personal@example.com",
+                        "mailboxAddress": "me@example.com",
                     }
                 ]
             },
@@ -3209,7 +3279,8 @@ async def test_reply_draft_sets_both_action_reply_and_mode_draft(
                         "accountId": ACCOUNT_ID,
                         "isDefaultAccount": True,
                         "timeZone": "America/Los_Angeles",
-                        "primaryEmailAddress": "me@example.com",
+                        "primaryEmailAddress": "personal@example.com",
+                        "mailboxAddress": "me@example.com",
                     }
                 ]
             },
@@ -3240,7 +3311,8 @@ async def test_reply_draft_uses_reply_all_action_when_asked(respx_mock, zoho_cli
                         "accountId": ACCOUNT_ID,
                         "isDefaultAccount": True,
                         "timeZone": "America/Los_Angeles",
-                        "primaryEmailAddress": "me@example.com",
+                        "primaryEmailAddress": "personal@example.com",
+                        "mailboxAddress": "me@example.com",
                     }
                 ]
             },
@@ -3300,7 +3372,8 @@ def mock_forward_endpoints(respx_mock, *, original_html=ORIGINAL_HTML):
                         "accountId": ACCOUNT_ID,
                         "isDefaultAccount": True,
                         "timeZone": "America/Los_Angeles",
-                        "primaryEmailAddress": "me@example.com",
+                        "primaryEmailAddress": "personal@example.com",
+                        "mailboxAddress": "me@example.com",
                     }
                 ]
             },
@@ -3652,7 +3725,8 @@ async def test_forward_draft_wraps_a_failure_reading_the_original(
                         "accountId": ACCOUNT_ID,
                         "isDefaultAccount": True,
                         "timeZone": "America/Los_Angeles",
-                        "primaryEmailAddress": "me@example.com",
+                        "primaryEmailAddress": "personal@example.com",
+                        "mailboxAddress": "me@example.com",
                     }
                 ]
             },
@@ -3771,7 +3845,8 @@ async def test_reply_draft_still_sets_mode_draft_when_auto_send_enabled(
                         "accountId": ACCOUNT_ID,
                         "isDefaultAccount": True,
                         "timeZone": "America/Los_Angeles",
-                        "primaryEmailAddress": "me@example.com",
+                        "primaryEmailAddress": "personal@example.com",
+                        "mailboxAddress": "me@example.com",
                     }
                 ]
             },

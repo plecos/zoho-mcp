@@ -502,11 +502,27 @@ links, the quote block, the `Fwd:` subject, file attachments at their original
 byte sizes, and inline images as proper MIME parts all survive. Nothing about a
 forward is known to be lossy.
 
-### `fromAddress` comes from `primaryEmailAddress`
+### `fromAddress` comes from `mailboxAddress`, not `primaryEmailAddress`
 
 Required on every send/draft. It's read live from the accounts endpoint rather
 than stored in config, since the account's primary address is a mutable
 setting.
+
+**Was `primaryEmailAddress` until 2026-09-08 -- wrong field, real live-send
+consequence.** Verified against a real Monarc Media account: a personal
+address (an iCloud address) had been added to the account and carried
+`isPrimary: true` in `emailAddress`, so `primaryEmailAddress` resolved to it
+instead of the business address the mailbox is actually provisioned under.
+`mailboxAddress` and every entry in `sendMailDetails[].fromAddress` agreed on
+the correct address throughout. The bug was silent: `create_draft`,
+`reply_draft`, and a real `send_email` call all composed successfully, no
+error anywhere -- the message just carried the wrong sender identity, and one
+real send bounced from Gmail with `550 5.7.30 DKIM authentication didn't
+pass`, because Zoho cannot sign a domain (the personal address's) it doesn't
+control. A field named "primary" is not automatically the address you're
+sending as -- verify against the field that actually names the mailbox
+(`mailboxAddress`), same lesson as `sentDateInGMT`/`previousFolderId`/`isPrev`
+elsewhere in this file.
 
 ---
 

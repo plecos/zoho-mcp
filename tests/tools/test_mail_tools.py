@@ -114,9 +114,18 @@ class FakeZohoClient:
         )
         return self.compose_result
 
-    async def send_email(self, to, subject, content, cc=None, bcc=None):
+    async def send_email(
+        self, to, subject, content, cc=None, bcc=None, include_signature=False
+    ):
         self.send_email_calls.append(
-            {"to": to, "subject": subject, "content": content, "cc": cc, "bcc": bcc}
+            {
+                "to": to,
+                "subject": subject,
+                "content": content,
+                "cc": cc,
+                "bcc": bcc,
+                "include_signature": include_signature,
+            }
         )
         return self.compose_result
 
@@ -439,6 +448,16 @@ async def test_send_email_delegates_to_client():
     await send_email(client, to=["a@x.com"], subject="S", content="B")
 
     assert client.send_email_calls[0]["to"] == ["a@x.com"]
+
+
+async def test_send_email_forwards_include_signature():
+    client = FakeZohoClient()
+
+    await send_email(
+        client, to=["a@x.com"], subject="S", content="B", include_signature=True
+    )
+
+    assert client.send_email_calls[0]["include_signature"] is True
 
 
 async def test_send_email_passes_the_sent_flag_through_untouched():

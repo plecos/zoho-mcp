@@ -48,7 +48,8 @@ def mock_accounts_endpoint(respx_mock):
                         "accountId": DISCOVERED_ACCOUNT_ID,
                         "isDefaultAccount": True,
                         "timeZone": "America/Los_Angeles",
-                        "primaryEmailAddress": "me@example.com",
+                        "primaryEmailAddress": "personal@example.com",
+                        "mailboxAddress": "me@example.com",
                     }
                 ]
             },

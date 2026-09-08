@@ -1426,13 +1426,30 @@ async def get_primary_email_address(
     account's primary address is a mutable setting, and a stale one would
     mean composing as an address the user no longer owns.
 
+    Uses ``mailboxAddress``, not ``primaryEmailAddress``. Verified live
+    2026-09-08 against a real Monarc Media account: ``primaryEmailAddress``
+    held a personal address added to the account (e.g. an iCloud address
+    marked ``isPrimary: true`` in ``emailAddress``), while
+    ``mailboxAddress`` and every entry in ``sendMailDetails[].fromAddress``
+    agreed on the actual business address the mailbox is provisioned
+    under. Composing with ``primaryEmailAddress`` silently sent real mail
+    from the wrong identity -- correctly formatted but from an address the
+    recipient didn't expect, and undeliverable to any DKIM-strict
+    recipient (e.g. Gmail: 550 5.7.30) since Zoho cannot sign a domain it
+    doesn't control. ``mailboxAddress`` is the account's own address as
+    Zoho itself understands "this mailbox", not a mutable per-user
+    "primary" flag on an arbitrary added address -- the same reasoning as
+    "a field's name is not its contract" elsewhere in this file: don't
+    trust a field called "primary" over the one describing the mailbox
+    identity you're actually sending as.
+
     Raises:
         ZohoAPIError: if the request fails, the response is malformed, or
             no account is flagged as the default.
     """
     account = await _get_default_mail_account(token_manager, http_client)
     try:
-        return account["primaryEmailAddress"]
+        return account["mailboxAddress"]
     except MALFORMED_DATA_ERRORS as e:
         raise ZohoAPIError(f"Malformed accounts response from Zoho: {e}") from e
 
@@ -1809,6 +1826,7 @@ class ZohoClient:
         as_draft: bool,
         mail_format: str | None = None,
         attachments: list[dict] | None = None,
+        include_signature: bool = False,
     ) -> dict:
         """Shared body-builder for ``create_draft`` and ``send_email``.
 
@@ -1839,6 +1857,19 @@ class ZohoClient:
             body["mailFormat"] = mail_format
         if attachments:
             body["attachments"] = attachments
+        # Verified live 2026-09-08: mailFormat="html" + includeSignature=True
+        # together, on a REAL send (mode omitted), caused the account's
+        # configured signature card (an inline image, added server-side) to
+        # appear in the sent message -- confirmed by a ~337KB size jump from
+        # a ~90-byte plain body. That is the ONLY combination tested:
+        # includeSignature's effect combined with mode="draft" is
+        # unverified, and agents/6-scheduler.md's own spec says drafts get
+        # no signature ("mode: draft while queued ... includeSignature:
+        # true at send"). So this only ever sends includeSignature on a
+        # real send (as_draft=False) with mail_format="html" -- never on a
+        # draft, to avoid asserting untested behavior for that combination.
+        if include_signature and mail_format == "html" and not as_draft:
+            body["includeSignature"] = True
         _add_optional_recipients(body, cc=cc, bcc=bcc)
 
         account_id = await self._get_account_id()
@@ -1882,6 +1913,7 @@ class ZohoClient:
         content: str,
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
+        include_signature: bool = False,
     ) -> dict:
         """Send an email, or save it as a draft when sending is disabled.
 
@@ -1899,7 +1931,18 @@ class ZohoClient:
         the one field that decides send-vs-draft (see ``_compose``)
         cannot say "send".
 
-        Args: same as ``create_draft``.
+        Args:
+            include_signature: append the account's configured signature
+                card (an inline image) to the sent message. Verified live
+                2026-09-08 to work when the message actually sends
+                (``ZOHO_ALLOW_AUTO_SEND`` on) -- it has no effect on the
+                gated draft fallback below, since that path is unverified
+                and this repo's own scheduler spec (agents/6-scheduler.md)
+                says drafts intentionally carry no signature. Always sent
+                to Zoho with ``mailFormat="html"``, the only combination
+                confirmed to actually append the card.
+
+        Args (remaining): same as ``create_draft``.
 
         Returns:
             ``{"id": ..., "sent": bool}`` -- and ``"detail"`` explaining
@@ -1927,7 +1970,14 @@ class ZohoClient:
                 ),
             }
         sent = await self._compose(
-            to=to, subject=subject, content=content, cc=cc, bcc=bcc, as_draft=False
+            to=to,
+            subject=subject,
+            content=content,
+            cc=cc,
+            bcc=bcc,
+            as_draft=False,
+            mail_format="html" if include_signature else None,
+            include_signature=include_signature,
         )
         return {**sent, "sent": True}
 

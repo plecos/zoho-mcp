@@ -314,11 +314,17 @@ async def send_email(
     content: str,
     cc: list[str] | None = None,
     bcc: list[str] | None = None,
+    include_signature: bool = False,
 ) -> dict:
     """Send an email, unless the server has sending disabled -- in which
     case the message is saved to Drafts instead (``ZOHO_ALLOW_AUTO_SEND``).
 
-    Args: same as ``create_draft``.
+    Args:
+        include_signature: append the account's configured signature card
+            (an inline image) to the message. Only takes effect on a real
+            send -- it's a silent no-op on the gated Drafts fallback,
+            which intentionally never carries a signature.
+        (remaining args): same as ``create_draft``.
 
     Returns:
         ``{"id": ..., "sent": bool}``, plus ``"detail"`` when it was
@@ -329,7 +335,12 @@ async def send_email(
             rejects or fails the request.
     """
     return await client.send_email(
-        to=to, subject=subject, content=content, cc=cc, bcc=bcc
+        to=to,
+        subject=subject,
+        content=content,
+        cc=cc,
+        bcc=bcc,
+        include_signature=include_signature,
     )
 
 

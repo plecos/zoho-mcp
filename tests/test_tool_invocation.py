@@ -144,6 +144,7 @@ MAIL_CASES = [
             "content": "B",
             "cc": None,
             "bcc": None,
+            "include_signature": False,
         },
     ),
     (
